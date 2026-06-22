@@ -1,7 +1,8 @@
 pact Documentation
 ==================
 
-Documentation for the pact Python package.
+Open-source identity, policy, signing, and verification primitives for
+portable content provenance.
 
 .. raw:: html
 
@@ -14,6 +15,9 @@ Documentation for the pact Python package.
 Start Here
 ----------
 
+- :doc:`Quickstart <quickstart>`
+- :doc:`Manifest format <manifest>`
+- :doc:`Security model <security>`
 - :doc:`API reference <api>`
 
 Build Documentation Locally
@@ -28,4 +32,7 @@ Build Documentation Locally
    :caption: Reference
    :hidden:
 
+   quickstart
+   manifest
+   security
    api
