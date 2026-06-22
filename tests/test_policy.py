@@ -97,6 +97,15 @@ def test_policy_must_be_nonempty_and_unique() -> None:
             {
                 Permission.DATA_MINING.value: {
                     "use": "allowed",
+                    "unknown": True,
+                }
+            },
+            "unsupported policy entry fields",
+        ),
+        (
+            {
+                Permission.DATA_MINING.value: {
+                    "use": "allowed",
                     "constraint_info": 1,
                 }
             },

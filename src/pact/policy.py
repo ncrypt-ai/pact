@@ -88,6 +88,11 @@ class PolicyEntry:
     ) -> "PolicyEntry":
         """Parse an entry from its wire representation."""
 
+        unexpected = set(value) - {"use", "constraint_info", "licensing_url"}
+        if unexpected:
+            raise PolicyError(
+                f"unsupported policy entry fields: {sorted(unexpected)}"
+            )
         use = value.get("use")
         if use == "notAllowed":
             use = PermissionValue.NOT_ALLOWED.value

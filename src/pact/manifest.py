@@ -66,6 +66,18 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(cast(list[str], value))
 
 
+def _reject_unknown_fields(
+    value: Mapping[str, object],
+    allowed: set[str],
+    label: str,
+) -> None:
+    unexpected = set(value) - allowed
+    if unexpected:
+        raise ManifestError(
+            f"unsupported {label} fields: {sorted(unexpected)}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ContentBinding:
     """A salted commitment to canonical content."""
@@ -117,6 +129,11 @@ class ContentBinding:
     def from_dict(cls, value: Mapping[str, object]) -> Self:
         """Parse a binding from its wire representation."""
 
+        _reject_unknown_fields(
+            value,
+            {"algorithm", "commitment"},
+            "content binding",
+        )
         return cls(
             commitment=_required_string(value, "commitment"),
             algorithm=_required_string(value, "algorithm"),
@@ -248,6 +265,25 @@ class Manifest:
         """Parse an unsigned manifest data model."""
 
         try:
+            _reject_unknown_fields(
+                value,
+                {
+                    "version",
+                    "claim_id",
+                    "registry_url",
+                    "registry_root_fingerprint",
+                    "claimant_key_id",
+                    "mime_type",
+                    "canonicalization",
+                    "content_binding",
+                    "policy",
+                    "carriers",
+                    "watermarks",
+                    "source_url",
+                    "licensing_url",
+                },
+                "manifest",
+            )
             binding_value = value["content_binding"]
             policy_value = value["policy"]
             if not isinstance(binding_value, Mapping) or not isinstance(
@@ -256,6 +292,11 @@ class Manifest:
                 raise ManifestError("binding and policy must be objects")
             binding = cast(Mapping[str, object], binding_value)
             policy_wrapper = cast(Mapping[str, object], policy_value)
+            _reject_unknown_fields(
+                policy_wrapper,
+                {"label", "entries"},
+                "policy",
+            )
             if policy_wrapper["label"] != "cawg.training-mining":
                 raise ManifestError("unsupported policy label")
             entries_value = policy_wrapper["entries"]
@@ -284,10 +325,8 @@ class Manifest:
                 ),
                 content_binding=ContentBinding.from_dict(binding),
                 policy=Policy.from_dict(policy_entries),
-                carriers=_string_list(value.get("carriers", []), "carriers"),
-                watermarks=_string_list(
-                    value.get("watermarks", []), "watermarks"
-                ),
+                carriers=_string_list(value["carriers"], "carriers"),
+                watermarks=_string_list(value["watermarks"], "watermarks"),
                 source_url=source_url,
                 licensing_url=licensing_url,
             )
@@ -329,6 +368,11 @@ class ManifestSignature:
     def from_dict(cls, value: Mapping[str, object]) -> Self:
         """Parse a signature wire representation."""
 
+        _reject_unknown_fields(
+            value,
+            {"algorithm", "key_id", "value"},
+            "signature",
+        )
         return cls(
             key_id=_required_string(value, "key_id"),
             value=_required_string(value, "value"),
@@ -385,8 +429,14 @@ class SignedManifest:
             )
             if not isinstance(parsed, Mapping):
                 raise ManifestError("signed manifest must be a JSON object")
-            manifest_value = parsed["manifest"]
-            signature_value = parsed["signature"]
+            parsed_value = cast(Mapping[str, object], parsed)
+            _reject_unknown_fields(
+                parsed_value,
+                {"manifest", "signature"},
+                "signed manifest",
+            )
+            manifest_value = parsed_value["manifest"]
+            signature_value = parsed_value["signature"]
             if not isinstance(manifest_value, Mapping) or not isinstance(
                 signature_value, Mapping
             ):

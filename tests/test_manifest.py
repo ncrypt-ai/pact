@@ -205,6 +205,28 @@ def test_manifest_parser_rejects_invalid_types(
         Manifest.from_dict(value)
 
 
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        (("unknown",), "manifest fields"),
+        (("content_binding", "unknown"), "content binding fields"),
+        (("policy", "unknown"), "policy fields"),
+    ],
+)
+def test_manifest_parser_rejects_unknown_fields(
+    path: tuple[str, ...],
+    message: str,
+) -> None:
+    value = make_manifest().to_dict()
+    target = value
+    for part in path[:-1]:
+        target = cast(dict[str, object], target[part])
+    target[path[-1]] = True
+
+    with pytest.raises(ManifestError, match=message):
+        Manifest.from_dict(value)
+
+
 def test_sign_parse_and_verify_manifest() -> None:
     identity = make_identity()
     signed = sign_manifest(make_manifest(identity), identity)
@@ -311,6 +333,7 @@ def test_signed_manifest_requires_matching_signature_key() -> None:
         ('{"manifest":{},"manifest":{},"signature":{}}', "duplicate"),
         ('{"manifest":NaN,"signature":{}}', "constant"),
         ('{"manifest":[],"signature":{}}', "must be objects"),
+        ('{"manifest":{},"signature":{},"unknown":true}', "manifest fields"),
         ('{"manifest":{},"signature":', "invalid signed"),
         ('{"manifest":{}}', "invalid signed"),
     ],
