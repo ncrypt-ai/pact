@@ -30,6 +30,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "cryptography>=49.0.0",
+    "keyring>=25.7.0",
     "rfc8785>=0.1.4",
 ]
 
