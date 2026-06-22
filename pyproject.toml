@@ -29,7 +29,9 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "rfc8785>=0.1.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/ncrypt-ai/pact"
