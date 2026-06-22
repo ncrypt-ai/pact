@@ -2,7 +2,6 @@
 
 import json
 import re
-import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Self, cast
@@ -71,14 +70,12 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
 class ContentBinding:
     """A salted commitment to canonical content."""
 
-    nonce: str
     commitment: str
     algorithm: str = "sha256-nonce-sha256"
 
     def __post_init__(self) -> None:
         if self.algorithm != "sha256-nonce-sha256":
             raise ManifestError("unsupported content binding algorithm")
-        _validate_digest(self.nonce, "nonce")
         _validate_digest(self.commitment, "commitment")
 
     @classmethod
@@ -86,25 +83,25 @@ class ContentBinding:
         cls,
         content: bytes,
         profile: CanonicalizationProfile,
-        nonce: bytes | None = None,
+        nonce: bytes,
     ) -> Self:
         """Create a fresh salted binding for canonical content."""
 
-        nonce = secrets.token_bytes(32) if nonce is None else nonce
         commitment = create_content_commitment(content, profile, nonce)
-        return cls(base64url_encode(nonce), base64url_encode(commitment))
+        return cls(base64url_encode(commitment))
 
     def verify(
         self,
         content: bytes,
         profile: CanonicalizationProfile,
+        nonce: bytes,
     ) -> bool:
         """Verify content against this binding."""
 
         return verify_content_commitment(
             content,
             profile,
-            base64url_decode(self.nonce, length=32),
+            nonce,
             base64url_decode(self.commitment, length=32),
         )
 
@@ -113,7 +110,6 @@ class ContentBinding:
 
         return {
             "algorithm": self.algorithm,
-            "nonce": self.nonce,
             "commitment": self.commitment,
         }
 
@@ -122,7 +118,6 @@ class ContentBinding:
         """Parse a binding from its wire representation."""
 
         return cls(
-            nonce=_required_string(value, "nonce"),
             commitment=_required_string(value, "commitment"),
             algorithm=_required_string(value, "algorithm"),
         )
@@ -195,7 +190,7 @@ class Manifest:
         source_url: str | None = None,
         licensing_url: str | None = None,
         claim_id: UUID | None = None,
-        nonce: bytes | None = None,
+        nonce: bytes,
     ) -> Self:
         """Create an unsigned manifest and content commitment."""
 
@@ -454,6 +449,7 @@ def verify_manifest(
     signed: SignedManifest,
     claimant_public_jwk: Mapping[str, object],
     content: bytes | None = None,
+    nonce: bytes | None = None,
 ) -> VerificationReport:
     """Verify claimant identity, signature, and optional bound content."""
 
@@ -483,10 +479,15 @@ def verify_manifest(
         errors.append("claimant signature is invalid")
 
     content_binding_valid: bool | None = None
-    if content is not None:
+    if content is not None and nonce is None:
+        content_binding_valid = False
+        errors.append("content binding nonce is required")
+    elif content is not None:
+        assert nonce is not None
         content_binding_valid = signed.manifest.content_binding.verify(
             content,
             signed.manifest.canonicalization,
+            nonce,
         )
         if not content_binding_valid:
             errors.append("content binding does not match")

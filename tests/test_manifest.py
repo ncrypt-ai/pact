@@ -69,31 +69,20 @@ def test_content_binding_create_verify_and_round_trip() -> None:
     )
 
     assert binding.verify(
-        "Caf\xe9\n".encode(), CanonicalizationProfile.TEXT_V1
+        "Caf\xe9\n".encode(), CanonicalizationProfile.TEXT_V1, NONCE
     )
-    assert not binding.verify(b"changed", CanonicalizationProfile.TEXT_V1)
+    assert not binding.verify(
+        b"changed", CanonicalizationProfile.TEXT_V1, NONCE
+    )
     assert ContentBinding.from_dict(binding.to_dict()) == binding
-
-
-def test_content_binding_generates_nonce() -> None:
-    binding = ContentBinding.create(
-        CONTENT,
-        CanonicalizationProfile.TEXT_V1,
-    )
-
-    assert len(binding.nonce) == 43
+    assert "nonce" not in binding.to_dict()
 
 
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: ContentBinding("bad", ROOT_FINGERPRINT),
-        lambda: ContentBinding(ROOT_FINGERPRINT, "bad"),
-        lambda: ContentBinding(
-            ROOT_FINGERPRINT,
-            ROOT_FINGERPRINT,
-            "unknown",
-        ),
+        lambda: ContentBinding("bad"),
+        lambda: ContentBinding(ROOT_FINGERPRINT, "unknown"),
         lambda: ContentBinding.from_dict({}),
     ],
 )
@@ -104,7 +93,7 @@ def test_invalid_content_bindings_are_rejected(
         factory()
 
     with pytest.raises(ManifestError, match="must be a string"):
-        ContentBinding(cast(str, 1), ROOT_FINGERPRINT)
+        ContentBinding(cast(str, 1))
 
 
 def test_manifest_create_and_round_trip() -> None:
@@ -130,6 +119,7 @@ def test_manifest_omits_absent_optional_urls() -> None:
         mime_type="application/octet-stream",
         canonicalization=CanonicalizationProfile.BINARY_V1,
         policy=make_policy(),
+        nonce=NONCE,
     )
 
     assert "source_url" not in manifest.to_dict()
@@ -164,7 +154,7 @@ def test_invalid_manifests_are_rejected(
         "claimant_key_id": ROOT_FINGERPRINT,
         "mime_type": "text/plain",
         "canonicalization": CanonicalizationProfile.TEXT_V1,
-        "content_binding": ContentBinding(ROOT_FINGERPRINT, ROOT_FINGERPRINT),
+        "content_binding": ContentBinding(ROOT_FINGERPRINT),
         "policy": make_policy(),
     }
     values.update(changes)
@@ -188,7 +178,11 @@ def test_manifest_parser_rejects_bad_policy_and_shape() -> None:
     ("path", "replacement", "message"),
     [
         (("content_binding",), [], "must be objects"),
-        (("content_binding", "nonce"), 1, "nonce must be a string"),
+        (
+            ("content_binding", "commitment"),
+            1,
+            "commitment must be a string",
+        ),
         (("policy", "entries"), [], "entries must be an object"),
         (("carriers",), "carrier", "array of strings"),
         (("watermarks",), [1], "array of strings"),
@@ -215,7 +209,7 @@ def test_sign_parse_and_verify_manifest() -> None:
     identity = make_identity()
     signed = sign_manifest(make_manifest(identity), identity)
     parsed = SignedManifest.from_json(signed.to_json())
-    report = verify_manifest(parsed, identity.public_jwk, CONTENT)
+    report = verify_manifest(parsed, identity.public_jwk, CONTENT, NONCE)
 
     assert parsed == signed
     assert report.valid
@@ -228,12 +222,18 @@ def test_sign_parse_and_verify_manifest() -> None:
     assert without_content.valid
     assert without_content.content_binding_valid is None
 
+    without_nonce = verify_manifest(parsed, identity.public_jwk, CONTENT)
+    assert not without_nonce.valid
+    assert without_nonce.errors == ("content binding nonce is required",)
+
 
 def test_verification_reports_wrong_content_key_and_signature() -> None:
     identity = make_identity()
     signed = sign_manifest(make_manifest(identity), identity)
 
-    wrong_content = verify_manifest(signed, identity.public_jwk, b"changed")
+    wrong_content = verify_manifest(
+        signed, identity.public_jwk, b"changed", NONCE
+    )
     assert not wrong_content.valid
     assert wrong_content.errors == ("content binding does not match",)
 
@@ -260,7 +260,7 @@ def test_verification_reports_invalid_public_jwk() -> None:
     identity = make_identity()
     signed = sign_manifest(make_manifest(identity), identity)
 
-    report = verify_manifest(signed, {"kty": "RSA"}, CONTENT)
+    report = verify_manifest(signed, {"kty": "RSA"}, CONTENT, NONCE)
 
     assert not report.valid
     assert report.content_binding_valid is False
