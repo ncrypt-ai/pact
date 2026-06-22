@@ -1,6 +1,5 @@
 """Registry-scoped P-256 claimant identities and secure persistence."""
 
-import base64
 import hashlib
 import os
 import tempfile
@@ -14,7 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from keyring.errors import KeyringError
 
-from pact.canonical import JsonValue, canonical_json
+from pact.crypto import jwk_thumbprint, public_jwk
 
 
 class IdentityError(ValueError):
@@ -37,10 +36,6 @@ class CredentialBackend(Protocol):
     def set_password(
         self, service: str, username: str, password: str
     ) -> None: ...
-
-
-def _base64url(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
 def normalize_registry_url(value: str) -> str:
@@ -89,20 +84,13 @@ class ClaimantIdentity:
     def public_jwk(self) -> dict[str, str]:
         """Return the claimant public key as a minimal P-256 JWK."""
 
-        numbers = self.private_key.public_key().public_numbers()
-        return {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": _base64url(numbers.x.to_bytes(32, "big")),
-            "y": _base64url(numbers.y.to_bytes(32, "big")),
-        }
+        return public_jwk(self.private_key.public_key())
 
     @property
     def key_id(self) -> str:
         """Return the RFC 7638 SHA-256 thumbprint for the public JWK."""
 
-        jwk: JsonValue = self.public_jwk
-        return _base64url(hashlib.sha256(canonical_json(jwk)).digest())
+        return jwk_thumbprint(self.public_jwk)
 
     def export_pkcs8(self, password: str) -> bytes:
         """Export the key as password-encrypted PKCS#8 PEM."""
