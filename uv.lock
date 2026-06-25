@@ -59,6 +59,29 @@ wheels = [
 ]
 
 [[package]]
+name = "c2pa-python"
+version = "0.36.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pytest" },
+    { name = "requests" },
+    { name = "setuptools" },
+    { name = "toml" },
+    { name = "wheel" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/e8/98cd17ec067226df9fee06a5173a940d44ede0f65a3a077feedea56dc3b0/c2pa_python-0.36.0.tar.gz", hash = "sha256:39fc2202fa5bdfef3eeee30d5ee4b9b0f2060974b01d7814eef79b21fd761284", size = 87369, upload-time = "2026-06-22T22:27:45.676Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/35/bc337a6f6d830f3a1d6ad8046e2f3857c34b071bd0f3914ebcf62d289300/c2pa_python-0.36.0-py3-none-macosx_10_9_universal2.whl", hash = "sha256:e14c87144064220a69c9c463110c164cb0344e4fdd3bfa6eeb9d1ed12cc5becb", size = 16513615, upload-time = "2026-06-22T22:27:23.887Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/cb/d5743596f073a10e4bac566ddf8b2c579a917605f66dac64d0d348ddb2e7/c2pa_python-0.36.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:e542466982ac737d96cc43d25204885a078eace1be63c358668791463d81c208", size = 14915298, upload-time = "2026-06-22T22:27:26.877Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/83/b6f5a12a6eb87ad97cfadaa5662203c028e1fee737bcd0a1973c9d568576/c2pa_python-0.36.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e45aa43b6bb477e45122572372232185a71012d4bde32250ddf64a1068e8c26f", size = 14559360, upload-time = "2026-06-22T22:27:29.234Z" },
+    { url = "https://files.pythonhosted.org/packages/24/2b/6f1c44fef1d76fd1be54c8c7512b149371a6783e3a229418eeb7e13c4e6e/c2pa_python-0.36.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:d9b9b6680490f4cddf08d6f22d91d6e08c178f2a9d07222da6af0fbbba162e99", size = 14743266, upload-time = "2026-06-22T22:27:32.536Z" },
+    { url = "https://files.pythonhosted.org/packages/06/27/6f8c4717ff8838a85a8f6d35336f5ee908c39bba2e377345ed83a95828f9/c2pa_python-0.36.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f059696aab2c7bca1a200ec533458cf0f34ba76b19ddf88656fbeee627ac2b12", size = 15437972, upload-time = "2026-06-22T22:27:35.872Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/19/c06540198d0f70bc6339d17727b8c64da274c6c60d24b499864146f0f03d/c2pa_python-0.36.0-py3-none-win_amd64.whl", hash = "sha256:8939fd8e94b444ecb7ba09108dabc4e5dc248db3aa945f8d5f0a2c3b4f6b5775", size = 90044014, upload-time = "2026-06-22T22:27:39.032Z" },
+    { url = "https://files.pythonhosted.org/packages/93/a5/4b723ffd14fad15b247b5e6cc2ba2ca0d5a5c6193a79a2cb3a0e6f4be462/c2pa_python-0.36.0-py3-none-win_arm64.whl", hash = "sha256:eb7a2d2060ca35d0cb9c161ef50353fe4a0dc91d6e9f7ab4a7d45b19ff24f40c", size = 87544549, upload-time = "2026-06-22T22:27:42.744Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
@@ -621,6 +644,7 @@ name = "pact"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "c2pa-python" },
     { name = "cryptography" },
     { name = "defusedxml" },
     { name = "keyring" },
@@ -642,6 +666,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "c2pa-python", specifier = ">=0.36.0" },
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "keyring", specifier = ">=25.7.0" },
@@ -781,6 +806,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/46/f5af3402b579fd5e11573ce652019a67074317e18c1935cc0b4ba9b35552/secretstorage-3.5.0-py3-none-any.whl", hash = "sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137", size = 15554, upload-time = "2025-11-23T19:02:51.545Z" },
+]
+
+[[package]]
+name = "setuptools"
+version = "82.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
 ]
 
 [[package]]
@@ -957,6 +991,15 @@ wheels = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
+]
+
+[[package]]
 name = "ty"
 version = "0.0.51"
 source = { registry = "https://pypi.org/simple" }
@@ -997,6 +1040,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+]
+
+[[package]]
+name = "wheel"
+version = "0.47.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/39/62/75f18a0f03b4219c456652c7780e4d749b929eb605c098ce3a5b6b6bc081/wheel-0.47.0.tar.gz", hash = "sha256:cc72bd1009ba0cf63922e28f94d9d83b920aa2bb28f798a31d0691b02fa3c9b3", size = 63854, upload-time = "2026-04-22T15:51:27.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/1b/9e33c09813d65e248f7f773119148a612516a4bea93e9c6f545f78455b7c/wheel-0.47.0-py3-none-any.whl", hash = "sha256:212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced", size = 32218, upload-time = "2026-04-22T15:51:26.296Z" },
 ]
 
 [[package]]

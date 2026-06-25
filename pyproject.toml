@@ -30,6 +30,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "c2pa-python>=0.36.0",
     "cryptography>=49.0.0",
     "defusedxml>=0.7.1",
     "keyring>=25.7.0",
