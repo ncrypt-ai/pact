@@ -3,8 +3,10 @@ Quickstart
 
 PACT currently provides library APIs for registry-scoped claimant identities,
 policies, signed manifests, local verification, text/HTML/XML carrier
-embedding, and an initial C2PA integration layer for supported image and
-document containers. The registry, CLI, and web UI remain later work.
+embedding, an initial C2PA integration layer for supported image and
+document containers, and a registry-core library layer with replay
+challenges, append-only event storage, certificates, rotations, revocations,
+and disputes. The hosted API, CLI, and web UI remain later work.
 
 Create and sign a manifest
 --------------------------
@@ -183,3 +185,41 @@ Python wrapper does not expose directly:
 
 For legacy binary formats such as ``.doc``, the helper returns a detached
 manifest store and leaves the original bytes unchanged.
+
+Use the registry core
+---------------------
+
+The registry layer is available as a pure library API. It issues replay and
+proof-of-work challenges, stores append-only events, and derives public
+profile evidence:
+
+.. code-block:: python
+
+   from pathlib import Path
+
+   from pact import (
+       ChallengePurpose,
+       FileRegistryStore,
+       MutationRequest,
+       RegistryCertificateAuthority,
+       RegistryService,
+   )
+
+   authority = RegistryCertificateAuthority.initialize("https://registry.example")
+   store = FileRegistryStore(Path("./registry-data"))
+   service = RegistryService(
+       "https://registry.example",
+       store=store,
+       certificate_authority=authority,
+   )
+
+   challenge = service.issue_challenge(ChallengePurpose.PROFILE_REGISTRATION, difficulty=4)
+   request = MutationRequest.create(
+       identity,
+       challenge,
+       payload={"display_name": "Alice"},
+       proof_of_work_solution=0,  # supply a solved proof-of-work value
+   )
+   profile = service.register_profile(request)
+
+   assert profile.key_id == identity.key_id

@@ -27,16 +27,32 @@ an unencrypted file.
 
 Exported identities must be protected with a high-entropy password and moved
 over a trusted channel. ``ClaimantIdentity.rotate`` creates a new key for the
-same registry; co-signed registry rotation records belong to the registry
-implementation step and are not yet available.
+same registry, and the registry core now supports old/new co-signed rotation
+requests so a rotation can be published as an append-only registry event.
 
 Registry privacy boundary
 -------------------------
 
 The signed manifest contains a salted commitment but not the nonce, original
-content, unsalted content hash, or private key. The future registry must not
-request or persist those values. Content carriers and evidence packages will
-define how an authorized verifier obtains a nonce.
+content, unsalted content hash, or private key. The registry core persists
+public events, claimant keys, signed manifest envelopes, revocations,
+certificates, and dispute records, but it does not need private nonces or
+private keys. Content carriers and evidence packages define how an authorized
+verifier obtains a nonce.
+
+Registry challenge boundary
+---------------------------
+
+State-changing registry operations require:
+
+- a server-issued replay challenge;
+- a proof-of-work solution;
+- a claimant signature over the exact challenge and mutation payload;
+- for key rotation, signatures from both the current and replacement keys.
+
+The in-process registry library enforces those rules before appending an
+event. The future HTTP/API layer must preserve the same exact verification
+boundary.
 
 C2PA trust boundary
 -------------------
@@ -49,10 +65,11 @@ registry trust decisions.
 Current scope
 -------------
 
-This implementation does not yet provide a registry, certificate authority,
-CLI, or web UI. It can embed an already-built C2PA manifest store into PDF
-and ZIP-based document containers, but it still does not generate new
-spec-compliant C2PA manifest stores for PDF or OOXML through a first-class
+This implementation now provides a registry-core library layer and certificate
+authority material generation, but it does not yet provide the hosted HTTP
+API, CLI, or web UI. It can also embed an already-built C2PA manifest store
+into PDF and ZIP-based document containers, but it still does not generate
+new spec-compliant C2PA manifest stores for PDF or OOXML through a first-class
 official writer API. Instead, it uses the official CAI signer path in detached
 mode and then applies official embeddable-manifest formatting plus local
 container patching. Public-key trust and registry-root trust remain caller

@@ -28,3 +28,7 @@ and this project adheres to
   for PDF, DOCX, and detached legacy-document workflows.
 - C2PA inspection helpers and external-manifest reference bootstrap metadata
   for formats that still need a non-embedded workflow.
+- Append-only registry-core services with replay challenges, proof-of-work
+  validation, profile registration, claim registration, key rotation,
+  revocation, disputes, domain verification, certificate issuance, and Merkle
+  batch hashing.
