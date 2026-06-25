@@ -50,6 +50,9 @@ Current scope
 -------------
 
 This implementation does not yet provide a registry, certificate authority,
-full PDF C2PA embedding, CLI, or web UI. Public-key trust and registry-root
-trust remain caller decisions. The format and carrier schemes must receive an
-independent cryptographic review before being declared stable.
+CLI, or web UI. It can embed an already-built C2PA manifest store into PDF
+and ZIP-based document containers, but it still does not generate new
+spec-compliant C2PA manifest stores for PDF or OOXML itself. Public-key trust
+and registry-root trust remain caller decisions. The format and carrier
+schemes must receive an independent cryptographic review before being declared
+stable.

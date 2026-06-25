@@ -3,8 +3,8 @@ Quickstart
 
 PACT currently provides library APIs for registry-scoped claimant identities,
 policies, signed manifests, local verification, text/HTML/XML carrier
-embedding, and an initial C2PA integration layer for supported image formats.
-The registry, CLI, web UI, and full PDF C2PA embedding remain later work.
+embedding, and an initial C2PA integration layer for supported image and
+document containers. The registry, CLI, and web UI remain later work.
 
 Create and sign a manifest
 --------------------------
@@ -131,3 +131,26 @@ official C2PA SDK:
    )
    inspected = read_c2pa_asset(embedded.asset_bytes, mime_type="image/png")
    assert inspected.active_manifest is not None
+
+Embed a prebuilt C2PA manifest into PDF or DOCX
+-----------------------------------------------
+
+For PDF and ZIP-based document formats, PACT can place an already-signed
+manifest store into the spec-defined container location:
+
+.. code-block:: python
+
+   from pact import (
+       embed_c2pa_manifest_in_pdf,
+       embed_c2pa_manifest_in_zip_document,
+   )
+
+   protected_pdf = embed_c2pa_manifest_in_pdf(pdf_bytes, manifest_store_bytes)
+   protected_docx = embed_c2pa_manifest_in_zip_document(
+       docx_bytes,
+       "docx",
+       manifest_store_bytes,
+   )
+
+Use this when your signing pipeline can already produce valid C2PA manifest
+store bytes but the Python SDK cannot embed them into the target file format.

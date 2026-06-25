@@ -101,21 +101,36 @@ an actual C2PA Manifest Store inside the asset and read it back later.
 The signer material must already satisfy the certificate requirements enforced
 by the official C2PA SDK.
 
-PDF and external manifests
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+PDF, DOCX, and external manifests
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The C2PA specification defines PDF embedding via embedded file streams, but
-the installed official Python builder does not currently write PDFs. PACT
-therefore exposes two practical pieces today:
+PACT now has real container writers for formats where the official Python SDK
+can read credentials but cannot author them directly:
 
-- reading existing C2PA credentials from PDFs via the official reader;
-- creating an external-manifest reference bootstrap using the JUMBF media type
-  ``application/c2pa`` and a provenance URI suitable for a repository-backed
-  manifest workflow.
+- PDF uses an embedded file stream with ``/AFRelationship /C2PA_Manifest`` and
+  a catalog ``/AF`` entry.
+- ZIP-based document formats such as DOCX use
+  ``META-INF/content_credential.c2pa`` stored without compression.
+
+Those helpers embed a manifest store that has already been signed elsewhere.
+They do not generate a new compliant C2PA manifest store for PDF or OOXML on
+their own, because the installed official Python builder still does not sign
+those source formats.
 
 .. code-block:: python
 
-   from pact import pdf_external_manifest_reference
+   from pact import (
+       embed_c2pa_manifest_in_pdf,
+       embed_c2pa_manifest_in_zip_document,
+       pdf_external_manifest_reference,
+   )
+
+   protected_pdf = embed_c2pa_manifest_in_pdf(pdf_bytes, manifest_store_bytes)
+   protected_docx = embed_c2pa_manifest_in_zip_document(
+       docx_bytes,
+       "docx",
+       manifest_store_bytes,
+   )
 
    reference = pdf_external_manifest_reference(
        pdf_bytes,
@@ -123,3 +138,6 @@ therefore exposes two practical pieces today:
        manifest_uri="https://registry.example/manifests/claim.c2pa",
    )
    assert reference.media_type == "application/c2pa"
+
+For plain text, legacy ``.doc``, and other formats without a supported
+embedded-carrier path, use the external-manifest bootstrap.
