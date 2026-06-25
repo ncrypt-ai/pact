@@ -9,12 +9,18 @@ from pact.canonical import (
     canonicalize_content,
 )
 from pact.carriers import (
+    PACT_XML_NAMESPACE,
     CarrierError,
     CarrierMode,
     InvisibleLocator,
+    StructuredCarrierExtraction,
     TextCarrierExtraction,
+    embed_html_carrier,
     embed_text_carrier,
+    embed_xml_carrier,
+    extract_html_carrier,
     extract_text_carrier,
+    extract_xml_carrier,
 )
 from pact.crypto import CryptographyError, base64url_decode, base64url_encode
 from pact.identity import (
@@ -66,7 +72,9 @@ __all__ = [
     "Policy",
     "PolicyEntry",
     "PolicyError",
+    "PACT_XML_NAMESPACE",
     "SignedManifest",
+    "StructuredCarrierExtraction",
     "TextCarrierExtraction",
     "VerificationReport",
     "__version__",
@@ -74,8 +82,12 @@ __all__ = [
     "base64url_encode",
     "canonical_json",
     "canonicalize_content",
+    "embed_html_carrier",
     "embed_text_carrier",
+    "embed_xml_carrier",
+    "extract_html_carrier",
     "extract_text_carrier",
+    "extract_xml_carrier",
     "normalize_registry_url",
     "sign_manifest",
     "verify_manifest",
