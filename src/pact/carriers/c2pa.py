@@ -1,8 +1,10 @@
-"""C2PA image carriers and external-manifest bootstrap helpers."""
+"""C2PA carriers and external-manifest bootstrap helpers."""
 
 import hashlib
 import json
+import zipfile
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,13 @@ from c2pa import (
 )
 from c2pa import (
     C2paError as NativeC2paError,
+)
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import (
+    ArrayObject,
+    DictionaryObject,
+    NameObject,
+    TextStringObject,
 )
 
 from pact.canonical import canonical_json
@@ -46,6 +55,26 @@ _EMBEDDED_IMAGE_MIME_TYPES = tuple(
 )
 
 _PDF_MIME_TYPES = {"application/pdf", "pdf"}
+_ZIP_MANIFEST_PATH = "META-INF/content_credential.c2pa"
+_ZIP_BASED_MIME_TYPES = {
+    "application/epub+zip",
+    "application/oxps",
+    "application/vnd.ms-xpsdocument",
+    "application/vnd.oasis.opendocument.presentation",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "docx",
+    "epub",
+    "odp",
+    "ods",
+    "odt",
+    "oxps",
+    "pptx",
+    "xlsx",
+}
 
 
 class C2paError(CarrierError):
@@ -150,9 +179,45 @@ def c2pa_supported_embedded_image_mime_types() -> tuple[str, ...]:
 
 
 def c2pa_pdf_embedding_supported() -> bool:
-    """Return whether the installed SDK can embed C2PA into PDFs."""
+    """Return whether this package can embed C2PA manifest stores into PDFs."""
 
-    return any(mime_type in _SUPPORTED_BUILDER_MIME_TYPES for mime_type in _PDF_MIME_TYPES)
+    return True
+
+
+def c2pa_supported_embedded_document_mime_types() -> tuple[str, ...]:
+    """Return document/container formats this package can embed into."""
+
+    return tuple(sorted({"application/pdf", *_ZIP_BASED_MIME_TYPES}))
+
+
+def _require_manifest_store_bytes(manifest_store_bytes: bytes) -> None:
+    if not manifest_store_bytes:
+        raise C2paError("manifest_store_bytes must not be empty")
+
+
+def _normalize_document_mime_type(mime_type: str) -> str:
+    normalized = mime_type.strip().lower()
+    aliases = {
+        "pdf": "application/pdf",
+        "docx": (
+            "application/vnd.openxmlformats-officedocument"
+            ".wordprocessingml.document"
+        ),
+        "xlsx": (
+            "application/vnd.openxmlformats-officedocument"
+            ".spreadsheetml.sheet"
+        ),
+        "pptx": (
+            "application/vnd.openxmlformats-officedocument"
+            ".presentationml.presentation"
+        ),
+        "odt": "application/vnd.oasis.opendocument.text",
+        "ods": "application/vnd.oasis.opendocument.spreadsheet",
+        "odp": "application/vnd.oasis.opendocument.presentation",
+        "epub": "application/epub+zip",
+        "oxps": "application/oxps",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def build_c2pa_manifest_definition(
@@ -217,6 +282,131 @@ def embed_c2pa_image(
                 )
     except NativeC2paError as error:
         raise C2paError(f"C2PA image embedding failed: {error}") from error
+
+
+def embed_c2pa_manifest_in_pdf(
+    pdf_bytes: bytes,
+    manifest_store_bytes: bytes,
+    *,
+    filename: str = "content_credential.c2pa",
+    description: str = "C2PA Manifest Store",
+) -> C2paAsset:
+    """Embed a prebuilt C2PA manifest store into a PDF embedded file stream."""
+
+    _require_manifest_store_bytes(manifest_store_bytes)
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        writer = PdfWriter()
+        writer.clone_document_from_reader(reader)
+        embedded = writer.add_attachment(filename, manifest_store_bytes)
+        embedded.subtype = NameObject("/application/c2pa")
+        embedded.associated_file_relationship = NameObject("/C2PA_Manifest")
+        embedded.description = TextStringObject(description)
+        writer.root_object[NameObject("/AF")] = ArrayObject(
+            [embedded.pdf_object.indirect_reference]
+        )
+        destination = BytesIO()
+        writer.write(destination)
+    except Exception as error:  # pragma: no cover - pypdf errors vary by input
+        raise C2paError(f"C2PA PDF embedding failed: {error}") from error
+    return C2paAsset(
+        mime_type="application/pdf",
+        asset_bytes=destination.getvalue(),
+        manifest_store_bytes=manifest_store_bytes,
+    )
+
+
+def extract_c2pa_manifest_from_pdf(pdf_bytes: bytes) -> bytes:
+    """Extract the active C2PA manifest store from a PDF embedded file stream."""
+
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+        root = reader.trailer["/Root"].get_object()
+        if not isinstance(root, DictionaryObject):
+            raise C2paError("PDF catalog is malformed")
+        associated_files = root.get("/AF")
+        if associated_files is None:
+            raise C2paError("PDF does not contain a C2PA associated file")
+        for file_spec in associated_files:
+            resolved = file_spec.get_object()
+            if resolved.get("/AFRelationship") != "/C2PA_Manifest":
+                continue
+            embedded_files = resolved.get("/EF")
+            if embedded_files is None or "/F" not in embedded_files:
+                continue
+            return embedded_files["/F"].get_object().get_data()
+    except C2paError:
+        raise
+    except Exception as error:  # pragma: no cover - pypdf errors vary by input
+        raise C2paError(f"C2PA PDF extraction failed: {error}") from error
+    raise C2paError("PDF does not contain a C2PA manifest store")
+
+
+def embed_c2pa_manifest_in_zip_document(
+    asset_bytes: bytes,
+    mime_type: str,
+    manifest_store_bytes: bytes,
+) -> C2paAsset:
+    """Embed a prebuilt C2PA manifest store in a ZIP-based document format."""
+
+    _require_manifest_store_bytes(manifest_store_bytes)
+    normalized_mime_type = _normalize_document_mime_type(mime_type)
+    if normalized_mime_type not in c2pa_supported_embedded_document_mime_types():
+        raise C2paError(
+            "ZIP-based C2PA embedding is only available for supported document"
+            " formats"
+        )
+    if normalized_mime_type == "application/pdf":
+        raise C2paError("use embed_c2pa_manifest_in_pdf() for PDFs")
+
+    try:
+        source_buffer = BytesIO(asset_bytes)
+        destination_buffer = BytesIO()
+        with zipfile.ZipFile(source_buffer) as source_zip:
+            with zipfile.ZipFile(destination_buffer, "w") as destination_zip:
+                destination_zip.comment = source_zip.comment
+                seen_manifest = False
+                for info in source_zip.infolist():
+                    if info.filename == _ZIP_MANIFEST_PATH:
+                        seen_manifest = True
+                        continue
+                    copied = zipfile.ZipInfo(info.filename, info.date_time)
+                    copied.compress_type = info.compress_type
+                    copied.comment = info.comment
+                    copied.create_system = info.create_system
+                    copied.create_version = info.create_version
+                    copied.extract_version = info.extract_version
+                    copied.flag_bits = info.flag_bits
+                    copied.external_attr = info.external_attr
+                    copied.internal_attr = info.internal_attr
+                    copied.volume = info.volume
+                    copied.extra = info.extra
+                    destination_zip.writestr(copied, source_zip.read(info.filename))
+
+                manifest_info = zipfile.ZipInfo(_ZIP_MANIFEST_PATH)
+                manifest_info.compress_type = zipfile.ZIP_STORED
+                destination_zip.writestr(manifest_info, manifest_store_bytes)
+                _ = seen_manifest
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise C2paError(f"C2PA ZIP embedding failed: {error}") from error
+
+    return C2paAsset(
+        mime_type=normalized_mime_type,
+        asset_bytes=destination_buffer.getvalue(),
+        manifest_store_bytes=manifest_store_bytes,
+    )
+
+
+def extract_c2pa_manifest_from_zip_document(asset_bytes: bytes) -> bytes:
+    """Extract an embedded C2PA manifest store from a ZIP-based document."""
+
+    try:
+        with zipfile.ZipFile(BytesIO(asset_bytes)) as archive:
+            return archive.read(_ZIP_MANIFEST_PATH)
+    except KeyError as error:
+        raise C2paError("ZIP document does not contain a C2PA manifest store") from error
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        raise C2paError(f"C2PA ZIP extraction failed: {error}") from error
 
 
 def read_c2pa_asset(

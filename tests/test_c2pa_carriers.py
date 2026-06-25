@@ -1,9 +1,13 @@
 import json
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, DictionaryObject
 
 from pact.canonical import CanonicalizationProfile
 from pact.carriers.c2pa import (
@@ -14,9 +18,14 @@ from pact.carriers.c2pa import (
     build_c2pa_manifest_definition,
     c2pa_pdf_embedding_supported,
     c2pa_supported_builder_mime_types,
+    c2pa_supported_embedded_document_mime_types,
     c2pa_supported_embedded_image_mime_types,
     c2pa_supported_reader_mime_types,
     embed_c2pa_image,
+    embed_c2pa_manifest_in_pdf,
+    embed_c2pa_manifest_in_zip_document,
+    extract_c2pa_manifest_from_pdf,
+    extract_c2pa_manifest_from_zip_document,
     pdf_external_manifest_reference,
     read_c2pa_asset,
 )
@@ -57,6 +66,7 @@ def test_supported_c2pa_type_lists_are_nonempty() -> None:
     assert c2pa_supported_reader_mime_types()
     assert c2pa_supported_builder_mime_types()
     assert "image/png" in c2pa_supported_embedded_image_mime_types()
+    assert "application/pdf" in c2pa_supported_embedded_document_mime_types()
 
 
 def test_manifest_definition_includes_pact_metadata() -> None:
@@ -92,6 +102,70 @@ def test_pdf_external_manifest_reference_uses_jumbf_media_type() -> None:
 def test_read_c2pa_asset_requires_mime_for_bytes() -> None:
     with pytest.raises(C2paError, match="mime_type is required"):
         read_c2pa_asset(b"bytes")
+
+
+def test_embed_c2pa_manifest_in_pdf_adds_associated_file() -> None:
+    source_writer = PdfWriter()
+    source_writer.add_blank_page(width=100, height=100)
+    source_buffer = BytesIO()
+    source_writer.write(source_buffer)
+
+    result = embed_c2pa_manifest_in_pdf(
+        source_buffer.getvalue(),
+        b"manifest-store",
+    )
+
+    assert isinstance(result, C2paAsset)
+    assert result.mime_type == "application/pdf"
+    assert result.manifest_store_bytes == b"manifest-store"
+    assert extract_c2pa_manifest_from_pdf(result.asset_bytes) == b"manifest-store"
+
+    reader = PdfReader(BytesIO(result.asset_bytes))
+    root = cast(DictionaryObject, reader.trailer["/Root"].get_object())
+    assert "/AF" in root
+    associated_files = cast(ArrayObject, root["/AF"])
+    file_spec = associated_files[0].get_object()
+    assert file_spec["/AFRelationship"] == "/C2PA_Manifest"
+
+
+def test_extract_c2pa_manifest_from_pdf_requires_associated_file() -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    buffer = BytesIO()
+    writer.write(buffer)
+
+    with pytest.raises(C2paError, match="associated file"):
+        extract_c2pa_manifest_from_pdf(buffer.getvalue())
+
+
+def test_embed_c2pa_manifest_in_zip_document_writes_meta_inf_file() -> None:
+    source_buffer = BytesIO()
+    with zipfile.ZipFile(source_buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", b"<Types/>")
+        archive.writestr("word/document.xml", b"<w:document/>")
+
+    result = embed_c2pa_manifest_in_zip_document(
+        source_buffer.getvalue(),
+        "docx",
+        b"manifest-store",
+    )
+
+    assert isinstance(result, C2paAsset)
+    assert result.mime_type == (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    )
+    assert extract_c2pa_manifest_from_zip_document(result.asset_bytes) == (
+        b"manifest-store"
+    )
+    with zipfile.ZipFile(BytesIO(result.asset_bytes)) as archive:
+        info = archive.getinfo("META-INF/content_credential.c2pa")
+        assert info.compress_type == zipfile.ZIP_STORED
+
+
+def test_embed_c2pa_manifest_in_zip_document_rejects_pdf() -> None:
+    with pytest.raises(C2paError, match="use embed_c2pa_manifest_in_pdf"):
+        embed_c2pa_manifest_in_zip_document(b"pdf", "application/pdf", b"manifest")
 
 
 def test_embed_c2pa_image_rejects_unsupported_types() -> None:
@@ -205,4 +279,4 @@ def test_read_c2pa_asset_parses_reader_output(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_pdf_embedding_support_reflects_builder_matrix() -> None:
-    assert c2pa_pdf_embedding_supported() is False
+    assert c2pa_pdf_embedding_supported() is True
