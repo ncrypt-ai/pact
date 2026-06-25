@@ -113,16 +113,26 @@ can read credentials but cannot author them directly:
   ``META-INF/content_credential.c2pa`` stored without compression.
 
 Those helpers embed a manifest store that has already been signed elsewhere.
-They do not generate a new compliant C2PA manifest store for PDF or OOXML on
-their own, because the installed official Python builder still does not sign
-those source formats.
+PACT now also exposes a hybrid signer path for unsupported document formats:
+
+- for ZIP-based formats such as DOCX, it uses the official builder in
+  ``no_embed`` mode and bypasses only the Python wrapper's format allow-list;
+- for PDF, it uses the official builder to sign a detached manifest over the
+  asset bytes, then uses the official ``format_embeddable()`` helper to
+  produce PDF-ready manifest bytes before inserting them into the PDF.
+
+The custom code in PACT is limited to container insertion and extraction.
+Manifest construction, signing, and PDF embeddable-manifest formatting still
+come from the official CAI SDK.
 
 .. code-block:: python
 
    from pact import (
+       C2paSignerMaterial,
        embed_c2pa_manifest_in_pdf,
        embed_c2pa_manifest_in_zip_document,
        pdf_external_manifest_reference,
+       sign_c2pa_document,
    )
 
    protected_pdf = embed_c2pa_manifest_in_pdf(pdf_bytes, manifest_store_bytes)
@@ -130,6 +140,13 @@ those source formats.
        docx_bytes,
        "docx",
        manifest_store_bytes,
+   )
+   signed_pdf = sign_c2pa_document(
+       pdf_bytes,
+       "application/pdf",
+       signed=signed,
+       signer_material=C2paSignerMaterial(certificate_chain_pem, private_key_pem),
+       title="Protected PDF",
    )
 
    reference = pdf_external_manifest_reference(
@@ -139,5 +156,6 @@ those source formats.
    )
    assert reference.media_type == "application/c2pa"
 
-For plain text, legacy ``.doc``, and other formats without a supported
-embedded-carrier path, use the external-manifest bootstrap.
+For legacy ``.doc`` and other formats without an embedded-carrier path, PACT
+can still produce a detached manifest store, but the external-manifest
+bootstrap remains the portable delivery option.

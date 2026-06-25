@@ -154,3 +154,32 @@ manifest store into the spec-defined container location:
 
 Use this when your signing pipeline can already produce valid C2PA manifest
 store bytes but the Python SDK cannot embed them into the target file format.
+
+Sign and embed a PDF or DOCX through the hybrid CAI path
+--------------------------------------------------------
+
+PACT can also drive the official CAI signer path for document formats that the
+Python wrapper does not expose directly:
+
+.. code-block:: python
+
+   from pact import C2paSignerMaterial, sign_c2pa_document
+
+   signer = C2paSignerMaterial(certificate_chain_pem, private_key_pem)
+   signed_pdf = sign_c2pa_document(
+       pdf_bytes,
+       "application/pdf",
+       signed=signed,
+       signer_material=signer,
+       title="Protected PDF",
+   )
+   signed_docx = sign_c2pa_document(
+       docx_bytes,
+       "docx",
+       signed=signed,
+       signer_material=signer,
+       title="Protected document",
+   )
+
+For legacy binary formats such as ``.doc``, the helper returns a detached
+manifest store and leaves the original bytes unchanged.

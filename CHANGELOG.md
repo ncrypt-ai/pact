@@ -24,5 +24,7 @@ and this project adheres to
 - C2PA PDF embedded-file-stream writing and extraction for prebuilt manifest
   stores.
 - C2PA ZIP-based document embedding and extraction for formats such as DOCX.
+- Hybrid C2PA document signing helpers that reuse the official CAI signer path
+  for PDF, DOCX, and detached legacy-document workflows.
 - C2PA inspection helpers and external-manifest reference bootstrap metadata
   for formats that still need a non-embedded workflow.

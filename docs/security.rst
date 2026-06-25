@@ -52,7 +52,9 @@ Current scope
 This implementation does not yet provide a registry, certificate authority,
 CLI, or web UI. It can embed an already-built C2PA manifest store into PDF
 and ZIP-based document containers, but it still does not generate new
-spec-compliant C2PA manifest stores for PDF or OOXML itself. Public-key trust
-and registry-root trust remain caller decisions. The format and carrier
-schemes must receive an independent cryptographic review before being declared
-stable.
+spec-compliant C2PA manifest stores for PDF or OOXML through a first-class
+official writer API. Instead, it uses the official CAI signer path in detached
+mode and then applies official embeddable-manifest formatting plus local
+container patching. Public-key trust and registry-root trust remain caller
+decisions. The format and carrier schemes must receive an independent
+cryptographic review before being declared stable.

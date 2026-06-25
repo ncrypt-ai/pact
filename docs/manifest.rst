@@ -91,6 +91,7 @@ does not replace manifest verification.
 
 C2PA credentials are a separate carrier layer. PACT's step 3 implementation
 uses the official SDK for supported embedded image formats, adds spec-aligned
-PDF and ZIP-container writers for prebuilt manifest stores, and exposes
-repository-style external-manifest references for formats that still need a
-remote or sidecar workflow.
+PDF and ZIP-container writers for prebuilt manifest stores, and exposes a
+hybrid signer path for PDF and OOXML-style documents that reuses the official
+SDK for detached signing before local container insertion. Formats that still
+lack an embedded path continue to use a remote or sidecar workflow.
