@@ -20,3 +20,6 @@ and this project adheres to
 - Visible, invisible, and combined text carriers with zero-width locators.
 - HTML and XML carrier embedding and extraction for ``pact.text.v1``
   manifests.
+- Initial C2PA integration for supported embedded image formats.
+- C2PA inspection helpers and external-manifest reference bootstrap metadata
+  for PDF or other non-embedded workflows.

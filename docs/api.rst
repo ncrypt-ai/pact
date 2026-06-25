@@ -47,3 +47,6 @@ Carriers
 
 .. automodule:: pact.carriers.structured
    :members:
+
+.. automodule:: pact.carriers.c2pa
+   :members:

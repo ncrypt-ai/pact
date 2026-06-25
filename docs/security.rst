@@ -38,10 +38,18 @@ content, unsalted content hash, or private key. The future registry must not
 request or persist those values. Content carriers and evidence packages will
 define how an authorized verifier obtains a nonce.
 
+C2PA trust boundary
+-------------------
+
+The C2PA layer adds a second signature system with its own certificate-chain
+requirements. A valid PACT manifest does not make a C2PA certificate trusted,
+and a readable C2PA manifest store does not replace PACT content binding or
+registry trust decisions.
+
 Current scope
 -------------
 
 This implementation does not yet provide a registry, certificate authority,
-PDF/image carriers, C2PA integration, CLI, or web UI. Public-key trust and
-registry-root trust remain caller decisions. The format and carrier schemes
-must receive an independent cryptographic review before being declared stable.
+full PDF C2PA embedding, CLI, or web UI. Public-key trust and registry-root
+trust remain caller decisions. The format and carrier schemes must receive an
+independent cryptographic review before being declared stable.

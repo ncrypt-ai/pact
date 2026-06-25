@@ -67,3 +67,59 @@ rejects external entities and other unsafe constructs before carrier handling.
    protected = embed_xml_carrier(xml_document, signed, nonce=nonce, include_locator=True)
    extracted = extract_xml_carrier(protected)
    assert extracted.signed_manifest == signed
+
+C2PA
+----
+
+PACT step 3 adds a dedicated C2PA integration layer.
+
+Supported image formats
+~~~~~~~~~~~~~~~~~~~~~~~
+
+For image formats that the installed official SDK can embed, PACT can create
+an actual C2PA Manifest Store inside the asset and read it back later.
+
+.. code-block:: python
+
+   from pact import (
+       C2paSignerMaterial,
+       embed_c2pa_image,
+       read_c2pa_asset,
+   )
+
+   signer = C2paSignerMaterial(certificate_chain_pem, private_key_pem)
+   embedded = embed_c2pa_image(
+       image_bytes,
+       "image/png",
+       signed=signed,
+       signer_material=signer,
+       title="Protected image",
+   )
+   inspected = read_c2pa_asset(embedded.asset_bytes, mime_type="image/png")
+   assert inspected.active_manifest is not None
+
+The signer material must already satisfy the certificate requirements enforced
+by the official C2PA SDK.
+
+PDF and external manifests
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The C2PA specification defines PDF embedding via embedded file streams, but
+the installed official Python builder does not currently write PDFs. PACT
+therefore exposes two practical pieces today:
+
+- reading existing C2PA credentials from PDFs via the official reader;
+- creating an external-manifest reference bootstrap using the JUMBF media type
+  ``application/c2pa`` and a provenance URI suitable for a repository-backed
+  manifest workflow.
+
+.. code-block:: python
+
+   from pact import pdf_external_manifest_reference
+
+   reference = pdf_external_manifest_reference(
+       pdf_bytes,
+       signed,
+       manifest_uri="https://registry.example/manifests/claim.c2pa",
+   )
+   assert reference.media_type == "application/c2pa"

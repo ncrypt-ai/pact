@@ -2,9 +2,9 @@ Quickstart
 ==========
 
 PACT currently provides library APIs for registry-scoped claimant identities,
-policies, signed manifests, local verification, and text/HTML/XML carrier
-embedding. The registry, CLI, web UI, PDF/image carriers, and C2PA
-integration are later implementation steps.
+policies, signed manifests, local verification, text/HTML/XML carrier
+embedding, and an initial C2PA integration layer for supported image formats.
+The registry, CLI, web UI, and full PDF C2PA embedding remain later work.
 
 Create and sign a manifest
 --------------------------
@@ -110,3 +110,24 @@ Structured HTML and XML files have dedicated helpers:
 
    protected_html = embed_html_carrier(html_document, signed, nonce=nonce, include_locator=True)
    protected_xml = embed_xml_carrier(xml_document, signed, nonce=nonce, include_locator=True)
+
+Embed a C2PA image credential
+-----------------------------
+
+For supported image formats, PACT can delegate embedding and validation to the
+official C2PA SDK:
+
+.. code-block:: python
+
+   from pact import C2paSignerMaterial, embed_c2pa_image, read_c2pa_asset
+
+   signer = C2paSignerMaterial(certificate_chain_pem, private_key_pem)
+   embedded = embed_c2pa_image(
+       image_bytes,
+       "image/png",
+       signed=signed,
+       signer_material=signer,
+       title="Protected image",
+   )
+   inspected = read_c2pa_asset(embedded.asset_bytes, mime_type="image/png")
+   assert inspected.active_manifest is not None

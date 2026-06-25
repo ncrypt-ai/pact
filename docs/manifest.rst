@@ -88,3 +88,8 @@ Step 2 adds carrier helpers for ``pact.text.v1`` manifests:
 The locator contains the claim UUID, registry-root fingerprint, nonce,
 manifest digest, and checksum. It helps recover or cross-check a claim, but it
 does not replace manifest verification.
+
+C2PA credentials are a separate carrier layer. PACT's step 3 implementation
+uses the official SDK for supported embedded image formats and exposes
+repository-style external-manifest references for cases where an installed
+builder does not write the target format.
