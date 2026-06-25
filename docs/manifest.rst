@@ -72,3 +72,19 @@ Parsing
 ``SignedManifest.from_json`` rejects duplicate object keys, non-standard JSON
 constants, unsupported versions or algorithms, malformed identifiers, and
 invalid policy data before verification.
+
+Carrier formats
+---------------
+
+Step 2 adds carrier helpers for ``pact.text.v1`` manifests:
+
+- plain text can embed a visible manifest block, an invisible zero-width
+  locator, or both;
+- HTML inserts an escaped ``application/pact+json`` block in ``<head>`` and
+  can optionally carry the zero-width locator in a hidden element;
+- XML inserts namespaced ``pact:manifest`` and optional ``pact:locator``
+  elements using ``urn:ncrypt-ai:pact:manifest:v1``.
+
+The locator contains the claim UUID, registry-root fingerprint, nonce,
+manifest digest, and checksum. It helps recover or cross-check a claim, but it
+does not replace manifest verification.

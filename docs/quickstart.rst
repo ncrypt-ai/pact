@@ -1,9 +1,10 @@
 Quickstart
 ==========
 
-PACT's first implementation slice provides library APIs for registry-scoped
-claimant identities, policies, signed manifests, and local verification. The
-registry, carriers, CLI, and web UI are later implementation steps.
+PACT currently provides library APIs for registry-scoped claimant identities,
+policies, signed manifests, local verification, and text/HTML/XML carrier
+embedding. The registry, CLI, web UI, PDF/image carriers, and C2PA
+integration are later implementation steps.
 
 Create and sign a manifest
 --------------------------
@@ -82,3 +83,30 @@ The explicit fallback is a password-encrypted PKCS#8 file:
    restored = fallback.load(identity.registry_url, "use-a-password-manager-generated-secret")
 
 The fallback password is never stored by PACT.
+
+Embed a carrier
+---------------
+
+Text carriers can attach the signed manifest visibly, invisibly, or both:
+
+.. code-block:: python
+
+   from pact import CarrierMode, embed_text_carrier, extract_text_carrier
+
+   protected = embed_text_carrier(
+       content,
+       signed,
+       nonce=nonce,
+       mode=CarrierMode.BOTH,
+   )
+   extracted = extract_text_carrier(protected)
+   assert extracted.signed_manifest == signed
+
+Structured HTML and XML files have dedicated helpers:
+
+.. code-block:: python
+
+   from pact import embed_html_carrier, embed_xml_carrier
+
+   protected_html = embed_html_carrier(html_document, signed, nonce=nonce, include_locator=True)
+   protected_xml = embed_xml_carrier(xml_document, signed, nonce=nonce, include_locator=True)

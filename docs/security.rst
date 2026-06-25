@@ -42,6 +42,6 @@ Current scope
 -------------
 
 This implementation does not yet provide a registry, certificate authority,
-carrier embedding, C2PA integration, CLI, or web UI. Public-key trust and
-registry-root trust remain caller decisions. The format must receive an
-independent cryptographic review before being declared stable.
+PDF/image carriers, C2PA integration, CLI, or web UI. Public-key trust and
+registry-root trust remain caller decisions. The format and carrier schemes
+must receive an independent cryptographic review before being declared stable.

@@ -38,3 +38,12 @@ Manifest
 
 .. automodule:: pact.manifest
    :members:
+
+Carriers
+--------
+
+.. automodule:: pact.carriers.text
+   :members:
+
+.. automodule:: pact.carriers.structured
+   :members:

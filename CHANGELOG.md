@@ -17,3 +17,6 @@ and this project adheres to
 - OS credential-store and encrypted PKCS#8 identity persistence.
 - PACT Manifest v1 commitments, ES256 signatures, strict parsing, and layered
   verification reports.
+- Visible, invisible, and combined text carriers with zero-width locators.
+- HTML and XML carrier embedding and extraction for ``pact.text.v1``
+  manifests.

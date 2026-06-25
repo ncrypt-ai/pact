@@ -16,6 +16,7 @@ Start Here
 ----------
 
 - :doc:`Quickstart <quickstart>`
+- :doc:`Carrier formats <carriers>`
 - :doc:`Manifest format <manifest>`
 - :doc:`Security model <security>`
 - :doc:`API reference <api>`
@@ -33,6 +34,7 @@ Build Documentation Locally
    :hidden:
 
    quickstart
+   carriers
    manifest
    security
    api
