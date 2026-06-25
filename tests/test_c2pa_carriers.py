@@ -28,6 +28,8 @@ from pact.carriers.c2pa import (
     extract_c2pa_manifest_from_zip_document,
     pdf_external_manifest_reference,
     read_c2pa_asset,
+    sign_c2pa_document,
+    sign_c2pa_manifest_store,
 )
 from pact.crypto import base64url_encode
 from pact.identity import ClaimantIdentity
@@ -168,6 +170,129 @@ def test_embed_c2pa_manifest_in_zip_document_rejects_pdf() -> None:
         embed_c2pa_manifest_in_zip_document(b"pdf", "application/pdf", b"manifest")
 
 
+def test_sign_c2pa_manifest_store_formats_pdf_bytes_for_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed = make_signed_manifest_png()
+    calls: dict[str, Any] = {}
+
+    def fake_sign_any_format(*args: Any, **kwargs: Any) -> bytes:
+        calls["mime_type"] = args[1]
+        return b"raw-manifest"
+
+    def fake_format_embeddable(mime_type: str, manifest_bytes: bytes) -> tuple[int, bytes]:
+        calls["format_embeddable_mime_type"] = mime_type
+        calls["format_embeddable_manifest_bytes"] = manifest_bytes
+        return (15, b"pdf-manifest")
+
+    monkeypatch.setattr(
+        "pact.carriers.c2pa._sign_c2pa_manifest_store_any_format",
+        fake_sign_any_format,
+    )
+    monkeypatch.setattr("pact.carriers.c2pa.format_embeddable", fake_format_embeddable)
+
+    result = sign_c2pa_manifest_store(
+        b"%PDF-1.4\n%%EOF\n",
+        "application/pdf",
+        signed=signed,
+        signer_material=C2paSignerMaterial(b"certs", b"key"),
+        title="Asset",
+    )
+
+    assert result == b"pdf-manifest"
+    assert calls["mime_type"] == "application/octet-stream"
+    assert calls["format_embeddable_mime_type"] == "application/pdf"
+    assert calls["format_embeddable_manifest_bytes"] == b"raw-manifest"
+
+
+def test_sign_c2pa_document_embeds_pdf_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed = make_signed_manifest_png()
+
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.sign_c2pa_manifest_store",
+        lambda *args, **kwargs: b"pdf-manifest",
+    )
+
+    def fake_embed_pdf(asset_bytes: bytes, manifest_store_bytes: bytes) -> C2paAsset:
+        return C2paAsset("application/pdf", b"signed-pdf", manifest_store_bytes)
+
+    monkeypatch.setattr("pact.carriers.c2pa.embed_c2pa_manifest_in_pdf", fake_embed_pdf)
+
+    result = sign_c2pa_document(
+        b"%PDF-1.4\n%%EOF\n",
+        "application/pdf",
+        signed=signed,
+        signer_material=C2paSignerMaterial(b"certs", b"key"),
+        title="Asset",
+    )
+
+    assert result.asset_bytes == b"signed-pdf"
+    assert result.manifest_store_bytes == b"pdf-manifest"
+
+
+def test_sign_c2pa_document_embeds_docx_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed = make_signed_manifest_png()
+
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.sign_c2pa_manifest_store",
+        lambda *args, **kwargs: b"docx-manifest",
+    )
+
+    def fake_embed_zip(
+        asset_bytes: bytes,
+        mime_type: str,
+        manifest_store_bytes: bytes,
+    ) -> C2paAsset:
+        return C2paAsset(mime_type, b"signed-docx", manifest_store_bytes)
+
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.embed_c2pa_manifest_in_zip_document",
+        fake_embed_zip,
+    )
+
+    result = sign_c2pa_document(
+        b"docx",
+        "docx",
+        signed=signed,
+        signer_material=C2paSignerMaterial(b"certs", b"key"),
+        title="Asset",
+    )
+
+    assert result.mime_type == (
+        "application/vnd.openxmlformats-officedocument"
+        ".wordprocessingml.document"
+    )
+    assert result.asset_bytes == b"signed-docx"
+    assert result.manifest_store_bytes == b"docx-manifest"
+
+
+def test_sign_c2pa_document_returns_detached_result_for_legacy_doc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed = make_signed_manifest_png()
+
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.sign_c2pa_manifest_store",
+        lambda *args, **kwargs: b"doc-manifest",
+    )
+
+    result = sign_c2pa_document(
+        b"doc",
+        "application/msword",
+        signed=signed,
+        signer_material=C2paSignerMaterial(b"certs", b"key"),
+        title="Asset",
+    )
+
+    assert result.mime_type == "application/msword"
+    assert result.asset_bytes == b"doc"
+    assert result.manifest_store_bytes == b"doc-manifest"
+
+
 def test_embed_c2pa_image_rejects_unsupported_types() -> None:
     signed = make_signed_manifest_png()
     signer = C2paSignerMaterial(b"certs", b"key")
@@ -212,7 +337,10 @@ def test_embed_c2pa_image_uses_official_builder(monkeypatch: pytest.MonkeyPatch)
             dest.write(b"signed-asset")
             return b"manifest-store"
 
-    monkeypatch.setattr("pact.carriers.c2pa.Builder", FakeBuilder)
+    monkeypatch.setattr(
+        "pact.carriers.c2pa._make_builder",
+        lambda manifest_json, signer_material=None: cast(Any, FakeBuilder(manifest_json)),
+    )
     monkeypatch.setattr(
         C2paSignerMaterial,
         "to_sdk_signer",

@@ -20,6 +20,8 @@ from pact.carriers.c2pa import (
     extract_c2pa_manifest_from_zip_document,
     pdf_external_manifest_reference,
     read_c2pa_asset,
+    sign_c2pa_document,
+    sign_c2pa_manifest_store,
 )
 from pact.carriers.structured import (
     PACT_XML_NAMESPACE,
@@ -67,6 +69,8 @@ __all__ = [
     "extract_c2pa_manifest_from_zip_document",
     "pdf_external_manifest_reference",
     "read_c2pa_asset",
+    "sign_c2pa_document",
+    "sign_c2pa_manifest_store",
     "extract_html_carrier",
     "extract_text_carrier",
     "extract_xml_carrier",

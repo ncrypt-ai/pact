@@ -3,6 +3,7 @@
 import hashlib
 import json
 import zipfile
+from ctypes import POINTER, byref, c_ubyte, string_at
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -14,11 +15,18 @@ from c2pa import (
     C2paDigitalSourceType,
     C2paSignerInfo,
     C2paSigningAlg,
+    Context,
     Reader,
     Signer,
 )
 from c2pa import (
     C2paError as NativeC2paError,
+)
+from c2pa.c2pa import (
+    Stream,
+    _check_ffi_operation_result,
+    _lib,
+    format_embeddable,
 )
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import (
@@ -242,6 +250,73 @@ def build_c2pa_manifest_definition(
     }
 
 
+def _make_builder(
+    manifest_definition: dict[str, object],
+    *,
+    signer_material: C2paSignerMaterial | None = None,
+) -> Builder:
+    if signer_material is None:
+        return Builder(manifest_definition)
+    context = Context.from_dict(
+        {"verify": {"verify_after_sign": False}},
+        signer=signer_material.to_sdk_signer(),
+    )
+    return Builder(manifest_definition, context=context)
+
+
+def _sign_c2pa_manifest_store_any_format(
+    asset_bytes: bytes,
+    mime_type: str,
+    *,
+    signed: SignedManifest,
+    signer_material: C2paSignerMaterial,
+    title: str,
+    claim_generator: str = "pact",
+    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+) -> bytes:
+    manifest_definition = build_c2pa_manifest_definition(
+        signed,
+        title=title,
+        claim_generator=claim_generator,
+    )
+    manifest_bytes_ptr = POINTER(c_ubyte)()
+    builder = _make_builder(
+        manifest_definition,
+        signer_material=signer_material,
+    )
+    builder.set_no_embed()
+    builder.set_intent(
+        C2paBuilderIntent.CREATE,
+        digital_source_type=digital_source_type,
+    )
+    if _lib is None:  # pragma: no cover - package initialization guarantees this
+        raise C2paError("C2PA native library is not available")
+    try:
+        with Stream(BytesIO(asset_bytes)) as source_stream:
+            with Stream(BytesIO()) as dest_stream:
+                result = _lib.c2pa_builder_sign_context(
+                    builder._handle,
+                    mime_type.encode("utf-8"),
+                    source_stream._stream,
+                    dest_stream._stream,
+                    byref(manifest_bytes_ptr),
+                )
+                _check_ffi_operation_result(
+                    result,
+                    "Error during C2PA sidecar signing",
+                    check=lambda value: value < 0,
+                )
+                if result <= 0 or not manifest_bytes_ptr:
+                    raise C2paError("C2PA sidecar signing returned no manifest bytes")
+                return string_at(manifest_bytes_ptr, result)
+    except NativeC2paError as error:
+        raise C2paError(f"C2PA sidecar signing failed: {error}") from error
+    finally:
+        if manifest_bytes_ptr:
+            _lib.c2pa_manifest_bytes_free(manifest_bytes_ptr)
+        builder.close()
+
+
 def embed_c2pa_image(
     asset_bytes: bytes,
     mime_type: str,
@@ -264,7 +339,10 @@ def embed_c2pa_image(
         claim_generator=claim_generator,
     )
     try:
-        with Builder(manifest_definition) as builder:
+        with _make_builder(
+            manifest_definition,
+            signer_material=signer_material,
+        ) as builder:
             builder.set_intent(
                 C2paBuilderIntent.CREATE,
                 digital_source_type=digital_source_type,
@@ -312,6 +390,84 @@ def embed_c2pa_manifest_in_pdf(
     return C2paAsset(
         mime_type="application/pdf",
         asset_bytes=destination.getvalue(),
+        manifest_store_bytes=manifest_store_bytes,
+    )
+
+
+def sign_c2pa_manifest_store(
+    asset_bytes: bytes,
+    mime_type: str,
+    *,
+    signed: SignedManifest,
+    signer_material: C2paSignerMaterial,
+    title: str,
+    claim_generator: str = "pact",
+    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+) -> bytes:
+    """Create a detached C2PA manifest store for an asset."""
+
+    normalized_mime_type = _normalize_document_mime_type(mime_type)
+    if normalized_mime_type == "application/pdf":
+        raw_manifest = _sign_c2pa_manifest_store_any_format(
+            asset_bytes,
+            "application/octet-stream",
+            signed=signed,
+            signer_material=signer_material,
+            title=title,
+            claim_generator=claim_generator,
+            digital_source_type=digital_source_type,
+        )
+        try:
+            _size, embeddable = format_embeddable("application/pdf", raw_manifest)
+        except NativeC2paError as error:
+            raise C2paError(
+                f"C2PA PDF manifest formatting failed: {error}"
+            ) from error
+        return embeddable
+    return _sign_c2pa_manifest_store_any_format(
+        asset_bytes,
+        normalized_mime_type,
+        signed=signed,
+        signer_material=signer_material,
+        title=title,
+        claim_generator=claim_generator,
+        digital_source_type=digital_source_type,
+    )
+
+
+def sign_c2pa_document(
+    asset_bytes: bytes,
+    mime_type: str,
+    *,
+    signed: SignedManifest,
+    signer_material: C2paSignerMaterial,
+    title: str,
+    claim_generator: str = "pact",
+    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+) -> C2paAsset:
+    """Sign a PDF or document asset, embedding when the container supports it."""
+
+    normalized_mime_type = _normalize_document_mime_type(mime_type)
+    manifest_store_bytes = sign_c2pa_manifest_store(
+        asset_bytes,
+        normalized_mime_type,
+        signed=signed,
+        signer_material=signer_material,
+        title=title,
+        claim_generator=claim_generator,
+        digital_source_type=digital_source_type,
+    )
+    if normalized_mime_type == "application/pdf":
+        return embed_c2pa_manifest_in_pdf(asset_bytes, manifest_store_bytes)
+    if normalized_mime_type in c2pa_supported_embedded_document_mime_types():
+        return embed_c2pa_manifest_in_zip_document(
+            asset_bytes,
+            normalized_mime_type,
+            manifest_store_bytes,
+        )
+    return C2paAsset(
+        mime_type=normalized_mime_type,
+        asset_bytes=asset_bytes,
         manifest_store_bytes=manifest_store_bytes,
     )
 
