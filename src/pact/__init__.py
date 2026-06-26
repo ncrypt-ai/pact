@@ -72,6 +72,7 @@ from pact.identity import (
     normalize_registry_url,
 )
 from pact.manifest import (
+    ClaimMeaning,
     ContentBinding,
     Manifest,
     ManifestError,
@@ -91,6 +92,7 @@ from pact.policy import (
 from pact.registry import (
     ChallengePurpose,
     ClaimantProfile,
+    ClaimVerificationReport,
     DisputeRecord,
     DisputeStatus,
     EvidenceProfile,
@@ -107,6 +109,8 @@ from pact.registry import (
     RegistryService,
     RegistryStoreError,
     TrustLabel,
+    TrustTier,
+    VerificationLabel,
     merkle_root,
 )
 from pact.watermarks import (
@@ -188,6 +192,8 @@ __all__ = [
     "PERCEPTUAL_IMAGE_WATERMARK_ID",
     "PACT_XML_NAMESPACE",
     "ChallengePurpose",
+    "ClaimMeaning",
+    "ClaimVerificationReport",
     "ClaimantProfile",
     "DisputeRecord",
     "DisputeStatus",
@@ -210,7 +216,9 @@ __all__ = [
     "TrustMarkBackend",
     "TrustMarkLocator",
     "TrustLabel",
+    "TrustTier",
     "TRUSTMARK_WATERMARK_ID",
+    "VerificationLabel",
     "VerificationReport",
     "DecodedImageWatermark",
     "ImageSoftBindingVerification",

@@ -3,6 +3,7 @@
 from pact.registry.app import (
     ChallengePurpose,
     ClaimantProfile,
+    ClaimVerificationReport,
     DisputeRecord,
     DisputeStatus,
     EvidenceProfile,
@@ -14,6 +15,8 @@ from pact.registry.app import (
     RegistryError,
     RegistryService,
     TrustLabel,
+    TrustTier,
+    VerificationLabel,
 )
 from pact.registry.store import (
     FileRegistryStore,
@@ -26,6 +29,7 @@ from pact.registry.store import (
 
 __all__ = [
     "ChallengePurpose",
+    "ClaimVerificationReport",
     "ClaimantProfile",
     "DisputeRecord",
     "DisputeStatus",
@@ -43,5 +47,7 @@ __all__ = [
     "RegistryService",
     "RegistryStoreError",
     "TrustLabel",
+    "TrustTier",
+    "VerificationLabel",
     "merkle_root",
 ]

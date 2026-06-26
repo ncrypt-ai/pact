@@ -347,6 +347,7 @@ def create_app(
         try:
             claim = service.get_claim(claim_id)
             profile = service.get_profile(claim.claimant_key_id)
+            verification = service.verify_claim(claim_id)
         except Exception as error:
             _raise_http_error(error)
         return templates.TemplateResponse(
@@ -355,9 +356,7 @@ def create_app(
             {
                 "claim": _jsonable(claim),
                 "profile": _jsonable(profile),
-                "verification_state": "revoked"
-                if claim.revoked_at is not None
-                else "current",
+                "verification": _jsonable(verification),
             },
         )
 

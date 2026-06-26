@@ -28,6 +28,7 @@ members:
            "cawg.ai_generative_training": {"use": "notAllowed"}
          }
        },
+       "claim_meanings": ["signed_by", "training_restriction"],
        "carriers": [],
        "watermarks": []
      },
@@ -41,6 +42,18 @@ members:
 The signature covers only the canonical bytes of the ``manifest`` member.
 The ES256 value is the fixed-width 64-byte ``R || S`` representation used by
 JWS, not an ASN.1 DER signature.
+
+Claim meanings
+--------------
+
+``claim_meanings`` states what the claimant is asserting. PACT keeps these
+meanings separate so a signature over a manifest does not overclaim ownership,
+authorship, licensing, or training-use evidence.
+
+Supported values are ``signed_by``, ``created_by``, ``owned_by``,
+``licensed_by``, ``training_restriction``, and
+``suspected_training_use``. Older manifests without this field parse as
+``signed_by`` only.
 
 Content binding
 ---------------

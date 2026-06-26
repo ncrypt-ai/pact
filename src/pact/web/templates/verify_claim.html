@@ -8,7 +8,12 @@
     <h1>Claim check</h1>
     <p><strong>Claim:</strong> {{ claim.claim_id }}</p>
     <p><strong>Claimant:</strong> {{ profile.key_id }}</p>
-    <p><strong>Registry state:</strong> {{ verification_state }}</p>
+    <p><strong>Verification label:</strong> {{ verification.label }}</p>
+    <p><strong>Trust tier:</strong> {{ verification.trust_tier }}</p>
+    <p><strong>Claim meanings:</strong> {{ ", ".join(verification.claim_meanings) }}</p>
+    <p><strong>Registry included:</strong> {{ verification.registry_included }}</p>
+    <p><strong>Revoked:</strong> {{ verification.revoked }}</p>
+    <p><strong>Disputed:</strong> {{ verification.disputed }}</p>
     <p><strong>Proof page:</strong> <a href="/claims/{{ claim.claim_id }}">open claim record</a></p>
   </body>
 </html>

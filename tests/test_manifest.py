@@ -10,6 +10,7 @@ from pact.canonical import CanonicalizationProfile
 from pact.crypto import base64url_encode
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
+    ClaimMeaning,
     ContentBinding,
     Manifest,
     ManifestError,
@@ -107,6 +108,10 @@ def test_manifest_create_and_round_trip() -> None:
         "label": "cawg.training-mining",
         "entries": {"cawg.ai_generative_training": {"use": "notAllowed"}},
     }
+    assert manifest.to_dict()["claim_meanings"] == [
+        "signed_by",
+        "training_restriction",
+    ]
     assert manifest.canonical_bytes() == parsed.canonical_bytes()
 
 
@@ -136,6 +141,11 @@ def test_manifest_omits_absent_optional_urls() -> None:
         ({"carriers": ("",)}, "cannot be blank"),
         ({"carriers": ("same", "same")}, "must be unique"),
         ({"watermarks": ("same", "same")}, "must be unique"),
+        ({"claim_meanings": ()}, "must not be empty"),
+        (
+            {"claim_meanings": (ClaimMeaning.SIGNED_BY, ClaimMeaning.SIGNED_BY)},
+            "must be unique",
+        ),
         ({"source_url": "relative"}, "absolute HTTP"),
         (
             {"licensing_url": "https://user:pass@example.com"},
@@ -186,6 +196,7 @@ def test_manifest_parser_rejects_bad_policy_and_shape() -> None:
         (("policy", "entries"), [], "entries must be an object"),
         (("carriers",), "carrier", "array of strings"),
         (("watermarks",), [1], "array of strings"),
+        (("claim_meanings",), ["unknown"], "unsupported claim meaning"),
         (("source_url",), 1, "source_url must be a string"),
         (("licensing_url",), 1, "licensing_url must be a string"),
     ],
@@ -203,6 +214,15 @@ def test_manifest_parser_rejects_invalid_types(
 
     with pytest.raises(ManifestError, match=message):
         Manifest.from_dict(value)
+
+
+def test_manifest_parser_accepts_legacy_manifest_without_claim_meanings() -> None:
+    value = make_manifest().to_dict()
+    del value["claim_meanings"]
+
+    parsed = Manifest.from_dict(value)
+
+    assert parsed.claim_meanings == (ClaimMeaning.SIGNED_BY,)
 
 
 @pytest.mark.parametrize(

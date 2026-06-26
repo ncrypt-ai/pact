@@ -16,6 +16,19 @@ signed a commitment to particular canonical content. It does not establish a
 unique human identity, copyright ownership, legal permission, registry trust,
 or an independently witnessed registration time.
 
+The registry-level ``verify_claim`` path is the trust-clearinghouse view. It
+combines manifest verification with registry inclusion, claimant trust tier,
+revocation state, dispute state, claim meanings, and public evidence labels.
+C2PA signatures, recovered watermarks, and perceptual hash matches are
+reported as evidence signals; they do not authenticate ownership by
+themselves.
+
+Trust tiers currently distinguish unauthenticated device continuity, hosted
+account status, domain verification, platform attestation, and third-party
+attestation. Verification labels are evidence-based: ``verified_claim``,
+``partial_match``, ``untrusted_claim``, ``disputed``, ``revoked``, or
+``inconclusive``.
+
 Key storage
 -----------
 

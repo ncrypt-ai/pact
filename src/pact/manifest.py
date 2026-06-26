@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Self, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -28,6 +29,17 @@ _MIME_TYPE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 
 class ManifestError(ValueError):
     """Raised when manifest data is malformed or inconsistent."""
+
+
+class ClaimMeaning(StrEnum):
+    """Explicit meanings a claimant attaches to one signed manifest."""
+
+    SIGNED_BY = "signed_by"
+    CREATED_BY = "created_by"
+    OWNED_BY = "owned_by"
+    LICENSED_BY = "licensed_by"
+    TRAINING_RESTRICTION = "training_restriction"
+    SUSPECTED_TRAINING_USE = "suspected_training_use"
 
 
 def _validate_digest(value: object, label: str) -> str:
@@ -64,6 +76,17 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     ):
         raise ManifestError(f"{label} must be an array of strings")
     return tuple(cast(list[str], value))
+
+
+def _claim_meaning_list(value: object) -> tuple[ClaimMeaning, ...]:
+    items = _string_list(value, "claim_meanings")
+    try:
+        meanings = tuple(ClaimMeaning(item) for item in items)
+    except ValueError as error:
+        raise ManifestError("unsupported claim meaning") from error
+    if len(set(meanings)) != len(meanings):
+        raise ManifestError("claim meanings must be unique")
+    return meanings
 
 
 def _reject_unknown_fields(
@@ -152,6 +175,10 @@ class Manifest:
     canonicalization: CanonicalizationProfile
     content_binding: ContentBinding
     policy: Policy
+    claim_meanings: tuple[ClaimMeaning, ...] = (
+        ClaimMeaning.SIGNED_BY,
+        ClaimMeaning.TRAINING_RESTRICTION,
+    )
     carriers: tuple[str, ...] = ()
     watermarks: tuple[str, ...] = ()
     source_url: str | None = None
@@ -159,6 +186,14 @@ class Manifest:
     version: str = "1"
 
     def __post_init__(self) -> None:
+        try:
+            object.__setattr__(
+                self,
+                "claim_meanings",
+                tuple(ClaimMeaning(item) for item in self.claim_meanings),
+            )
+        except ValueError as error:
+            raise ManifestError("unsupported claim meaning") from error
         if self.version != "1":
             raise ManifestError("unsupported manifest version")
         object.__setattr__(
@@ -183,6 +218,10 @@ class Manifest:
             raise ManifestError(
                 "carrier and watermark identifiers cannot be blank"
             )
+        if not self.claim_meanings:
+            raise ManifestError("claim_meanings must not be empty")
+        if len(set(self.claim_meanings)) != len(self.claim_meanings):
+            raise ManifestError("claim meanings must be unique")
         if len(set(self.carriers)) != len(self.carriers):
             raise ManifestError("carrier identifiers must be unique")
         if len(set(self.watermarks)) != len(self.watermarks):
@@ -202,6 +241,10 @@ class Manifest:
         mime_type: str,
         canonicalization: CanonicalizationProfile,
         policy: Policy,
+        claim_meanings: tuple[ClaimMeaning, ...] = (
+            ClaimMeaning.SIGNED_BY,
+            ClaimMeaning.TRAINING_RESTRICTION,
+        ),
         carriers: tuple[str, ...] = (),
         watermarks: tuple[str, ...] = (),
         source_url: str | None = None,
@@ -224,6 +267,7 @@ class Manifest:
                 nonce,
             ),
             policy=policy,
+            claim_meanings=claim_meanings,
             carriers=carriers,
             watermarks=watermarks,
             source_url=source_url,
@@ -246,6 +290,7 @@ class Manifest:
                 "label": "cawg.training-mining",
                 "entries": self.policy.to_dict(),
             },
+            "claim_meanings": [item.value for item in self.claim_meanings],
             "carriers": list(self.carriers),
             "watermarks": list(self.watermarks),
         }
@@ -277,6 +322,7 @@ class Manifest:
                     "canonicalization",
                     "content_binding",
                     "policy",
+                    "claim_meanings",
                     "carriers",
                     "watermarks",
                     "source_url",
@@ -305,6 +351,10 @@ class Manifest:
             policy_entries = cast(Mapping[str, object], entries_value)
             source_url = value.get("source_url")
             licensing_url = value.get("licensing_url")
+            claim_meanings_value = value.get(
+                "claim_meanings",
+                [ClaimMeaning.SIGNED_BY.value],
+            )
             if source_url is not None and not isinstance(source_url, str):
                 raise ManifestError("source_url must be a string")
             if licensing_url is not None and not isinstance(
@@ -325,6 +375,7 @@ class Manifest:
                 ),
                 content_binding=ContentBinding.from_dict(binding),
                 policy=Policy.from_dict(policy_entries),
+                claim_meanings=_claim_meaning_list(claim_meanings_value),
                 carriers=_string_list(value["carriers"], "carriers"),
                 watermarks=_string_list(value["watermarks"], "watermarks"),
                 source_url=source_url,

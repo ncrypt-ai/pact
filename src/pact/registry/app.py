@@ -61,10 +61,37 @@ class TrustLabel(StrEnum):
     """Derived registry evidence labels."""
 
     UNVERIFIED = "unverified"
+    UNAUTHENTICATED_DEVICE = "unauthenticated_device"
+    HOSTED_ACCOUNT = "hosted_account"
     DEVICE_ATTESTED = "device_attested"
     DOMAIN_VERIFIED = "domain_verified"
     PLATFORM_VERIFIED = "platform_verified"
+    PLATFORM_ATTESTED = "platform_attested"
+    THIRD_PARTY_ATTESTED = "third_party_attested"
     DOCUMENTED_RIGHTS = "documented_rights"
+    DISPUTED = "disputed"
+    REVOKED = "revoked"
+
+
+class TrustTier(StrEnum):
+    """Ordered claimant assurance tiers used by verification reports."""
+
+    UNAUTHENTICATED_DEVICE = "unauthenticated_device"
+    HOSTED_ACCOUNT = "hosted_account"
+    DOMAIN_VERIFIED = "domain_verified"
+    PLATFORM_ATTESTED = "platform_attested"
+    THIRD_PARTY_ATTESTED = "third_party_attested"
+
+
+class VerificationLabel(StrEnum):
+    """Evidence-based public verification labels."""
+
+    VERIFIED_CLAIM = "verified_claim"
+    PARTIAL_MATCH = "partial_match"
+    UNTRUSTED_CLAIM = "untrusted_claim"
+    DISPUTED = "disputed"
+    REVOKED = "revoked"
+    INCONCLUSIVE = "inconclusive"
 
 
 def _utc_now() -> datetime:
@@ -523,6 +550,7 @@ class ClaimantProfile:
     display_name: str | None = None
     replacement_key_id: str | None = None
     verified_domains: tuple[str, ...] = ()
+    hosted_account: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,23 +593,95 @@ class EvidenceProfile:
     open_disputes: int
     upheld_disputes: int
     rejected_disputes: int
+    hosted_account: bool = False
+    device_continuity: bool = False
     hardware_attested: bool = False
+    third_party_attested: bool = False
     documented_rights: bool = False
+
+    @property
+    def trust_tier(self) -> TrustTier:
+        """Return the strongest derived claimant assurance tier."""
+
+        if self.third_party_attested:
+            return TrustTier.THIRD_PARTY_ATTESTED
+        if self.hardware_attested or self.certificate_count:
+            return TrustTier.PLATFORM_ATTESTED
+        if self.verified_domains:
+            return TrustTier.DOMAIN_VERIFIED
+        if self.hosted_account:
+            return TrustTier.HOSTED_ACCOUNT
+        return TrustTier.UNAUTHENTICATED_DEVICE
 
     @property
     def trust_labels(self) -> tuple[TrustLabel, ...]:
         labels: list[TrustLabel] = []
+        if self.hosted_account:
+            labels.append(TrustLabel.HOSTED_ACCOUNT)
+        else:
+            labels.append(TrustLabel.UNAUTHENTICATED_DEVICE)
         if self.hardware_attested:
             labels.append(TrustLabel.DEVICE_ATTESTED)
         if self.verified_domains:
             labels.append(TrustLabel.DOMAIN_VERIFIED)
         if self.certificate_count:
             labels.append(TrustLabel.PLATFORM_VERIFIED)
+            labels.append(TrustLabel.PLATFORM_ATTESTED)
+        if self.third_party_attested:
+            labels.append(TrustLabel.THIRD_PARTY_ATTESTED)
         if self.documented_rights:
             labels.append(TrustLabel.DOCUMENTED_RIGHTS)
-        if not labels:
-            labels.append(TrustLabel.UNVERIFIED)
+        if self.open_disputes or self.upheld_disputes:
+            labels.append(TrustLabel.DISPUTED)
+        if self.revoked_claim_count:
+            labels.append(TrustLabel.REVOKED)
         return tuple(labels)
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimVerificationReport:
+    """Registry-centered verification result for one signed claim."""
+
+    claim_id: UUID
+    label: VerificationLabel
+    trust_tier: TrustTier
+    trust_labels: tuple[TrustLabel, ...]
+    registry_included: bool
+    manifest_signature_valid: bool
+    content_binding_valid: bool | None
+    revoked: bool
+    disputed: bool
+    open_disputes: int
+    upheld_disputes: int
+    claim_meanings: tuple[str, ...]
+    evidence: dict[str, object]
+    errors: tuple[str, ...] = ()
+
+    @property
+    def verified(self) -> bool:
+        """Whether the claim is currently verified by registry evidence."""
+
+        return self.label is VerificationLabel.VERIFIED_CLAIM
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible verification report."""
+
+        return {
+            "claim_id": str(self.claim_id),
+            "label": self.label.value,
+            "trust_tier": self.trust_tier.value,
+            "trust_labels": [label.value for label in self.trust_labels],
+            "registry_included": self.registry_included,
+            "manifest_signature_valid": self.manifest_signature_valid,
+            "content_binding_valid": self.content_binding_valid,
+            "revoked": self.revoked,
+            "disputed": self.disputed,
+            "open_disputes": self.open_disputes,
+            "upheld_disputes": self.upheld_disputes,
+            "claim_meanings": list(self.claim_meanings),
+            "evidence": self.evidence,
+            "errors": list(self.errors),
+        }
 
 
 class RegistryService:
@@ -634,6 +734,7 @@ class RegistryService:
             if event.event_type is RegistryEventType.PROFILE_REGISTERED:
                 key_id = cast(str, data["key_id"])
                 display_name = cast(str | None, data.get("display_name"))
+                hosted_account = bool(data.get("hosted_account", False))
                 public_jwk_value = data["public_jwk"]
                 if not isinstance(public_jwk_value, dict):
                     raise RegistryStoreError("stored public_jwk must be an object")
@@ -642,6 +743,7 @@ class RegistryService:
                     public_jwk=cast(dict[str, str], public_jwk_value),
                     created_at=self._event_time(event),
                     display_name=display_name,
+                    hosted_account=hosted_account,
                 )
             elif event.event_type is RegistryEventType.KEY_ROTATED:
                 current_key_id = cast(str, data["current_key_id"])
@@ -659,6 +761,7 @@ class RegistryService:
                     display_name=current.display_name,
                     replacement_key_id=replacement_key_id,
                     verified_domains=current.verified_domains,
+                    hosted_account=current.hosted_account,
                 )
                 profiles[replacement_key_id] = ClaimantProfile(
                     key_id=replacement_key_id,
@@ -666,6 +769,7 @@ class RegistryService:
                     created_at=self._event_time(event),
                     display_name=current.display_name,
                     verified_domains=current.verified_domains,
+                    hosted_account=current.hosted_account,
                 )
             elif event.event_type is RegistryEventType.DOMAIN_VERIFIED:
                 key_id = cast(str, data["key_id"])
@@ -680,6 +784,7 @@ class RegistryService:
                     verified_domains=tuple(
                         sorted({*current.verified_domains, domain})
                     ),
+                    hosted_account=current.hosted_account,
                 )
         return profiles
 
@@ -857,6 +962,9 @@ class RegistryService:
         display_name = request.payload.get("display_name")
         if display_name is not None and not isinstance(display_name, str):
             raise RegistryError("display_name must be a string")
+        hosted_account = request.payload.get("hosted_account", False)
+        if not isinstance(hosted_account, bool):
+            raise RegistryError("hosted_account must be a boolean")
         self.store.append(
             RegistryEventType.PROFILE_REGISTERED,
             request.claimant_key_id,
@@ -864,6 +972,7 @@ class RegistryService:
                 "key_id": request.claimant_key_id,
                 "public_jwk": request.claimant_public_jwk,
                 "display_name": display_name,
+                "hosted_account": hosted_account,
             },
         )
         return self.get_profile(request.claimant_key_id)
@@ -1115,4 +1224,83 @@ class RegistryService:
             rejected_disputes=sum(
                 dispute.status is DisputeStatus.REJECTED for dispute in claimant_disputes
             ),
+            hosted_account=profile.hosted_account,
+        )
+
+    def verify_claim(
+        self,
+        claim_id: UUID,
+        *,
+        content: bytes | None = None,
+        nonce: bytes | None = None,
+    ) -> ClaimVerificationReport:
+        """Verify one claim using registry evidence, not C2PA alone."""
+
+        claim = self.get_claim(claim_id)
+        profile = self.get_profile(claim.claimant_key_id)
+        evidence_profile = self.evidence_profile(claim.claimant_key_id)
+        claim_disputes = [
+            dispute
+            for dispute in self._load_disputes().values()
+            if dispute.claim_id == claim.claim_id
+        ]
+        open_disputes = sum(
+            dispute.status is DisputeStatus.OPEN for dispute in claim_disputes
+        )
+        upheld_disputes = sum(
+            dispute.status is DisputeStatus.UPHELD for dispute in claim_disputes
+        )
+        manifest_report = verify_manifest(
+            claim.signed_manifest,
+            profile.public_jwk,
+            content,
+            nonce,
+        )
+        disputed = open_disputes > 0 or upheld_disputes > 0
+        if claim.revoked_at is not None:
+            label = VerificationLabel.REVOKED
+        elif disputed:
+            label = VerificationLabel.DISPUTED
+        elif manifest_report.valid:
+            label = VerificationLabel.VERIFIED_CLAIM
+        elif manifest_report.signature_valid and manifest_report.key_id_valid:
+            label = VerificationLabel.PARTIAL_MATCH
+        else:
+            label = VerificationLabel.UNTRUSTED_CLAIM
+        return ClaimVerificationReport(
+            claim_id=claim.claim_id,
+            label=label,
+            trust_tier=evidence_profile.trust_tier,
+            trust_labels=evidence_profile.trust_labels,
+            registry_included=True,
+            manifest_signature_valid=manifest_report.signature_valid
+            and manifest_report.key_id_valid,
+            content_binding_valid=manifest_report.content_binding_valid,
+            revoked=claim.revoked_at is not None,
+            disputed=disputed,
+            open_disputes=open_disputes,
+            upheld_disputes=upheld_disputes,
+            claim_meanings=tuple(
+                meaning.value
+                for meaning in claim.signed_manifest.manifest.claim_meanings
+            ),
+            evidence={
+                "claimant_key_id": claim.claimant_key_id,
+                "registered_at": _isoformat(claim.registered_at),
+                "revoked_at": None
+                if claim.revoked_at is None
+                else _isoformat(claim.revoked_at),
+                "revocation_reason": claim.revocation_reason,
+                "profile_display_name": profile.display_name,
+                "verified_domains": list(profile.verified_domains),
+                "hosted_account": profile.hosted_account,
+                "active_claim_count": evidence_profile.active_claim_count,
+                "revoked_claim_count": evidence_profile.revoked_claim_count,
+                "certificate_count": evidence_profile.certificate_count,
+                "rotation_count": evidence_profile.rotation_count,
+                "watermarks": list(claim.signed_manifest.manifest.watermarks),
+                "carriers": list(claim.signed_manifest.manifest.carriers),
+                "manifest_errors": list(manifest_report.errors),
+            },
+            errors=manifest_report.errors,
         )

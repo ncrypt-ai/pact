@@ -21,6 +21,8 @@ from pact import (
     RegistryService,
     SignedManifest,
     TrustLabel,
+    TrustTier,
+    VerificationLabel,
     merkle_root,
     sign_manifest,
 )
@@ -78,6 +80,26 @@ def register_profile(service: RegistryService, identity: ClaimantIdentity) -> No
         proof_of_work_solution=solve_pow(challenge),
     )
     service.register_profile(request)
+
+
+def register_claim(
+    service: RegistryService,
+    identity: ClaimantIdentity,
+) -> SignedManifest:
+    signed_manifest = make_signed_manifest(identity)
+    claim_challenge = service.issue_challenge(
+        ChallengePurpose.CLAIM_REGISTRATION,
+        difficulty=4,
+        bound_key_id=identity.key_id,
+    )
+    claim_request = MutationRequest.create(
+        identity,
+        claim_challenge,
+        payload={"signed_manifest_json": signed_manifest.to_json().decode("utf-8")},
+        proof_of_work_solution=solve_pow(claim_challenge),
+    )
+    service.register_claim(claim_request)
+    return signed_manifest
 
 
 def test_merkle_root_requires_leaves() -> None:
@@ -157,8 +179,72 @@ def test_registry_profile_claim_certificate_and_domain_flow(tmp_path: Path) -> N
     evidence = service.evidence_profile(identity.key_id)
     assert evidence.active_claim_count == 1
     assert evidence.certificate_count == 1
+    assert evidence.trust_tier is TrustTier.PLATFORM_ATTESTED
     assert TrustLabel.DOMAIN_VERIFIED in evidence.trust_labels
     assert TrustLabel.PLATFORM_VERIFIED in evidence.trust_labels
+
+
+def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    challenge = service.issue_challenge(
+        ChallengePurpose.PROFILE_REGISTRATION,
+        difficulty=4,
+    )
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload={"display_name": "Alice", "hosted_account": True},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    profile = service.register_profile(request)
+    evidence = service.evidence_profile(identity.key_id)
+
+    assert profile.hosted_account is True
+    assert evidence.trust_tier is TrustTier.HOSTED_ACCOUNT
+    assert TrustLabel.HOSTED_ACCOUNT in evidence.trust_labels
+
+
+def test_registry_claim_verification_report_for_current_claim(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = register_claim(service, identity)
+
+    report = service.verify_claim(
+        signed_manifest.manifest.claim_id,
+        content=b"hello world",
+        nonce=b"\x01" * 32,
+    )
+
+    assert report.label is VerificationLabel.VERIFIED_CLAIM
+    assert report.verified is True
+    assert report.registry_included is True
+    assert report.manifest_signature_valid is True
+    assert report.content_binding_valid is True
+    assert report.trust_tier is TrustTier.UNAUTHENTICATED_DEVICE
+    assert report.claim_meanings == ("signed_by", "training_restriction")
+    assert report.to_dict()["label"] == "verified_claim"
+
+
+def test_registry_claim_verification_reports_partial_content_match(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = register_claim(service, identity)
+
+    report = service.verify_claim(
+        signed_manifest.manifest.claim_id,
+        content=b"changed",
+        nonce=b"\x01" * 32,
+    )
+
+    assert report.label is VerificationLabel.PARTIAL_MATCH
+    assert report.verified is False
+    assert report.content_binding_valid is False
 
 
 def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
@@ -275,3 +361,7 @@ def test_registry_revocation_and_disputes(tmp_path: Path) -> None:
     assert evidence.active_claim_count == 0
     assert evidence.revoked_claim_count == 1
     assert evidence.rejected_disputes == 1
+
+    verification = service.verify_claim(claim.claim_id)
+    assert verification.label is VerificationLabel.REVOKED
+    assert verification.revoked is True

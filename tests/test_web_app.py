@@ -149,5 +149,7 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(tmp_path: Path) 
     assert claim["claim_id"] in claim_page.text
     verify_page = client.get(f"/verify/claim/{claim['claim_id']}")
     assert "Claim check" in verify_page.text
+    assert "verified_claim" in verify_page.text
+    assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
