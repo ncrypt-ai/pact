@@ -40,8 +40,7 @@ authoritative proof object.
 Experimental text watermark plugins
 -----------------------------------
 
-PACT step 7 adds an experimental plugin layer for prose-only text
-watermarking.
+PACT provides an experimental plugin layer for prose-only text watermarking.
 
 Implemented plugins:
 
@@ -65,7 +64,7 @@ configuration, structured records, legal text, or medical/safety text.
    )
 
    result = apply_text_watermark_plugins(
-       "We help new users start quickly because clear setup steps matter.",
+       "We help new users start quickly because clear setup guidance matters.",
        "secret",
        (LexicalSubstitutionPlugin(),),
        TextWatermarkParameters(user_confirmation=True),
@@ -121,7 +120,7 @@ rejects external entities and other unsafe constructs before carrier handling.
 C2PA
 ----
 
-PACT step 3 adds a dedicated C2PA integration layer.
+PACT provides a dedicated C2PA integration layer.
 
 Supported image formats
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -213,7 +212,7 @@ bootstrap remains the portable delivery option.
 C2PA text containers
 ~~~~~~~~~~~~~~~~~~~~
 
-PACT step 8 adds a text-container layer that stays aligned with the
+PACT provides a text-container layer that stays aligned with the
 ``c2pa-text`` reference implementation instead of defining a new wire format.
 
 Supported methods:
@@ -251,8 +250,8 @@ official C2PA SDK.
 TrustMark soft bindings
 -----------------------
 
-PACT step 6 adds an optional image watermark layer for JPEG, PNG, TIFF, and
-WebP using TrustMark.
+PACT provides an optional image watermark layer for JPEG, PNG, TIFF, and WebP
+using TrustMark.
 
 The payload is intentionally small. It carries a 96-bit compact claim locator,
 not the manifest signature itself. The locator is enough to resolve one claim
@@ -262,13 +261,13 @@ signature, and any C2PA binding separately.
 PACT uses a raw binary TrustMark payload here because the ECC mode leaves too
 little usable capacity for a practical claim locator.
 
-PACT step 9 adds perceptual image fingerprints beside the TrustMark locator.
-The fingerprint is not a secret and is not an authentication proof. It is a
-matching aid made from multiple 64-bit perceptual hashes across deterministic
-views of the image: original pixels, resize, center crops, recompression, and a
-small photo-style resampling pass. This lets verification compare a transformed
-image against a registered claim even when the embedded TrustMark signal is
-lost or copied.
+PACT stores perceptual image fingerprints beside the TrustMark locator. The
+fingerprint is not a secret and is not an authentication proof. It is a matching
+aid made from multiple 64-bit perceptual hashes across deterministic views of
+the image: original pixels, resize, center crops, recompression, and a small
+photo-style resampling pass. This lets verification compare a transformed image
+against a registered claim even when the embedded TrustMark signal is lost or
+copied.
 
 .. code-block:: python
 

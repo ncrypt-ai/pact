@@ -36,7 +36,9 @@ class StatisticalSentencePatternPlugin(TextWatermarkPlugin):
         )
         marker = parameters.approved_canary_phrase
         if not marker:
-            raise WatermarkError("statistical watermarking requires an approved marker phrase")
+            raise WatermarkError(
+                "statistical watermarking requires an approved marker phrase"
+            )
         sentences = split_sentences(content)
         transformed_sentences: list[str] = []
         selected_indexes: list[int] = []
@@ -79,7 +81,9 @@ class StatisticalSentencePatternPlugin(TextWatermarkPlugin):
         del secret
         marker = record.metadata.get("marker")
         selected_indexes = record.metadata.get("selected_indexes")
-        if not isinstance(marker, str) or not isinstance(selected_indexes, list):
+        if not isinstance(marker, str) or not isinstance(
+            selected_indexes, list
+        ):
             return TextWatermarkDetection(
                 method_id=self.method_id,
                 detected=False,

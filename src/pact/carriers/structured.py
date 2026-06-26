@@ -65,7 +65,9 @@ def _remove_once(value: str, pattern: re.Pattern[str]) -> tuple[str, str]:
     if not matches:
         raise CarrierError("structured carrier block is missing")
     if len(matches) != 1:
-        raise CarrierError("multiple structured carrier blocks are not supported")
+        raise CarrierError(
+            "multiple structured carrier blocks are not supported"
+        )
     match = matches[0]
     stripped = value[: match.start()] + value[match.end() :]
     return stripped, match.group(0)
@@ -192,21 +194,24 @@ def embed_html_carrier(
 
     manifest_json = signed.to_json().decode("utf-8").replace("<", "\\u003c")
     manifest_block = (
-        "\n<script type=\"application/pact+json\" "
-        "data-pact-role=\"manifest\">\n"
+        '\n<script type="application/pact+json" '
+        'data-pact-role="manifest">\n'
         f"{manifest_json}\n"
         "</script>"
     )
     result = (
-        text[: head_close.start()] + manifest_block + text[head_close.start() :]
+        text[: head_close.start()]
+        + manifest_block
+        + text[head_close.start() :]
     )
     if include_locator:
         if nonce is None:
             raise CarrierError("a locator nonce is required")
-        locator = InvisibleLocator.create(signed.manifest, nonce).to_zero_width()
+        locator = InvisibleLocator.create(
+            signed.manifest, nonce
+        ).to_zero_width()
         locator_block = (
-            "\n<span hidden data-pact-role=\"locator\">"
-            f"{locator}</span>"
+            f'\n<span hidden data-pact-role="locator">{locator}</span>'
         )
         body_close = _HTML_BODY_CLOSE.search(result)
         if body_close is None:
@@ -236,11 +241,11 @@ def extract_html_carrier(value: bytes | str) -> StructuredCarrierExtraction:
     if len(locator_matches) > 1:
         raise CarrierError("multiple HTML locator blocks are not supported")
     locator = None
-    cleaned = (
-        text[: manifest_match.start()] + text[manifest_match.end() :]
-    )
+    cleaned = text[: manifest_match.start()] + text[manifest_match.end() :]
     if locator_matches:
-        locator = InvisibleLocator.from_zero_width(locator_matches[0].group("locator"))
+        locator = InvisibleLocator.from_zero_width(
+            locator_matches[0].group("locator")
+        )
         cleaned, _removed = _remove_once(cleaned, _HTML_LOCATOR_BLOCK)
 
     return StructuredCarrierExtraction(
@@ -266,20 +271,22 @@ def embed_xml_carrier(
 
     manifest_json = escape(signed.to_json().decode("utf-8"))
     inserted = (
-        "\n<pact:manifest xmlns:pact=\""
+        '\n<pact:manifest xmlns:pact="'
         + PACT_XML_NAMESPACE
-        + "\">"
+        + '">'
         + manifest_json
         + "</pact:manifest>"
     )
     if include_locator:
         if nonce is None:
             raise CarrierError("a locator nonce is required")
-        locator = InvisibleLocator.create(signed.manifest, nonce).to_zero_width()
+        locator = InvisibleLocator.create(
+            signed.manifest, nonce
+        ).to_zero_width()
         inserted += (
-            "\n<pact:locator xmlns:pact=\""
+            '\n<pact:locator xmlns:pact="'
             + PACT_XML_NAMESPACE
-            + "\" encoding=\"zero-width\">"
+            + '" encoding="zero-width">'
             + locator
             + "</pact:locator>"
         )
@@ -290,9 +297,7 @@ def embed_xml_carrier(
         result = opening + inserted + closing + text[root.end_index + 1 :]
     else:
         result = (
-            text[: root.end_index + 1]
-            + inserted
-            + text[root.end_index + 1 :]
+            text[: root.end_index + 1] + inserted + text[root.end_index + 1 :]
         )
     return result.encode("utf-8")
 
@@ -314,7 +319,9 @@ def extract_xml_carrier(value: bytes | str) -> StructuredCarrierExtraction:
     if len(manifest_matches) != 1:
         raise CarrierError("multiple XML manifest blocks are not supported")
     manifest_match = manifest_matches[0]
-    signed = SignedManifest.from_json(unescape(manifest_match.group("manifest")))
+    signed = SignedManifest.from_json(
+        unescape(manifest_match.group("manifest"))
+    )
 
     locator_matches = list(_XML_LOCATOR_BLOCK.finditer(text))
     if len(locator_matches) > 1:
@@ -322,7 +329,9 @@ def extract_xml_carrier(value: bytes | str) -> StructuredCarrierExtraction:
     locator = None
     cleaned = text[: manifest_match.start()] + text[manifest_match.end() :]
     if locator_matches:
-        locator = InvisibleLocator.from_zero_width(locator_matches[0].group("locator"))
+        locator = InvisibleLocator.from_zero_width(
+            locator_matches[0].group("locator")
+        )
         cleaned, _removed = _remove_once(cleaned, _XML_LOCATOR_BLOCK)
 
     return StructuredCarrierExtraction(

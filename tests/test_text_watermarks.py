@@ -30,7 +30,7 @@ ROOT_FINGERPRINT = "A" * 43
 NONCE = b"\x02" * 32
 CLAIM_ID = UUID("018f7f79-7b42-7c00-8000-000000000456")
 TEXT = (
-    "We help new users start quickly because clear setup steps matter. "
+    "We help new users start quickly because clear setup guidance matters. "
     "If the guide is simple, then more people finish the task."
 )
 
@@ -61,8 +61,12 @@ def make_signed_manifest():
     return sign_manifest(manifest, identity)
 
 
-def test_text_watermark_eligibility_blocks_code_and_requires_confirmation() -> None:
-    eligibility = assess_text_watermark_eligibility("def main():\n    return 1\n")
+def test_text_watermark_eligibility_blocks_code_and_requires_confirmation() -> (
+    None
+):
+    eligibility = assess_text_watermark_eligibility(
+        "def main():\n    return 1\n"
+    )
     assert eligibility.allowed is False
     plugin = LexicalSubstitutionPlugin()
     with pytest.raises(WatermarkError, match="requires user confirmation"):
@@ -76,7 +80,9 @@ def test_invisible_text_watermark_detects() -> None:
         "secret",
         TextWatermarkParameters(user_confirmation=True),
     )
-    detection = plugin.detect(embedding.transformed_content, "secret", embedding.record)
+    detection = plugin.detect(
+        embedding.transformed_content, "secret", embedding.record
+    )
     assert detection.detected is True
 
 
@@ -95,7 +101,10 @@ def test_lexical_and_syntactic_watermarks_transform_text() -> None:
         "secret",
         TextWatermarkParameters(user_confirmation=True, selection_stride=1),
     )
-    assert "Because clear setup steps matter" in syntactic_embedding.transformed_content
+    assert (
+        "Because clear setup guidance matters"
+        in syntactic_embedding.transformed_content
+    )
 
 
 def test_semantic_and_canary_methods_require_explicit_opt_in() -> None:
@@ -117,7 +126,9 @@ def test_semantic_and_canary_methods_require_explicit_opt_in() -> None:
             approved_canary_phrase="This line is an approved canary.",
         ),
     )
-    assert embedding.transformed_content.endswith("This line is an approved canary.\n")
+    assert embedding.transformed_content.endswith(
+        "This line is an approved canary.\n"
+    )
 
 
 def test_statistical_sentence_pattern_reports_enrichment() -> None:
@@ -132,7 +143,9 @@ def test_statistical_sentence_pattern_reports_enrichment() -> None:
             selection_stride=1,
         ),
     )
-    detection = plugin.detect(embedding.transformed_content, "secret", embedding.record)
+    detection = plugin.detect(
+        embedding.transformed_content, "secret", embedding.record
+    )
     assert detection.detected is True
     assert detection.score >= 0.0
 

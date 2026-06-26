@@ -26,10 +26,7 @@ HTML = (
     b"<body><p>Hello</p></body>\r\n"
     b"</html>\r\n"
 )
-XML = (
-    b"<?xml version=\"1.0\"?>\r\n"
-    b"<document><body>Hello</body></document>\r\n"
-)
+XML = b'<?xml version="1.0"?>\r\n<document><body>Hello</body></document>\r\n'
 
 
 def make_policy() -> Policy:
@@ -124,8 +121,8 @@ def test_xml_carrier_uses_namespace_and_rejects_existing_pact_nodes() -> None:
 def test_xml_carrier_rejects_external_entities() -> None:
     signed = make_signed_manifest()
     malicious = (
-        "<?xml version=\"1.0\"?>"
-        "<!DOCTYPE doc [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]>"
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE doc [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
         "<doc>&xxe;</doc>"
     )
 

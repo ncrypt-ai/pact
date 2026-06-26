@@ -63,7 +63,9 @@ class C2paTextAsset:
             "method": self.method.value,
             "text_length": len(self.text),
             "manifest_size_bytes": (
-                None if self.manifest_store_bytes is None else len(self.manifest_store_bytes)
+                None
+                if self.manifest_store_bytes is None
+                else len(self.manifest_store_bytes)
             ),
             "reference": self.reference,
             "exclusion_start": self.exclusion_start,
@@ -87,7 +89,9 @@ class C2paTextExtractionResult:
             "method": self.method.value,
             "clean_text": self.clean_text,
             "manifest_size_bytes": (
-                None if self.manifest_store_bytes is None else len(self.manifest_store_bytes)
+                None
+                if self.manifest_store_bytes is None
+                else len(self.manifest_store_bytes)
             ),
             "reference": self.reference,
         }
@@ -108,7 +112,9 @@ class C2paTextValidationResult:
             "valid": self.valid,
             "issues": list(self.issues),
             "manifest_size_bytes": (
-                None if self.manifest_store_bytes is None else len(self.manifest_store_bytes)
+                None
+                if self.manifest_store_bytes is None
+                else len(self.manifest_store_bytes)
             ),
         }
 
@@ -166,11 +172,15 @@ def _make_issue(
     }
 
 
-def _normalize_validation_result(result: ValidationResult) -> C2paTextValidationResult:
+def _normalize_validation_result(
+    result: ValidationResult,
+) -> C2paTextValidationResult:
     manifest_store_bytes = result.manifest_bytes or result.jumbf_bytes
     return C2paTextValidationResult(
         valid=result.valid,
-        issues=tuple(_normalize_validation_issue(issue) for issue in result.issues),
+        issues=tuple(
+            _normalize_validation_issue(issue) for issue in result.issues
+        ),
         manifest_store_bytes=manifest_store_bytes,
     )
 
@@ -371,7 +381,9 @@ def embed_c2pa_text_unstructured(
     )
 
 
-def extract_c2pa_text_unstructured(text: str) -> C2paTextExtractionResult | None:
+def extract_c2pa_text_unstructured(
+    text: str,
+) -> C2paTextExtractionResult | None:
     """Extract the Appendix A.8 unstructured wrapper, if present."""
 
     manifest_store_bytes, clean_text = extract_manifest(text)
@@ -398,9 +410,13 @@ def embed_c2pa_text_structured(
 
     syntax = c2pa_text_comment_syntax(mime_type)
     if syntax is None:
-        raise C2paTextError("no structured-text comment syntax is defined for this MIME type")
+        raise C2paTextError(
+            "no structured-text comment syntax is defined for this MIME type"
+        )
     if (manifest_store_bytes is None) == (reference is None):
-        raise C2paTextError("provide exactly one of manifest_store_bytes or reference")
+        raise C2paTextError(
+            "provide exactly one of manifest_store_bytes or reference"
+        )
     if manifest_store_bytes is not None:
         validation = validate_c2pa_text_manifest_store(
             manifest_store_bytes,
@@ -460,7 +476,9 @@ def embed_c2pa_text_html(
     """Embed a C2PA manifest association into HTML using Appendix A.7."""
 
     if (manifest_store_bytes is None) == (reference is None):
-        raise C2paTextError("provide exactly one of manifest_store_bytes or reference")
+        raise C2paTextError(
+            "provide exactly one of manifest_store_bytes or reference"
+        )
     if manifest_store_bytes is not None:
         validation = validate_c2pa_text_manifest_store(
             manifest_store_bytes,
@@ -468,7 +486,9 @@ def embed_c2pa_text_html(
         )
         if not validation.valid:
             raise C2paTextError("manifest store failed C2PA text validation")
-        embedded = embed_html_inline(html, manifest_store_bytes, newline=newline)
+        embedded = embed_html_inline(
+            html, manifest_store_bytes, newline=newline
+        )
         return C2paTextAsset(
             method=Method.HTML,
             text=embedded.html,
@@ -512,7 +532,9 @@ def extract_c2pa_text_asset(
 
     ordered_methods: list[Method] = []
     recommended = (
-        c2pa_text_recommended_method(mime_type) if mime_type is not None else None
+        c2pa_text_recommended_method(mime_type)
+        if mime_type is not None
+        else None
     )
     if recommended is not None:
         ordered_methods.append(recommended)
@@ -530,7 +552,10 @@ def extract_c2pa_text_asset(
         if extracted is not None:
             matches.append(extracted)
     unique_matches = tuple(
-        dict.fromkeys((match.method, match.reference, match.manifest_store_bytes) for match in matches)
+        dict.fromkeys(
+            (match.method, match.reference, match.manifest_store_bytes)
+            for match in matches
+        )
     )
     if len(unique_matches) > 1:
         raise C2paTextError(
@@ -593,14 +618,18 @@ def sign_c2pa_text_asset(
     )
     if resolved_method is Method.UNSTRUCTURED:
         if external_manifest_url is not None:
-            raise C2paTextError("unstructured text containers cannot use external manifest references")
+            raise C2paTextError(
+                "unstructured text containers cannot use external manifest references"
+            )
         return embed_c2pa_text_unstructured(text, manifest_store_bytes)
     if resolved_method is Method.STRUCTURED:
         return embed_c2pa_text_structured(
             text,
             mime_type=mime_type,
             manifest_store_bytes=(
-                None if external_manifest_url is not None else manifest_store_bytes
+                None
+                if external_manifest_url is not None
+                else manifest_store_bytes
             ),
             reference=external_manifest_url,
             placement=placement,
@@ -610,9 +639,13 @@ def sign_c2pa_text_asset(
         return embed_c2pa_text_html(
             text,
             manifest_store_bytes=(
-                None if external_manifest_url is not None else manifest_store_bytes
+                None
+                if external_manifest_url is not None
+                else manifest_store_bytes
             ),
             reference=external_manifest_url,
             newline=newline,
         )
-    raise C2paTextError(f"unsupported C2PA text method: {resolved_method.value}")
+    raise C2paTextError(
+        f"unsupported C2PA text method: {resolved_method.value}"
+    )

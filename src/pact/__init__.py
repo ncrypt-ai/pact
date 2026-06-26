@@ -62,6 +62,20 @@ from pact.carriers import (
     validate_c2pa_text_manifest_store,
 )
 from pact.crypto import CryptographyError, base64url_decode, base64url_encode
+from pact.detection import (
+    Probe,
+    ProbeAnalysisReport,
+    ProbeConclusion,
+    ProbeEvidencePackage,
+    ProbeEvidenceSignature,
+    ProbeKind,
+    ProbeMeasurement,
+    ProbeResponse,
+    ProbeSet,
+    analyze_probe_responses,
+    create_probe_set,
+    responses_from_jsonl,
+)
 from pact.identity import (
     ClaimantIdentity,
     EncryptedFileIdentityStore,
@@ -189,6 +203,15 @@ __all__ = [
     "Policy",
     "PolicyEntry",
     "PolicyError",
+    "Probe",
+    "ProbeAnalysisReport",
+    "ProbeConclusion",
+    "ProbeEvidencePackage",
+    "ProbeEvidenceSignature",
+    "ProbeKind",
+    "ProbeMeasurement",
+    "ProbeResponse",
+    "ProbeSet",
     "PERCEPTUAL_IMAGE_WATERMARK_ID",
     "PACT_XML_NAMESPACE",
     "ChallengePurpose",
@@ -289,12 +312,15 @@ __all__ = [
     "sign_manifest",
     "apply_text_watermark_plugins",
     "assess_text_watermark_eligibility",
+    "analyze_probe_responses",
     "trustmark_supported_image_mime_types",
+    "create_probe_set",
     "validate_c2pa_text_document",
     "validate_c2pa_text_manifest_store",
     "verify_manifest",
     "verify_image_soft_binding",
     "watermark_id_for_image_soft_binding",
+    "responses_from_jsonl",
 ]
 
 __version__ = version("pact")

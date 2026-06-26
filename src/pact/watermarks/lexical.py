@@ -78,7 +78,9 @@ class LexicalSubstitutionPlugin(TextWatermarkPlugin):
                 or changes >= parameters.max_changes
             ):
                 continue
-            gate = hashlib.sha256(secret_raw + index.to_bytes(4, "big")).digest()[0]
+            gate = hashlib.sha256(
+                secret_raw + index.to_bytes(4, "big")
+            ).digest()[0]
             if gate % 2 == 0:
                 continue
             pieces.append(content[cursor:start])

@@ -130,7 +130,7 @@ rewrite.
    )
 
    result = apply_text_watermark_plugins(
-       "We help new users start quickly because clear setup steps matter.",
+       "We help new users start quickly because clear setup guidance matters.",
        "secret",
        (LexicalSubstitutionPlugin(),),
        TextWatermarkParameters(user_confirmation=True),
@@ -323,6 +323,30 @@ TrustMark soft binding:
    )
    assert verification.registry_match
 
+Create local training-use probes
+--------------------------------
+
+PACT can create committed treatment/control probes before you collect provider
+responses. The registry does not receive the protected text, prompts,
+responses, or analysis package unless the user explicitly publishes them.
+
+.. code-block:: bash
+
+   pact probe create \
+     --protected protected.txt \
+     --control control.txt \
+     --target-model provider/model \
+     --output probes.json
+
+   pact probe analyze probes.json \
+     --responses responses.jsonl \
+     --output evidence.json
+
+   pact probe export evidence.json --output evidence-export.json
+
+The ``responses.jsonl`` file contains one JSON object per provider response,
+for example ``{"probe_id": "...", "response": "..."}``.
+
 Use the CLI for manifest workflows
 ----------------------------------
 
@@ -331,7 +355,10 @@ The CLI currently exposes:
 - ``pact identity init|show|export|import|rotate``
 - ``pact sign``
 - ``pact watermark image``
+- ``pact watermark text``
 - ``pact verify``
 - ``pact inspect``
+- ``pact probe create|analyze|export``
+- ``pact registry init``
 - ``pact registry serve``
 - ``pact web``

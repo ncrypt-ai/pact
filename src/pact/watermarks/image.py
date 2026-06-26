@@ -60,8 +60,12 @@ class ImageSoftBindingVerification:
 
         return {
             "detected": self.detected,
-            "locator": None if self.locator is None else self.locator.to_dict(),
-            "claim_id": None if self.claim is None else str(self.claim.claim_id),
+            "locator": None
+            if self.locator is None
+            else self.locator.to_dict(),
+            "claim_id": None
+            if self.claim is None
+            else str(self.claim.claim_id),
             "claimant_key_id": (
                 None if self.claim is None else self.claim.claimant_key_id
             ),
@@ -84,7 +88,9 @@ class ImagePerceptualHash:
         try:
             int(self.value, 16)
         except ValueError as error:
-            raise WatermarkError("perceptual hash values must be hex") from error
+            raise WatermarkError(
+                "perceptual hash values must be hex"
+            ) from error
 
     def distance(self, other: ImagePerceptualHash) -> int:
         """Return the Hamming distance to another compatible hash."""
@@ -158,14 +164,22 @@ class ImagePerceptualFingerprint:
         height = value.get("height")
         hashes = value.get("hashes")
         if fingerprint_id != PERCEPTUAL_IMAGE_WATERMARK_ID:
-            raise WatermarkError("unsupported perceptual fingerprint identifier")
+            raise WatermarkError(
+                "unsupported perceptual fingerprint identifier"
+            )
         resolved_fingerprint_id = cast(str, fingerprint_id)
         if not isinstance(mime_type, str):
-            raise WatermarkError("perceptual fingerprint mime_type must be a string")
+            raise WatermarkError(
+                "perceptual fingerprint mime_type must be a string"
+            )
         if not isinstance(width, int) or not isinstance(height, int):
-            raise WatermarkError("perceptual fingerprint dimensions must be integers")
+            raise WatermarkError(
+                "perceptual fingerprint dimensions must be integers"
+            )
         if not isinstance(hashes, list):
-            raise WatermarkError("perceptual fingerprint hashes must be an array")
+            raise WatermarkError(
+                "perceptual fingerprint hashes must be an array"
+            )
         parsed_hashes = tuple(
             ImagePerceptualHash.from_dict(cast(dict[str, object], item))
             for item in hashes
@@ -303,7 +317,9 @@ class TrustMarkBackend:
     ) -> tuple[str | None, int | None]:
         del mime_type
         image = self._load_image(image_bytes)
-        payload_bits, detected, version = self._engine.decode(image, MODE="binary")
+        payload_bits, detected, version = self._engine.decode(
+            image, MODE="binary"
+        )
         if not detected:
             return None, None
         return cast(str, payload_bits), cast(int, version)
@@ -378,11 +394,11 @@ def _dct_coefficient(values: list[float], u: int, v: int) -> float:
 
 
 def _perceptual_hash(image) -> str:
-    values = [float(value) for value in _image_to_grayscale_values(image, (32, 32))]
+    values = [
+        float(value) for value in _image_to_grayscale_values(image, (32, 32))
+    ]
     coefficients = [
-        _dct_coefficient(values, u, v)
-        for v in range(8)
-        for u in range(8)
+        _dct_coefficient(values, u, v) for v in range(8) for u in range(8)
     ]
     low_frequency = coefficients[1:]
     threshold = sorted(low_frequency)[len(low_frequency) // 2]
@@ -414,7 +430,9 @@ def _round_trip_format(image, image_format: str, *, quality: int = 80):
     return _load_rgb_image(output.getvalue())
 
 
-def _fingerprint_transformations(image, mime_type: str) -> tuple[tuple[str, object], ...]:
+def _fingerprint_transformations(
+    image, mime_type: str
+) -> tuple[tuple[str, object], ...]:
     from PIL import ImageEnhance, ImageFilter
 
     width, height = image.size
@@ -458,12 +476,20 @@ def create_image_perceptual_fingerprint(
     mime_type = _require_supported_image_mime_type(mime_type)
     image = _load_rgb_image(image_bytes)
     hashes: list[ImagePerceptualHash] = []
-    for transform, transformed in _fingerprint_transformations(image, mime_type):
+    for transform, transformed in _fingerprint_transformations(
+        image, mime_type
+    ):
         hashes.extend(
             (
-                ImagePerceptualHash("ahash", transform, _average_hash(transformed)),
-                ImagePerceptualHash("dhash", transform, _difference_hash(transformed)),
-                ImagePerceptualHash("phash", transform, _perceptual_hash(transformed)),
+                ImagePerceptualHash(
+                    "ahash", transform, _average_hash(transformed)
+                ),
+                ImagePerceptualHash(
+                    "dhash", transform, _difference_hash(transformed)
+                ),
+                ImagePerceptualHash(
+                    "phash", transform, _perceptual_hash(transformed)
+                ),
             )
         )
     width, height = image.size
@@ -485,7 +511,9 @@ def compare_image_perceptual_fingerprints(
     """Compare two transformed perceptual fingerprint sets."""
 
     if threshold < 0 or threshold > 64:
-        raise WatermarkError("perceptual hash threshold must be between 0 and 64")
+        raise WatermarkError(
+            "perceptual hash threshold must be between 0 and 64"
+        )
     if not 0.0 <= minimum_score <= 1.0:
         raise WatermarkError("minimum_score must be between 0.0 and 1.0")
     expected_hashes = expected.hashes
@@ -498,7 +526,9 @@ def compare_image_perceptual_fingerprints(
         candidates = observed_by_algorithm.get(expected_hash.algorithm, [])
         if not candidates:
             continue
-        distance = min(expected_hash.distance(candidate) for candidate in candidates)
+        distance = min(
+            expected_hash.distance(candidate) for candidate in candidates
+        )
         distances.append(distance)
         if distance <= threshold:
             matches += 1
@@ -530,7 +560,9 @@ def embed_image_soft_binding(
     payload_bits = locator.to_payload_bits()
     resolved_backend = backend or TrustMarkBackend()
     if resolved_backend.capacity_bits() < len(payload_bits):
-        raise WatermarkError("watermark backend capacity is too small for PACT")
+        raise WatermarkError(
+            "watermark backend capacity is too small for PACT"
+        )
     watermarked_bytes = resolved_backend.embed_bits(
         image_bytes,
         mime_type,
@@ -554,7 +586,9 @@ def decode_image_soft_binding(
 
     mime_type = _require_supported_image_mime_type(mime_type)
     resolved_backend = backend or TrustMarkBackend()
-    payload_bits, version = resolved_backend.decode_bits(image_bytes, mime_type)
+    payload_bits, version = resolved_backend.decode_bits(
+        image_bytes, mime_type
+    )
     if payload_bits is None:
         return DecodedImageWatermark(detected=False, locator=None)
     locator = TrustMarkLocator.from_payload_bits(payload_bits)

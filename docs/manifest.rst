@@ -89,7 +89,7 @@ invalid policy data before verification.
 Carrier formats
 ---------------
 
-Step 2 adds carrier helpers for ``pact.text.v1`` manifests:
+PACT provides carrier helpers for ``pact.text.v1`` manifests:
 
 - plain text can embed a visible manifest block, an invisible zero-width
   locator, or both;
@@ -102,9 +102,9 @@ The locator contains the claim UUID, registry-root fingerprint, nonce,
 manifest digest, and checksum. It helps recover or cross-check a claim, but it
 does not replace manifest verification.
 
-C2PA credentials are a separate carrier layer. PACT's step 3 implementation
-uses the official SDK for supported embedded image formats, adds spec-aligned
-PDF and ZIP-container writers for prebuilt manifest stores, and exposes a
-hybrid signer path for PDF and OOXML-style documents that reuses the official
-SDK for detached signing before local container insertion. Formats that still
-lack an embedded path continue to use a remote or sidecar workflow.
+C2PA credentials are a separate carrier layer. PACT uses the official SDK for
+supported embedded image formats, adds spec-aligned PDF and ZIP-container
+writers for prebuilt manifest stores, and exposes a hybrid signer path for PDF
+and OOXML-style documents that reuses the official SDK for detached signing
+before local container insertion. Formats that still lack an embedded path
+continue to use a remote or sidecar workflow.

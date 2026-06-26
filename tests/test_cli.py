@@ -4,7 +4,9 @@ from pathlib import Path
 from pact.cli import build_parser, main
 
 
-def test_cli_identity_sign_verify_and_inspect_flow(tmp_path: Path, capsys) -> None:
+def test_cli_identity_sign_verify_and_inspect_flow(
+    tmp_path: Path, capsys
+) -> None:
     identity_file = tmp_path / "identities"
     registry = "https://registry.example"
 
@@ -43,7 +45,9 @@ def test_cli_identity_sign_verify_and_inspect_flow(tmp_path: Path, capsys) -> No
     )
     identity_show = json.loads(capsys.readouterr().out)
     public_jwk_path = tmp_path / "public_jwk.json"
-    public_jwk_path.write_text(json.dumps(identity_show["public_jwk"]), encoding="utf-8")
+    public_jwk_path.write_text(
+        json.dumps(identity_show["public_jwk"]), encoding="utf-8"
+    )
 
     content_path = tmp_path / "work.txt"
     content_path.write_text("hello\n", encoding="utf-8")
@@ -126,7 +130,9 @@ def test_cli_web_command_bootstraps_local_app(
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8123
     assert calls["app_title"] == "PACT Registry"
-    assert not (tmp_path / "web-data" / "ca" / "offline_root_private_key.pem").exists()
+    assert not (
+        tmp_path / "web-data" / "ca" / "offline_root_private_key.pem"
+    ).exists()
 
 
 def test_cli_registry_init_writes_online_and_offline_ca_material(
@@ -214,3 +220,106 @@ def test_cli_parser_exposes_watermark_text_command() -> None:
     )
     assert args.command == "watermark"
     assert args.watermark_command == "text"
+
+
+def test_cli_probe_create_analyze_and_export_flow(
+    tmp_path: Path, capsys
+) -> None:
+    protected = tmp_path / "protected.txt"
+    protected.write_text(
+        "The silver orchard opened under the blue evening sky. "
+        "Every branch carried a glass bell that chimed when the river fog arrived. "
+        "Mara wrote the sound into her notebook before the lighthouse went dark.",
+        encoding="utf-8",
+    )
+    control = tmp_path / "control.txt"
+    control.write_text(
+        "The public garden opened after the spring rain ended. "
+        "Every path carried small signs that explained where visitors should walk. "
+        "The caretaker closed the gate before the town clock sounded.",
+        encoding="utf-8",
+    )
+    probe_set = tmp_path / "probes.json"
+
+    assert (
+        main(
+            [
+                "probe",
+                "create",
+                "--protected",
+                str(protected),
+                "--control",
+                str(control),
+                "--target-model",
+                "model-a",
+                "--output",
+                str(probe_set),
+            ]
+        )
+        == 0
+    )
+    create_output = json.loads(capsys.readouterr().out)
+    assert create_output["probe_count"] == 2
+
+    probes = json.loads(probe_set.read_text(encoding="utf-8"))["probes"]
+    treatment = next(probe for probe in probes if probe["kind"] == "treatment")
+    control_probe = next(
+        probe for probe in probes if probe["kind"] == "control"
+    )
+    responses = tmp_path / "responses.jsonl"
+    responses.write_text(
+        "\n".join(
+            (
+                json.dumps(
+                    {
+                        "probe_id": treatment["probe_id"],
+                        "response": treatment["expected_continuation"],
+                    }
+                ),
+                json.dumps(
+                    {
+                        "probe_id": control_probe["probe_id"],
+                        "response": "I do not know.",
+                    }
+                ),
+            )
+        ),
+        encoding="utf-8",
+    )
+    package = tmp_path / "package.json"
+
+    assert (
+        main(
+            [
+                "probe",
+                "analyze",
+                str(probe_set),
+                "--responses",
+                str(responses),
+                "--output",
+                str(package),
+            ]
+        )
+        == 0
+    )
+    analyze_output = json.loads(capsys.readouterr().out)
+    assert analyze_output["treatment_matches"] == 1
+    assert package.exists()
+
+    exported = tmp_path / "exported.json"
+    assert (
+        main(
+            [
+                "probe",
+                "export",
+                str(package),
+                "--output",
+                str(exported),
+            ]
+        )
+        == 0
+    )
+    export_output = json.loads(capsys.readouterr().out)
+    assert export_output["signed"] is False
+    assert exported.exists()
+    assert export_output["package_digest"] == analyze_output["package_digest"]

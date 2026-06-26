@@ -68,7 +68,9 @@ def make_service(tmp_path: Path) -> tuple[RegistryService, ClaimantIdentity]:
     return service, admin_identity
 
 
-def register_profile(service: RegistryService, identity: ClaimantIdentity) -> None:
+def register_profile(
+    service: RegistryService, identity: ClaimantIdentity
+) -> None:
     challenge = service.issue_challenge(
         ChallengePurpose.PROFILE_REGISTRATION,
         difficulty=4,
@@ -95,7 +97,9 @@ def register_claim(
     claim_request = MutationRequest.create(
         identity,
         claim_challenge,
-        payload={"signed_manifest_json": signed_manifest.to_json().decode("utf-8")},
+        payload={
+            "signed_manifest_json": signed_manifest.to_json().decode("utf-8")
+        },
         proof_of_work_solution=solve_pow(claim_challenge),
     )
     service.register_claim(claim_request)
@@ -124,7 +128,9 @@ def test_registry_store_appends_events_and_batches(tmp_path: Path) -> None:
     assert batches[0].last_sequence == 1
 
 
-def test_registry_profile_claim_certificate_and_domain_flow(tmp_path: Path) -> None:
+def test_registry_profile_claim_certificate_and_domain_flow(
+    tmp_path: Path,
+) -> None:
     service, _admin_identity = make_service(tmp_path)
     identity = ClaimantIdentity.generate(service.registry_url)
     register_profile(service, identity)
@@ -143,7 +149,9 @@ def test_registry_profile_claim_certificate_and_domain_flow(tmp_path: Path) -> N
         payload={},
         proof_of_work_solution=solve_pow(cert_challenge),
     )
-    certificate_pem, chain_pem = service.issue_claimant_certificate(cert_request)
+    certificate_pem, chain_pem = service.issue_claimant_certificate(
+        cert_request
+    )
     assert b"BEGIN CERTIFICATE" in certificate_pem
     assert chain_pem.startswith(certificate_pem)
 
@@ -156,7 +164,9 @@ def test_registry_profile_claim_certificate_and_domain_flow(tmp_path: Path) -> N
     claim_request = MutationRequest.create(
         identity,
         claim_challenge,
-        payload={"signed_manifest_json": signed_manifest.to_json().decode("utf-8")},
+        payload={
+            "signed_manifest_json": signed_manifest.to_json().decode("utf-8")
+        },
         proof_of_work_solution=solve_pow(claim_challenge),
     )
     claim = service.register_claim(claim_request)
@@ -206,7 +216,9 @@ def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:
     assert TrustLabel.HOSTED_ACCOUNT in evidence.trust_labels
 
 
-def test_registry_claim_verification_report_for_current_claim(tmp_path: Path) -> None:
+def test_registry_claim_verification_report_for_current_claim(
+    tmp_path: Path,
+) -> None:
     service, _admin_identity = make_service(tmp_path)
     identity = ClaimantIdentity.generate(service.registry_url)
     register_profile(service, identity)
@@ -266,7 +278,9 @@ def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
         service.register_profile(request)
 
 
-def test_registry_key_rotation_requires_old_and_new_signatures(tmp_path: Path) -> None:
+def test_registry_key_rotation_requires_old_and_new_signatures(
+    tmp_path: Path,
+) -> None:
     service, _admin_identity = make_service(tmp_path)
     current_identity = ClaimantIdentity.generate(service.registry_url)
     replacement_identity = current_identity.rotate()
@@ -306,7 +320,9 @@ def test_registry_revocation_and_disputes(tmp_path: Path) -> None:
     claim_request = MutationRequest.create(
         claimant_identity,
         claim_challenge,
-        payload={"signed_manifest_json": signed_manifest.to_json().decode("utf-8")},
+        payload={
+            "signed_manifest_json": signed_manifest.to_json().decode("utf-8")
+        },
         proof_of_work_solution=solve_pow(claim_challenge),
     )
     claim = service.register_claim(claim_request)
@@ -318,7 +334,10 @@ def test_registry_revocation_and_disputes(tmp_path: Path) -> None:
     dispute_request = MutationRequest.create(
         admin_identity,
         dispute_challenge,
-        payload={"claim_id": str(claim.claim_id), "reason": "possible conflict"},
+        payload={
+            "claim_id": str(claim.claim_id),
+            "reason": "possible conflict",
+        },
         proof_of_work_solution=solve_pow(dispute_challenge),
     )
     dispute = service.open_dispute(dispute_request)

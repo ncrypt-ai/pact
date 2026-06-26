@@ -96,7 +96,9 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
     ).raise_for_status()
 
 
-def test_web_app_serves_registry_profile_claim_and_verify_pages(tmp_path: Path) -> None:
+def test_web_app_serves_registry_profile_claim_and_verify_pages(
+    tmp_path: Path,
+) -> None:
     client, identity = make_client(tmp_path)
     register_profile(client, identity)
 
@@ -138,7 +140,10 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(tmp_path: Path) 
 
     assert client.get("/api/v1/registry").status_code == 200
     assert client.get(f"/api/v1/profiles/{identity.key_id}").status_code == 200
-    assert client.get(f"/api/v1/profiles/{identity.key_id}/evidence").status_code == 200
+    assert (
+        client.get(f"/api/v1/profiles/{identity.key_id}/evidence").status_code
+        == 200
+    )
     assert client.get(f"/api/v1/claims/{claim['claim_id']}").status_code == 200
 
     home = client.get("/")

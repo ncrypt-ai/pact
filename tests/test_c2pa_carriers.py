@@ -120,7 +120,9 @@ def test_embed_c2pa_manifest_in_pdf_adds_associated_file() -> None:
     assert isinstance(result, C2paAsset)
     assert result.mime_type == "application/pdf"
     assert result.manifest_store_bytes == b"manifest-store"
-    assert extract_c2pa_manifest_from_pdf(result.asset_bytes) == b"manifest-store"
+    assert (
+        extract_c2pa_manifest_from_pdf(result.asset_bytes) == b"manifest-store"
+    )
 
     reader = PdfReader(BytesIO(result.asset_bytes))
     root = cast(DictionaryObject, reader.trailer["/Root"].get_object())
@@ -167,7 +169,9 @@ def test_embed_c2pa_manifest_in_zip_document_writes_meta_inf_file() -> None:
 
 def test_embed_c2pa_manifest_in_zip_document_rejects_pdf() -> None:
     with pytest.raises(C2paError, match="use embed_c2pa_manifest_in_pdf"):
-        embed_c2pa_manifest_in_zip_document(b"pdf", "application/pdf", b"manifest")
+        embed_c2pa_manifest_in_zip_document(
+            b"pdf", "application/pdf", b"manifest"
+        )
 
 
 def test_sign_c2pa_manifest_store_formats_pdf_bytes_for_embedding(
@@ -180,7 +184,9 @@ def test_sign_c2pa_manifest_store_formats_pdf_bytes_for_embedding(
         calls["mime_type"] = args[1]
         return b"raw-manifest"
 
-    def fake_format_embeddable(mime_type: str, manifest_bytes: bytes) -> tuple[int, bytes]:
+    def fake_format_embeddable(
+        mime_type: str, manifest_bytes: bytes
+    ) -> tuple[int, bytes]:
         calls["format_embeddable_mime_type"] = mime_type
         calls["format_embeddable_manifest_bytes"] = manifest_bytes
         return (15, b"pdf-manifest")
@@ -189,7 +195,9 @@ def test_sign_c2pa_manifest_store_formats_pdf_bytes_for_embedding(
         "pact.carriers.c2pa._sign_c2pa_manifest_store_any_format",
         fake_sign_any_format,
     )
-    monkeypatch.setattr("pact.carriers.c2pa.format_embeddable", fake_format_embeddable)
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.format_embeddable", fake_format_embeddable
+    )
 
     result = sign_c2pa_manifest_store(
         b"%PDF-1.4\n%%EOF\n",
@@ -215,10 +223,16 @@ def test_sign_c2pa_document_embeds_pdf_result(
         lambda *args, **kwargs: b"pdf-manifest",
     )
 
-    def fake_embed_pdf(asset_bytes: bytes, manifest_store_bytes: bytes) -> C2paAsset:
-        return C2paAsset("application/pdf", b"signed-pdf", manifest_store_bytes)
+    def fake_embed_pdf(
+        asset_bytes: bytes, manifest_store_bytes: bytes
+    ) -> C2paAsset:
+        return C2paAsset(
+            "application/pdf", b"signed-pdf", manifest_store_bytes
+        )
 
-    monkeypatch.setattr("pact.carriers.c2pa.embed_c2pa_manifest_in_pdf", fake_embed_pdf)
+    monkeypatch.setattr(
+        "pact.carriers.c2pa.embed_c2pa_manifest_in_pdf", fake_embed_pdf
+    )
 
     result = sign_c2pa_document(
         b"%PDF-1.4\n%%EOF\n",
@@ -307,7 +321,9 @@ def test_embed_c2pa_image_rejects_unsupported_types() -> None:
         )
 
 
-def test_embed_c2pa_image_uses_official_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embed_c2pa_image_uses_official_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     signed = make_signed_manifest_png()
     calls: dict[str, Any] = {}
 
@@ -332,14 +348,18 @@ def test_embed_c2pa_image_uses_official_builder(monkeypatch: pytest.MonkeyPatch)
             calls["intent"] = intent
             calls["digital_source_type"] = digital_source_type
 
-        def sign(self, signer: Any, mime_type: str, source: Any, dest: Any) -> bytes:
+        def sign(
+            self, signer: Any, mime_type: str, source: Any, dest: Any
+        ) -> bytes:
             calls["mime_type"] = mime_type
             dest.write(b"signed-asset")
             return b"manifest-store"
 
     monkeypatch.setattr(
         "pact.carriers.c2pa._make_builder",
-        lambda manifest_json, signer_material=None: cast(Any, FakeBuilder(manifest_json)),
+        lambda manifest_json, signer_material=None: cast(
+            Any, FakeBuilder(manifest_json)
+        ),
     )
     monkeypatch.setattr(
         C2paSignerMaterial,
@@ -361,7 +381,9 @@ def test_embed_c2pa_image_uses_official_builder(monkeypatch: pytest.MonkeyPatch)
     assert calls["mime_type"] == "image/png"
 
 
-def test_read_c2pa_asset_parses_reader_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_read_c2pa_asset_parses_reader_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     payload = {
         "manifests": {"active": {"title": "Asset"}},
         "active_manifest": "active",

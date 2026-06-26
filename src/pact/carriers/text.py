@@ -96,8 +96,7 @@ def _bytes_from_bits(value: str) -> bytes:
     if len(value) % 8 != 0:
         raise CarrierError("locator payload has an invalid bit length")
     return bytes(
-        int(value[index : index + 8], 2)
-        for index in range(0, len(value), 8)
+        int(value[index : index + 8], 2) for index in range(0, len(value), 8)
     )
 
 
@@ -120,7 +119,9 @@ class InvisibleLocator:
             base64url_decode(self.manifest_digest, length=32)
             base64url_decode(self.checksum, length=4)
         except CryptographyError as error:
-            raise CarrierError("locator digests must be SHA-256 base64url") from error
+            raise CarrierError(
+                "locator digests must be SHA-256 base64url"
+            ) from error
         if len(self.nonce) != 32:
             raise CarrierError("locator nonce must be 32 bytes")
         if self.checksum != _checksum(cast(JsonValue, self._unsigned_dict())):
@@ -218,7 +219,9 @@ class InvisibleLocator:
         try:
             nonce_bytes = base64url_decode(nonce, length=32)
         except CryptographyError as error:
-            raise CarrierError("nonce must be a 32-byte base64url value") from error
+            raise CarrierError(
+                "nonce must be a 32-byte base64url value"
+            ) from error
         return cls(
             claim_id=UUID(claim_id),
             registry_root_fingerprint=registry_root_fingerprint,
@@ -236,9 +239,7 @@ class InvisibleLocator:
         if match is None:
             raise CarrierError("locator frame is malformed")
         bits = (
-            match.group("bits")
-            .replace(_BIT_ZERO, "0")
-            .replace(_BIT_ONE, "1")
+            match.group("bits").replace(_BIT_ZERO, "0").replace(_BIT_ONE, "1")
         )
         payload = _bytes_from_bits(bits)
         try:
@@ -285,7 +286,9 @@ def _strip_visible_block(text: str) -> tuple[str, SignedManifest | None]:
     match = _VISIBLE_PATTERN.match(text)
     if match is None:
         raise CarrierError("visible manifest block is malformed")
-    manifest = SignedManifest.from_json(match.group("manifest").encode("utf-8"))
+    manifest = SignedManifest.from_json(
+        match.group("manifest").encode("utf-8")
+    )
     return text[match.end() :], manifest
 
 
@@ -307,7 +310,9 @@ def embed_text_carrier(
         if secret is None:
             raise CarrierError("experimental text carriers require a secret")
         if not plugins:
-            raise CarrierError("experimental text carriers require at least one plugin")
+            raise CarrierError(
+                "experimental text carriers require at least one plugin"
+            )
         from pact.watermarks.base import TextWatermarkParameters
         from pact.watermarks.textual import embed_experimental_text_carrier
 
@@ -337,7 +342,9 @@ def embed_text_carrier(
     elif mode is CarrierMode.INVISIBLE:
         result = body + locator
     else:
-        result = _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body + locator
+        result = (
+            _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body + locator
+        )
     return result.encode("utf-8")
 
 

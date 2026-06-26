@@ -44,7 +44,9 @@ def _parse_datetime(value: object, label: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as error:
-        raise RegistryStoreError(f"{label} must be a valid ISO 8601 string") from error
+        raise RegistryStoreError(
+            f"{label} must be a valid ISO 8601 string"
+        ) from error
     if parsed.tzinfo is None:
         raise RegistryStoreError(f"{label} must include a timezone")
     return parsed.astimezone(UTC)
@@ -58,7 +60,9 @@ def merkle_root(leaves: list[bytes]) -> str:
     """Return the SHA-256 Merkle root for the provided leaf payloads."""
 
     if not leaves:
-        raise RegistryStoreError("cannot compute a Merkle root for zero leaves")
+        raise RegistryStoreError(
+            "cannot compute a Merkle root for zero leaves"
+        )
     level = [hashlib.sha256(b"\x00" + leaf).digest() for leaf in leaves]
     while len(level) > 1:
         next_level: list[bytes] = []
@@ -109,9 +113,13 @@ class RegistryEvent:
             actor_key_id = value.get("actor_key_id")
             data = value["data"]
         except KeyError as error:
-            raise RegistryStoreError("registry event is missing required fields") from error
+            raise RegistryStoreError(
+                "registry event is missing required fields"
+            ) from error
         if not isinstance(sequence, int) or sequence < 1:
-            raise RegistryStoreError("event sequence must be a positive integer")
+            raise RegistryStoreError(
+                "event sequence must be a positive integer"
+            )
         if not isinstance(event_id, str):
             raise RegistryStoreError("event_id must be a string")
         if not isinstance(event_type, str):
@@ -124,7 +132,9 @@ class RegistryEvent:
             sequence=sequence,
             event_id=UUID(event_id),
             event_type=RegistryEventType(event_type),
-            occurred_at=_parse_datetime(value.get("occurred_at"), "occurred_at"),
+            occurred_at=_parse_datetime(
+                value.get("occurred_at"), "occurred_at"
+            ),
             actor_key_id=actor_key_id,
             data=cast(dict[str, object], data),
         )
@@ -164,7 +174,9 @@ class RegistryBatch:
             first_sequence=events[0].sequence,
             last_sequence=events[-1].sequence,
             event_ids=tuple(str(event.event_id) for event in events),
-            merkle_root=merkle_root([event.canonical_bytes() for event in events]),
+            merkle_root=merkle_root(
+                [event.canonical_bytes() for event in events]
+            ),
             created_at=_utc_now(),
         )
 
@@ -179,16 +191,22 @@ class RegistryBatch:
             event_ids = value["event_ids"]
             merkle_root_value = value["merkle_root"]
         except KeyError as error:
-            raise RegistryStoreError("registry batch is missing required fields") from error
+            raise RegistryStoreError(
+                "registry batch is missing required fields"
+            ) from error
         if not isinstance(batch_id, str):
             raise RegistryStoreError("batch_id must be a string")
         if not isinstance(first_sequence, int) or first_sequence < 1:
-            raise RegistryStoreError("first_sequence must be a positive integer")
-        if not isinstance(last_sequence, int) or last_sequence < first_sequence:
-            raise RegistryStoreError("last_sequence must be >= first_sequence")
+            raise RegistryStoreError(
+                "first_sequence must be a positive integer"
+            )
         if (
-            not isinstance(event_ids, list)
-            or any(not isinstance(item, str) for item in event_ids)
+            not isinstance(last_sequence, int)
+            or last_sequence < first_sequence
+        ):
+            raise RegistryStoreError("last_sequence must be >= first_sequence")
+        if not isinstance(event_ids, list) or any(
+            not isinstance(item, str) for item in event_ids
         ):
             raise RegistryStoreError("event_ids must be an array of strings")
         if not isinstance(merkle_root_value, str):
@@ -232,9 +250,13 @@ class FileRegistryStore:
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError as error:
-                raise RegistryStoreError("registry event log contains invalid JSON") from error
+                raise RegistryStoreError(
+                    "registry event log contains invalid JSON"
+                ) from error
             if not isinstance(parsed, dict):
-                raise RegistryStoreError("registry event log entries must be objects")
+                raise RegistryStoreError(
+                    "registry event log entries must be objects"
+                )
             result.append(RegistryEvent.from_dict(parsed))
         return tuple(result)
 
@@ -250,9 +272,13 @@ class FileRegistryStore:
             try:
                 parsed = json.loads(line)
             except json.JSONDecodeError as error:
-                raise RegistryStoreError("registry batch log contains invalid JSON") from error
+                raise RegistryStoreError(
+                    "registry batch log contains invalid JSON"
+                ) from error
             if not isinstance(parsed, dict):
-                raise RegistryStoreError("registry batch log entries must be objects")
+                raise RegistryStoreError(
+                    "registry batch log entries must be objects"
+                )
             result.append(RegistryBatch.from_dict(parsed))
         return tuple(result)
 

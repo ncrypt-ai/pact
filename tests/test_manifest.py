@@ -143,7 +143,12 @@ def test_manifest_omits_absent_optional_urls() -> None:
         ({"watermarks": ("same", "same")}, "must be unique"),
         ({"claim_meanings": ()}, "must not be empty"),
         (
-            {"claim_meanings": (ClaimMeaning.SIGNED_BY, ClaimMeaning.SIGNED_BY)},
+            {
+                "claim_meanings": (
+                    ClaimMeaning.SIGNED_BY,
+                    ClaimMeaning.SIGNED_BY,
+                )
+            },
             "must be unique",
         ),
         ({"source_url": "relative"}, "absolute HTTP"),
@@ -216,7 +221,9 @@ def test_manifest_parser_rejects_invalid_types(
         Manifest.from_dict(value)
 
 
-def test_manifest_parser_accepts_legacy_manifest_without_claim_meanings() -> None:
+def test_manifest_parser_accepts_legacy_manifest_without_claim_meanings() -> (
+    None
+):
     value = make_manifest().to_dict()
     del value["claim_meanings"]
 

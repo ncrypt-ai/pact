@@ -108,7 +108,9 @@ def _parse_datetime(value: object, label: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as error:
-        raise RegistryError(f"{label} must be a valid ISO 8601 string") from error
+        raise RegistryError(
+            f"{label} must be a valid ISO 8601 string"
+        ) from error
     if parsed.tzinfo is None:
         raise RegistryError(f"{label} must include a timezone")
     return parsed.astimezone(UTC)
@@ -144,7 +146,9 @@ class MutationChallenge:
             normalize_registry_url(self.registry_url),
         )
         if self.difficulty < 0 or self.difficulty > 255:
-            raise RegistryError("challenge difficulty must be between 0 and 255")
+            raise RegistryError(
+                "challenge difficulty must be between 0 and 255"
+            )
 
     @classmethod
     def create(
@@ -322,7 +326,9 @@ class KeyRotationRequest:
             replacement_public_jwk=replacement_identity.public_jwk,
             proof_of_work_solution=proof_of_work_solution,
             payload=payload,
-            current_signature=sign_es256(current_identity.private_key, signed_bytes),
+            current_signature=sign_es256(
+                current_identity.private_key, signed_bytes
+            ),
             replacement_signature=sign_es256(
                 replacement_identity.private_key, signed_bytes
             ),
@@ -345,7 +351,9 @@ class RegistryCertificateAuthority:
 
         certificate = x509.load_pem_x509_certificate(self.root_certificate_pem)
         return base64url_encode(
-            hashlib.sha256(certificate.public_bytes(serialization.Encoding.DER)).digest()
+            hashlib.sha256(
+                certificate.public_bytes(serialization.Encoding.DER)
+            ).digest()
         )
 
     @classmethod
@@ -374,7 +382,9 @@ class RegistryCertificateAuthority:
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(days=1))
             .not_valid_after(now + timedelta(days=3650))
-            .add_extension(x509.BasicConstraints(ca=True, path_length=1), critical=True)
+            .add_extension(
+                x509.BasicConstraints(ca=True, path_length=1), critical=True
+            )
             .add_extension(
                 x509.KeyUsage(
                     digital_signature=True,
@@ -390,7 +400,9 @@ class RegistryCertificateAuthority:
                 critical=True,
             )
             .add_extension(
-                x509.SubjectKeyIdentifier.from_public_key(root_key.public_key()),
+                x509.SubjectKeyIdentifier.from_public_key(
+                    root_key.public_key()
+                ),
                 critical=False,
             )
             .sign(root_key, hashes.SHA256())
@@ -399,7 +411,9 @@ class RegistryCertificateAuthority:
         intermediate_key = ec.generate_private_key(ec.SECP256R1())
         intermediate_name = x509.Name(
             [
-                x509.NameAttribute(NameOID.COMMON_NAME, intermediate_common_name),
+                x509.NameAttribute(
+                    NameOID.COMMON_NAME, intermediate_common_name
+                ),
                 x509.NameAttribute(NameOID.ORGANIZATION_NAME, registry_url),
             ]
         )
@@ -411,7 +425,9 @@ class RegistryCertificateAuthority:
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(days=1))
             .not_valid_after(now + timedelta(days=365))
-            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(
+                x509.BasicConstraints(ca=True, path_length=0), critical=True
+            )
             .add_extension(
                 x509.KeyUsage(
                     digital_signature=True,
@@ -490,14 +506,19 @@ class RegistryCertificateAuthority:
         certificate = (
             x509.CertificateBuilder()
             .subject_name(
-                x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+                x509.Name(
+                    [x509.NameAttribute(NameOID.COMMON_NAME, common_name)]
+                )
             )
             .issuer_name(intermediate_certificate.subject)
             .public_key(claimant_public_key)
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1))
             .not_valid_after(now + timedelta(days=valid_days))
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.BasicConstraints(ca=False, path_length=None),
+                critical=True,
+            )
             .add_extension(
                 x509.KeyUsage(
                     digital_signature=True,
@@ -737,7 +758,9 @@ class RegistryService:
                 hosted_account = bool(data.get("hosted_account", False))
                 public_jwk_value = data["public_jwk"]
                 if not isinstance(public_jwk_value, dict):
-                    raise RegistryStoreError("stored public_jwk must be an object")
+                    raise RegistryStoreError(
+                        "stored public_jwk must be an object"
+                    )
                 profiles[key_id] = ClaimantProfile(
                     key_id=key_id,
                     public_jwk=cast(dict[str, str], public_jwk_value),
@@ -795,7 +818,9 @@ class RegistryService:
             if event.event_type is RegistryEventType.CLAIM_REGISTERED:
                 claim_id = UUID(cast(str, data["claim_id"]))
                 signed_manifest_json = cast(str, data["signed_manifest_json"])
-                signed_manifest = SignedManifest.from_json(signed_manifest_json)
+                signed_manifest = SignedManifest.from_json(
+                    signed_manifest_json
+                )
                 claims[claim_id] = RegisteredClaim(
                     claim_id=claim_id,
                     claimant_key_id=cast(str, data["claimant_key_id"]),
@@ -865,15 +890,22 @@ class RegistryService:
         purpose: ChallengePurpose,
     ) -> MutationChallenge:
         challenge = self._consume_challenge(request.challenge_id, purpose)
-        if challenge.bound_key_id is not None and request.claimant_key_id != challenge.bound_key_id:
-            raise RegistryError("challenge is bound to a different claimant key")
+        if (
+            challenge.bound_key_id is not None
+            and request.claimant_key_id != challenge.bound_key_id
+        ):
+            raise RegistryError(
+                "challenge is bound to a different claimant key"
+            )
         if not challenge.verify_solution(request.proof_of_work_solution):
             raise RegistryError("proof-of-work solution is invalid")
         try:
             public_key = public_key_from_jwk(request.claimant_public_jwk)
         except ValueError as error:
             raise RegistryError("claimant public JWK is invalid") from error
-        if not verify_es256(public_key, request.signed_bytes(challenge), request.signature):
+        if not verify_es256(
+            public_key, request.signed_bytes(challenge), request.signature
+        ):
             raise RegistryError("mutation request signature is invalid")
         del self._issued_challenges[request.challenge_id]
         return challenge
@@ -886,19 +918,28 @@ class RegistryService:
             request.challenge_id,
             ChallengePurpose.KEY_ROTATION,
         )
-        if challenge.bound_key_id is not None and request.current_key_id != challenge.bound_key_id:
-            raise RegistryError("rotation challenge is bound to a different claimant key")
+        if (
+            challenge.bound_key_id is not None
+            and request.current_key_id != challenge.bound_key_id
+        ):
+            raise RegistryError(
+                "rotation challenge is bound to a different claimant key"
+            )
         if not challenge.verify_solution(request.proof_of_work_solution):
             raise RegistryError("proof-of-work solution is invalid")
         signed_bytes = request.signed_bytes(challenge)
         current_key = public_key_from_jwk(request.current_public_jwk)
         replacement_key = public_key_from_jwk(request.replacement_public_jwk)
-        if not verify_es256(current_key, signed_bytes, request.current_signature):
+        if not verify_es256(
+            current_key, signed_bytes, request.current_signature
+        ):
             raise RegistryError("current-key rotation signature is invalid")
         if not verify_es256(
             replacement_key, signed_bytes, request.replacement_signature
         ):
-            raise RegistryError("replacement-key rotation signature is invalid")
+            raise RegistryError(
+                "replacement-key rotation signature is invalid"
+            )
         del self._issued_challenges[request.challenge_id]
         return challenge
 
@@ -990,10 +1031,12 @@ class RegistryService:
             ChallengePurpose.CERTIFICATE_ISSUANCE,
         )
         self.get_profile(request.claimant_key_id)
-        certificate_pem, chain_pem = self.certificate_authority.issue_claimant_certificate(
-            request.claimant_public_jwk,
-            common_name=request.claimant_key_id,
-            valid_days=valid_days,
+        certificate_pem, chain_pem = (
+            self.certificate_authority.issue_claimant_certificate(
+                request.claimant_public_jwk,
+                common_name=request.claimant_key_id,
+                valid_days=valid_days,
+            )
         )
         self.store.append(
             RegistryEventType.CERTIFICATE_ISSUED,
@@ -1021,7 +1064,9 @@ class RegistryService:
         if signed_manifest.manifest.registry_url != self.registry_url:
             raise RegistryError("manifest belongs to a different registry")
         if signed_manifest.manifest.claimant_key_id != request.claimant_key_id:
-            raise RegistryError("manifest claimant key does not match request signer")
+            raise RegistryError(
+                "manifest claimant key does not match request signer"
+            )
         verification = verify_manifest(
             signed_manifest,
             request.claimant_public_jwk,
@@ -1048,7 +1093,9 @@ class RegistryService:
         self._consume_verified_rotation_request(request)
         current_profile = self.get_profile(request.current_key_id)
         if current_profile.replacement_key_id is not None:
-            raise RegistryError("current claimant key has already been rotated")
+            raise RegistryError(
+                "current claimant key has already been rotated"
+            )
         profiles = self._load_profiles()
         if request.replacement_key_id in profiles:
             raise RegistryError("replacement claimant key already exists")
@@ -1185,9 +1232,7 @@ class RegistryService:
         claims = self._load_claims().values()
         disputes = self._load_disputes().values()
         relevant_claims = [
-            claim
-            for claim in claims
-            if claim.claimant_key_id == key_id
+            claim for claim in claims if claim.claimant_key_id == key_id
         ]
         claimant_disputes = [
             dispute
@@ -1212,17 +1257,26 @@ class RegistryService:
         now = _utc_now()
         return EvidenceProfile(
             key_age_days=max(0, (now - profile.created_at).days),
-            active_claim_count=sum(claim.revoked_at is None for claim in relevant_claims),
-            revoked_claim_count=sum(claim.revoked_at is not None for claim in relevant_claims),
+            active_claim_count=sum(
+                claim.revoked_at is None for claim in relevant_claims
+            ),
+            revoked_claim_count=sum(
+                claim.revoked_at is not None for claim in relevant_claims
+            ),
             verified_domains=profile.verified_domains,
             certificate_count=certificate_count,
             rotation_count=rotation_count,
-            open_disputes=sum(dispute.status is DisputeStatus.OPEN for dispute in claimant_disputes),
+            open_disputes=sum(
+                dispute.status is DisputeStatus.OPEN
+                for dispute in claimant_disputes
+            ),
             upheld_disputes=sum(
-                dispute.status is DisputeStatus.UPHELD for dispute in claimant_disputes
+                dispute.status is DisputeStatus.UPHELD
+                for dispute in claimant_disputes
             ),
             rejected_disputes=sum(
-                dispute.status is DisputeStatus.REJECTED for dispute in claimant_disputes
+                dispute.status is DisputeStatus.REJECTED
+                for dispute in claimant_disputes
             ),
             hosted_account=profile.hosted_account,
         )
@@ -1248,7 +1302,8 @@ class RegistryService:
             dispute.status is DisputeStatus.OPEN for dispute in claim_disputes
         )
         upheld_disputes = sum(
-            dispute.status is DisputeStatus.UPHELD for dispute in claim_disputes
+            dispute.status is DisputeStatus.UPHELD
+            for dispute in claim_disputes
         )
         manifest_report = verify_manifest(
             claim.signed_manifest,

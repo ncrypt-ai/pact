@@ -58,7 +58,9 @@ class TrustMarkLocator:
             raise WatermarkError("unsupported TrustMark locator version")
 
     @classmethod
-    def create(cls, claim_id: UUID, registry_root_fingerprint: str) -> TrustMarkLocator:
+    def create(
+        cls, claim_id: UUID, registry_root_fingerprint: str
+    ) -> TrustMarkLocator:
         """Create a compact locator for one registered claim."""
 
         root_fingerprint = registry_root_fingerprint.encode("ascii")
@@ -76,7 +78,9 @@ class TrustMarkLocator:
         version = payload[0]
         body = payload[:-1]
         checksum = payload[-1:]
-        expected = hashlib.sha256(_TRUSTMARK_CHECKSUM_CONTEXT + body).digest()[:1]
+        expected = hashlib.sha256(_TRUSTMARK_CHECKSUM_CONTEXT + body).digest()[
+            :1
+        ]
         if checksum != expected:
             raise WatermarkError("TrustMark payload checksum does not match")
         return cls(payload[1:-1], version=version)
@@ -102,7 +106,9 @@ class TrustMarkLocator:
         version = value.get("version")
         lookup_tag = value.get("lookup_tag")
         if not isinstance(version, int):
-            raise WatermarkError("TrustMark locator version must be an integer")
+            raise WatermarkError(
+                "TrustMark locator version must be an integer"
+            )
         if not isinstance(lookup_tag, str):
             raise WatermarkError("TrustMark lookup_tag must be a string")
         return cls(base64url_decode(lookup_tag, length=10), version=version)
@@ -111,7 +117,9 @@ class TrustMarkLocator:
         """Return the raw 96-bit payload for image embedding."""
 
         body = bytes([self.version]) + self.lookup_tag
-        checksum = hashlib.sha256(_TRUSTMARK_CHECKSUM_CONTEXT + body).digest()[:1]
+        checksum = hashlib.sha256(_TRUSTMARK_CHECKSUM_CONTEXT + body).digest()[
+            :1
+        ]
         return body + checksum
 
     def to_payload_bits(self) -> str:
@@ -128,7 +136,9 @@ class TrustMarkLocator:
             "payload_bits": self.to_payload_bits(),
         }
 
-    def matches_claim(self, claim_id: UUID, registry_root_fingerprint: str) -> bool:
+    def matches_claim(
+        self, claim_id: UUID, registry_root_fingerprint: str
+    ) -> bool:
         """Return whether this locator belongs to the provided claim."""
 
         expected = type(self).create(claim_id, registry_root_fingerprint)
@@ -168,7 +178,9 @@ class DecodedImageWatermark:
 
         return {
             "detected": self.detected,
-            "locator": None if self.locator is None else self.locator.to_dict(),
+            "locator": None
+            if self.locator is None
+            else self.locator.to_dict(),
             "decoder_version": self.decoder_version,
         }
 
@@ -356,7 +368,9 @@ def secret_bytes(secret: bytes | str) -> bytes:
     return secret.encode("utf-8") if isinstance(secret, str) else secret
 
 
-def assess_text_watermark_eligibility(content: str) -> TextWatermarkEligibility:
+def assess_text_watermark_eligibility(
+    content: str,
+) -> TextWatermarkEligibility:
     """Return whether content is safe for experimental text transforms."""
 
     lowered = content.lower()
@@ -404,12 +418,18 @@ def require_text_watermark_safety(
     """Enforce the experimental text watermark safety policy."""
 
     if not parameters.user_confirmation:
-        raise WatermarkError("experimental text watermarking requires user confirmation")
+        raise WatermarkError(
+            "experimental text watermarking requires user confirmation"
+        )
     if semantic and not parameters.allow_semantic_methods:
-        raise WatermarkError("semantic text watermark methods are disabled by default")
+        raise WatermarkError(
+            "semantic text watermark methods are disabled by default"
+        )
     eligibility = assess_text_watermark_eligibility(content)
     if not eligibility.prose_like:
-        raise WatermarkError("experimental text watermarking is restricted to prose")
+        raise WatermarkError(
+            "experimental text watermarking is restricted to prose"
+        )
     if eligibility.blocked_reasons:
         raise WatermarkError("; ".join(eligibility.blocked_reasons))
     return eligibility
@@ -445,7 +465,9 @@ def build_quality_report(
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     )
     changed_characters = sum(
-        1 for before, after in zip(original, transformed, strict=False) if before != after
+        1
+        for before, after in zip(original, transformed, strict=False)
+        if before != after
     ) + abs(len(original) - len(transformed))
     return TextWatermarkQualityReport(
         method_id=method_id,
@@ -460,7 +482,9 @@ def build_quality_report(
 def split_sentences(content: str) -> list[str]:
     """Split prose into simple sentence-sized units."""
 
-    return [match.group(0).strip() for match in _SENTENCE_PATTERN.finditer(content)]
+    return [
+        match.group(0).strip() for match in _SENTENCE_PATTERN.finditer(content)
+    ]
 
 
 def sentence_offsets(content: str) -> list[tuple[int, int]]:
@@ -469,14 +493,22 @@ def sentence_offsets(content: str) -> list[tuple[int, int]]:
     return [match.span() for match in _SENTENCE_PATTERN.finditer(content)]
 
 
-def index_is_locked(index: int, locked_spans: tuple[tuple[int, int], ...]) -> bool:
+def index_is_locked(
+    index: int, locked_spans: tuple[tuple[int, int], ...]
+) -> bool:
     """Return whether one character index is inside a locked span."""
 
     return any(start <= index < end for start, end in locked_spans)
 
 
-def sentence_selected(secret: bytes | str, sentence_index: int, stride: int) -> bool:
+def sentence_selected(
+    secret: bytes | str, sentence_index: int, stride: int
+) -> bool:
     """Return whether a sentence is selected for keyed watermarking."""
 
     raw = secret_bytes(secret) + sentence_index.to_bytes(4, "big")
-    return int.from_bytes(hashlib.sha256(raw).digest()[:2], "big") % max(stride, 1) == 0
+    return (
+        int.from_bytes(hashlib.sha256(raw).digest()[:2], "big")
+        % max(stride, 1)
+        == 0
+    )

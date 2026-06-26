@@ -40,7 +40,11 @@ class SyntacticVariationPlugin(TextWatermarkPlugin):
                 return f"Because {reason}, {_lower_initial(main)}."
         prefix = "If "
         marker = ", then "
-        if sentence.startswith(prefix) and sentence.endswith(".") and marker in sentence:
+        if (
+            sentence.startswith(prefix)
+            and sentence.endswith(".")
+            and marker in sentence
+        ):
             condition, result = sentence[3:-1].split(marker, 1)
             return f"{result} if {condition}."
         return None
@@ -63,7 +67,9 @@ class SyntacticVariationPlugin(TextWatermarkPlugin):
             replacement = self._rewrite(sentence)
             if (
                 replacement is None
-                or not sentence_selected(secret, index, parameters.selection_stride)
+                or not sentence_selected(
+                    secret, index, parameters.selection_stride
+                )
                 or len(rewrites) >= parameters.max_changes
             ):
                 transformed_sentences.append(sentence)

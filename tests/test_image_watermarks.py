@@ -73,7 +73,9 @@ def make_png_bytes() -> bytes:
     for x in range(64):
         for y in range(64):
             if 12 <= x <= 52 and 18 <= y <= 46:
-                image.putpixel((x, y), (32 + x * 3 % 200, 64 + y * 2 % 160, 180))
+                image.putpixel(
+                    (x, y), (32 + x * 3 % 200, 64 + y * 2 % 160, 180)
+                )
             if x == y or x + y == 63:
                 image.putpixel((x, y), (0, 0, 0))
     buffer = BytesIO()
@@ -110,7 +112,9 @@ def make_service(tmp_path: Path) -> RegistryService:
     )
 
 
-def register_profile(service: RegistryService, identity: ClaimantIdentity) -> None:
+def register_profile(
+    service: RegistryService, identity: ClaimantIdentity
+) -> None:
     challenge = service.issue_challenge(
         ChallengePurpose.PROFILE_REGISTRATION,
         difficulty=4,
@@ -124,7 +128,9 @@ def register_profile(service: RegistryService, identity: ClaimantIdentity) -> No
     service.register_profile(request)
 
 
-def register_claim(service: RegistryService, identity: ClaimantIdentity) -> RegisteredClaim:
+def register_claim(
+    service: RegistryService, identity: ClaimantIdentity
+) -> RegisteredClaim:
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=ROOT_FINGERPRINT,
@@ -162,7 +168,10 @@ def test_trustmark_locator_round_trip_and_match() -> None:
     locator = TrustMarkLocator.create(CLAIM_ID, ROOT_FINGERPRINT)
 
     assert locator.matches_claim(CLAIM_ID, ROOT_FINGERPRINT)
-    assert TrustMarkLocator.from_payload_bits(locator.to_payload_bits()) == locator
+    assert (
+        TrustMarkLocator.from_payload_bits(locator.to_payload_bits())
+        == locator
+    )
     assert TrustMarkLocator.from_dict(locator.to_dict()) == locator
 
 
@@ -216,7 +225,9 @@ def test_verify_image_soft_binding_resolves_registered_claim(
 
 
 def test_image_perceptual_fingerprint_round_trip() -> None:
-    fingerprint = create_image_perceptual_fingerprint(make_png_bytes(), "image/png")
+    fingerprint = create_image_perceptual_fingerprint(
+        make_png_bytes(), "image/png"
+    )
     parsed = type(fingerprint).from_dict(fingerprint.to_dict())
 
     assert parsed == fingerprint
@@ -258,7 +269,9 @@ def test_image_perceptual_fingerprint_matches_transformed_image() -> None:
 
 
 def test_image_perceptual_fingerprint_rejects_unrelated_image() -> None:
-    expected = create_image_perceptual_fingerprint(make_png_bytes(), "image/png")
+    expected = create_image_perceptual_fingerprint(
+        make_png_bytes(), "image/png"
+    )
     observed = create_image_perceptual_fingerprint(
         make_different_png_bytes(),
         "image/png",

@@ -26,7 +26,9 @@ class TextWatermarkPipelineResult:
 
         return {
             "transformed_content": self.transformed_content,
-            "embeddings": [embedding.to_dict() for embedding in self.embeddings],
+            "embeddings": [
+                embedding.to_dict() for embedding in self.embeddings
+            ],
         }
 
 
@@ -62,8 +64,12 @@ def embed_experimental_text_carrier(
     """Apply plugins to prose, then embed the standard text carrier."""
 
     if not plugins:
-        raise WatermarkError("experimental text carrier mode requires at least one plugin")
-    pipeline = apply_text_watermark_plugins(content, secret, plugins, parameters)
+        raise WatermarkError(
+            "experimental text carrier mode requires at least one plugin"
+        )
+    pipeline = apply_text_watermark_plugins(
+        content, secret, plugins, parameters
+    )
     return (
         embed_text_carrier(
             pipeline.transformed_content,

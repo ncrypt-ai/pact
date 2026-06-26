@@ -30,7 +30,10 @@ def _templates() -> Jinja2Templates:
 
 def _jsonable(value: object) -> object:
     if is_dataclass(value):
-        return {key: _jsonable(item) for key, item in asdict(cast(Any, value)).items()}
+        return {
+            key: _jsonable(item)
+            for key, item in asdict(cast(Any, value)).items()
+        }
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, UUID):
@@ -57,7 +60,9 @@ def _registry_info(service: RegistryService) -> dict[str, object]:
 def _raise_http_error(error: Exception) -> None:
     if isinstance(error, RegistryError):
         raise HTTPException(status_code=400, detail=str(error)) from error
-    raise HTTPException(status_code=500, detail="internal server error") from error
+    raise HTTPException(
+        status_code=500, detail="internal server error"
+    ) from error
 
 
 class ChallengeRequestModel(BaseModel):
@@ -170,7 +175,9 @@ def create_app(
         return _registry_info(service)
 
     @app.post("/api/v1/challenges")
-    async def issue_challenge(body: ChallengeRequestModel) -> dict[str, object]:
+    async def issue_challenge(
+        body: ChallengeRequestModel,
+    ) -> dict[str, object]:
         challenge = service.issue_challenge(
             body.purpose,
             bound_key_id=body.bound_key_id,
@@ -179,7 +186,9 @@ def create_app(
         return cast(dict[str, object], _jsonable(challenge.to_dict()))
 
     @app.post("/api/v1/profiles")
-    async def register_profile(body: MutationRequestModel) -> dict[str, object]:
+    async def register_profile(
+        body: MutationRequestModel,
+    ) -> dict[str, object]:
         try:
             profile = service.register_profile(body.to_domain())
         except Exception as error:

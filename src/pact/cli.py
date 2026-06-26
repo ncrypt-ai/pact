@@ -14,6 +14,13 @@ import uvicorn
 
 from pact.canonical import CanonicalizationProfile
 from pact.carriers.c2pa import C2paError, read_c2pa_asset
+from pact.detection import (
+    ProbeEvidencePackage,
+    ProbeSet,
+    analyze_probe_responses,
+    create_probe_set,
+    responses_from_jsonl,
+)
 from pact.identity import (
     ClaimantIdentity,
     EncryptedFileIdentityStore,
@@ -47,7 +54,9 @@ if TYPE_CHECKING:
     from pact.watermarks.base import TextWatermarkPlugin
 
 
-def _identity_store(args: argparse.Namespace) -> KeyringIdentityStore | EncryptedFileIdentityStore:
+def _identity_store(
+    args: argparse.Namespace,
+) -> KeyringIdentityStore | EncryptedFileIdentityStore:
     identity_file = cast(str | None, getattr(args, "identity_file", None))
     if identity_file is None:
         return KeyringIdentityStore()
@@ -57,7 +66,9 @@ def _identity_store(args: argparse.Namespace) -> KeyringIdentityStore | Encrypte
 def _require_password(args: argparse.Namespace, field: str) -> str:
     value = cast(str | None, getattr(args, field, None))
     if not value:
-        raise SystemExit(f"{field.replace('_', '-')} is required for file-backed identities")
+        raise SystemExit(
+            f"{field.replace('_', '-')} is required for file-backed identities"
+        )
     return value
 
 
@@ -66,10 +77,14 @@ def _load_identity(args: argparse.Namespace) -> ClaimantIdentity:
     registry_url = normalize_registry_url(cast(str, args.registry))
     if isinstance(store, KeyringIdentityStore):
         return store.load(registry_url)
-    return store.load(registry_url, _require_password(args, "identity_password"))
+    return store.load(
+        registry_url, _require_password(args, "identity_password")
+    )
 
 
-def _save_identity(args: argparse.Namespace, identity: ClaimantIdentity) -> None:
+def _save_identity(
+    args: argparse.Namespace, identity: ClaimantIdentity
+) -> None:
     store = _identity_store(args)
     if isinstance(store, KeyringIdentityStore):
         store.save(identity)
@@ -84,7 +99,9 @@ def _serialize_json(value: object) -> str:
 def _default_policy(_name: str) -> Policy:
     return Policy(
         (
-            PolicyEntry(Permission.GENERATIVE_TRAINING, PermissionValue.NOT_ALLOWED),
+            PolicyEntry(
+                Permission.GENERATIVE_TRAINING, PermissionValue.NOT_ALLOWED
+            ),
         )
     )
 
@@ -129,20 +146,30 @@ def _load_authority(
         registry_url=registry_url,
         root_certificate_pem=paths["root_certificate"].read_bytes(),
         root_private_key_pem=root_private_key,
-        intermediate_certificate_pem=paths["intermediate_certificate"].read_bytes(),
-        intermediate_private_key_pem=paths["intermediate_private_key"].read_bytes(),
+        intermediate_certificate_pem=paths[
+            "intermediate_certificate"
+        ].read_bytes(),
+        intermediate_private_key_pem=paths[
+            "intermediate_private_key"
+        ].read_bytes(),
     )
 
 
-def _write_authority(data_dir: Path, authority: RegistryCertificateAuthority) -> None:
+def _write_authority(
+    data_dir: Path, authority: RegistryCertificateAuthority
+) -> None:
     paths = _authority_paths(data_dir)
     paths["root_certificate"].parent.mkdir(parents=True, exist_ok=True)
     paths["root_certificate"].write_bytes(authority.root_certificate_pem)
     if authority.root_private_key_pem is not None:
         paths["root_private_key"].write_bytes(authority.root_private_key_pem)
         os.chmod(paths["root_private_key"], 0o600)
-    paths["intermediate_certificate"].write_bytes(authority.intermediate_certificate_pem)
-    paths["intermediate_private_key"].write_bytes(authority.intermediate_private_key_pem)
+    paths["intermediate_certificate"].write_bytes(
+        authority.intermediate_certificate_pem
+    )
+    paths["intermediate_private_key"].write_bytes(
+        authority.intermediate_private_key_pem
+    )
     os.chmod(paths["intermediate_private_key"], 0o600)
 
 
@@ -176,7 +203,11 @@ def _bootstrap_service(
 def _cmd_identity_init(args: argparse.Namespace) -> int:
     identity = ClaimantIdentity.generate(args.registry)
     _save_identity(args, identity)
-    print(_serialize_json({"registry_url": identity.registry_url, "key_id": identity.key_id}))
+    print(
+        _serialize_json(
+            {"registry_url": identity.registry_url, "key_id": identity.key_id}
+        )
+    )
     return 0
 
 
@@ -208,7 +239,11 @@ def _cmd_identity_import(args: argparse.Namespace) -> int:
         cast(str, args.import_password),
     )
     _save_identity(args, identity)
-    print(_serialize_json({"registry_url": identity.registry_url, "key_id": identity.key_id}))
+    print(
+        _serialize_json(
+            {"registry_url": identity.registry_url, "key_id": identity.key_id}
+        )
+    )
     return 0
 
 
@@ -233,7 +268,9 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     identity = _load_identity(args)
     input_path = Path(args.input)
     content = input_path.read_bytes()
-    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(input_path)
+    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(
+        input_path
+    )
     nonce = secrets.token_bytes(32)
     manifest = Manifest.create(
         identity=identity,
@@ -263,7 +300,9 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
             {
                 "registry_url": authority.registry_url,
                 "root_fingerprint": authority.root_fingerprint,
-                "ca_directory": str((_authority_paths(data_dir)["root_certificate"]).parent),
+                "ca_directory": str(
+                    (_authority_paths(data_dir)["root_certificate"]).parent
+                ),
             }
         )
     )
@@ -315,7 +354,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 def _cmd_watermark_image(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
-    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(input_path)
+    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(
+        input_path
+    )
     result = embed_image_soft_binding(
         input_path.read_bytes(),
         mime_type,
@@ -364,8 +405,107 @@ def _cmd_watermark_text(args: argparse.Namespace) -> int:
         _text_watermark_plugins(args.methods),
         parameters,
     )
-    Path(args.output).write_text(pipeline.transformed_content, encoding="utf-8")
+    Path(args.output).write_text(
+        pipeline.transformed_content, encoding="utf-8"
+    )
     print(_serialize_json(pipeline.to_dict()))
+    return 0
+
+
+def _cmd_probe_create(args: argparse.Namespace) -> int:
+    protected_texts = tuple(
+        Path(path).read_text(encoding="utf-8")
+        for path in cast(list[str], args.protected)
+    )
+    control_texts = tuple(
+        Path(path).read_text(encoding="utf-8")
+        for path in cast(list[str], args.control)
+    )
+    probe_set = create_probe_set(
+        protected_texts=protected_texts,
+        control_texts=control_texts,
+        target_model=cast(str, args.target_model),
+        claim_id=cast(str | None, args.claim_id),
+        prefix_chars=cast(int, args.prefix_chars),
+        withheld_chars=cast(int, args.withheld_chars),
+    )
+    Path(args.output).write_text(
+        _serialize_json(probe_set.to_dict()), encoding="utf-8"
+    )
+    print(
+        _serialize_json(
+            {
+                "commitment": probe_set.commitment,
+                "probe_count": len(probe_set.probes),
+                "output": args.output,
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_probe_analyze(args: argparse.Namespace) -> int:
+    probe_set_data = json.loads(
+        Path(args.probe_set).read_text(encoding="utf-8")
+    )
+    if not isinstance(probe_set_data, dict):
+        raise SystemExit("probe set must be a JSON object")
+    probe_set = ProbeSet.from_dict(cast(dict[str, object], probe_set_data))
+    responses = responses_from_jsonl(
+        Path(args.responses).read_text(encoding="utf-8")
+    )
+    analysis = analyze_probe_responses(
+        probe_set,
+        responses,
+        false_positive_threshold=cast(float, args.false_positive_threshold),
+    )
+    package = ProbeEvidencePackage.create(
+        probe_set=probe_set,
+        responses=responses,
+        analysis=analysis,
+    )
+    Path(args.output).write_text(
+        _serialize_json(package.to_dict()), encoding="utf-8"
+    )
+    print(
+        _serialize_json(
+            {
+                "conclusion": analysis.conclusion.value,
+                "treatment_matches": analysis.treatment_matches,
+                "control_matches": analysis.control_matches,
+                "package_digest": package.package_digest,
+                "output": args.output,
+            }
+        )
+    )
+    return 0
+
+
+def _cmd_probe_export(args: argparse.Namespace) -> int:
+    package_data = json.loads(Path(args.package).read_text(encoding="utf-8"))
+    if not isinstance(package_data, dict):
+        raise SystemExit("probe evidence package must be a JSON object")
+    package = ProbeEvidencePackage.from_dict(
+        cast(dict[str, object], package_data)
+    )
+    signed_package = (
+        package.with_signature(_load_identity(args))
+        if args.identity_file
+        else package
+    )
+    Path(args.output).write_text(
+        _serialize_json(signed_package.to_dict()),
+        encoding="utf-8",
+    )
+    print(
+        _serialize_json(
+            {
+                "package_digest": signed_package.package_digest,
+                "signed": signed_package.signature is not None,
+                "output": args.output,
+            }
+        )
+    )
     return 0
 
 
@@ -434,7 +574,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     identity = subparsers.add_parser("identity")
-    identity_subparsers = identity.add_subparsers(dest="identity_command", required=True)
+    identity_subparsers = identity.add_subparsers(
+        dest="identity_command", required=True
+    )
     for name, handler in {
         "init": _cmd_identity_init,
         "show": _cmd_identity_show,
@@ -505,8 +647,39 @@ def build_parser() -> argparse.ArgumentParser:
     watermark_text.add_argument("--selection-stride", type=int, default=3)
     watermark_text.set_defaults(handler=_cmd_watermark_text)
 
+    probe = subparsers.add_parser("probe")
+    probe_subparsers = probe.add_subparsers(
+        dest="probe_command", required=True
+    )
+    probe_create = probe_subparsers.add_parser("create")
+    probe_create.add_argument("--protected", action="append", required=True)
+    probe_create.add_argument("--control", action="append", required=True)
+    probe_create.add_argument("--target-model", required=True)
+    probe_create.add_argument("--output", required=True)
+    probe_create.add_argument("--claim-id")
+    probe_create.add_argument("--prefix-chars", type=int, default=160)
+    probe_create.add_argument("--withheld-chars", type=int, default=220)
+    probe_create.set_defaults(handler=_cmd_probe_create)
+    probe_analyze = probe_subparsers.add_parser("analyze")
+    probe_analyze.add_argument("probe_set")
+    probe_analyze.add_argument("--responses", required=True)
+    probe_analyze.add_argument("--output", required=True)
+    probe_analyze.add_argument(
+        "--false-positive-threshold", type=float, default=0.05
+    )
+    probe_analyze.set_defaults(handler=_cmd_probe_analyze)
+    probe_export = probe_subparsers.add_parser("export")
+    probe_export.add_argument("package")
+    probe_export.add_argument("--output", required=True)
+    probe_export.add_argument("--identity-file")
+    probe_export.add_argument("--identity-password")
+    probe_export.add_argument("--registry", default="https://registry.example")
+    probe_export.set_defaults(handler=_cmd_probe_export)
+
     registry = subparsers.add_parser("registry")
-    registry_subparsers = registry.add_subparsers(dest="registry_command", required=True)
+    registry_subparsers = registry.add_subparsers(
+        dest="registry_command", required=True
+    )
     registry_init = registry_subparsers.add_parser("init")
     registry_init.add_argument("--registry", required=True)
     registry_init.add_argument("--data-dir", required=True)

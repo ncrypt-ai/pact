@@ -24,7 +24,9 @@ _FRAME_END = "\u2060\u2063\u2060"
 _BIT_ZERO = "\u200b"
 _BIT_ONE = "\u200c"
 _FRAME_PATTERN = re.compile(
-    re.escape(_FRAME_START) + r"(?P<bits>[\u200b\u200c]+)" + re.escape(_FRAME_END)
+    re.escape(_FRAME_START)
+    + r"(?P<bits>[\u200b\u200c]+)"
+    + re.escape(_FRAME_END)
 )
 
 
@@ -41,9 +43,11 @@ class InvisibleFramePlugin(TextWatermarkPlugin):
         return {"version": 1, "tag": digest.hex()}
 
     def _frame(self, payload: dict[str, object]) -> str:
-        bits = "".join(
-            f"{byte:08b}" for byte in canonical_json(payload)
-        ).replace("0", _BIT_ZERO).replace("1", _BIT_ONE)
+        bits = (
+            "".join(f"{byte:08b}" for byte in canonical_json(payload))
+            .replace("0", _BIT_ZERO)
+            .replace("1", _BIT_ONE)
+        )
         return f"{_FRAME_START}{bits}{_FRAME_END}"
 
     def embed(
@@ -90,8 +94,7 @@ class InvisibleFramePlugin(TextWatermarkPlugin):
             match.group("bits").replace(_BIT_ZERO, "0").replace(_BIT_ONE, "1")
         )
         payload = bytes(
-            int(bits[index : index + 8], 2)
-            for index in range(0, len(bits), 8)
+            int(bits[index : index + 8], 2) for index in range(0, len(bits), 8)
         )
         parsed = json.loads(payload)
         expected = record.metadata.get("payload")

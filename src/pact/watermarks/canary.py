@@ -34,7 +34,9 @@ class CanaryPhrasePlugin(TextWatermarkPlugin):
         )
         phrase = parameters.approved_canary_phrase
         if not phrase:
-            raise WatermarkError("canary watermarking requires an approved canary phrase")
+            raise WatermarkError(
+                "canary watermarking requires an approved canary phrase"
+            )
         transformed = content.rstrip() + f"\n\n{phrase}\n"
         record = TextWatermarkRecord(
             method_id=self.method_id,

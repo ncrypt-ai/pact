@@ -212,8 +212,7 @@ def _normalize_document_mime_type(mime_type: str) -> str:
             ".wordprocessingml.document"
         ),
         "xlsx": (
-            "application/vnd.openxmlformats-officedocument"
-            ".spreadsheetml.sheet"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
         "pptx": (
             "application/vnd.openxmlformats-officedocument"
@@ -289,7 +288,9 @@ def _sign_c2pa_manifest_store_any_format(
         C2paBuilderIntent.CREATE,
         digital_source_type=digital_source_type,
     )
-    if _lib is None:  # pragma: no cover - package initialization guarantees this
+    if (
+        _lib is None
+    ):  # pragma: no cover - package initialization guarantees this
         raise C2paError("C2PA native library is not available")
     try:
         with Stream(BytesIO(asset_bytes)) as source_stream:
@@ -307,7 +308,9 @@ def _sign_c2pa_manifest_store_any_format(
                     check=lambda value: value < 0,
                 )
                 if result <= 0 or not manifest_bytes_ptr:
-                    raise C2paError("C2PA sidecar signing returned no manifest bytes")
+                    raise C2paError(
+                        "C2PA sidecar signing returned no manifest bytes"
+                    )
                 return string_at(manifest_bytes_ptr, result)
     except NativeC2paError as error:
         raise C2paError(f"C2PA sidecar signing failed: {error}") from error
@@ -418,7 +421,9 @@ def sign_c2pa_manifest_store(
             digital_source_type=digital_source_type,
         )
         try:
-            _size, embeddable = format_embeddable("application/pdf", raw_manifest)
+            _size, embeddable = format_embeddable(
+                "application/pdf", raw_manifest
+            )
         except NativeC2paError as error:
             raise C2paError(
                 f"C2PA PDF manifest formatting failed: {error}"
@@ -507,7 +512,10 @@ def embed_c2pa_manifest_in_zip_document(
 
     _require_manifest_store_bytes(manifest_store_bytes)
     normalized_mime_type = _normalize_document_mime_type(mime_type)
-    if normalized_mime_type not in c2pa_supported_embedded_document_mime_types():
+    if (
+        normalized_mime_type
+        not in c2pa_supported_embedded_document_mime_types()
+    ):
         raise C2paError(
             "ZIP-based C2PA embedding is only available for supported document"
             " formats"
@@ -537,7 +545,9 @@ def embed_c2pa_manifest_in_zip_document(
                     copied.internal_attr = info.internal_attr
                     copied.volume = info.volume
                     copied.extra = info.extra
-                    destination_zip.writestr(copied, source_zip.read(info.filename))
+                    destination_zip.writestr(
+                        copied, source_zip.read(info.filename)
+                    )
 
                 manifest_info = zipfile.ZipInfo(_ZIP_MANIFEST_PATH)
                 manifest_info.compress_type = zipfile.ZIP_STORED
@@ -560,7 +570,9 @@ def extract_c2pa_manifest_from_zip_document(asset_bytes: bytes) -> bytes:
         with zipfile.ZipFile(BytesIO(asset_bytes)) as archive:
             return archive.read(_ZIP_MANIFEST_PATH)
     except KeyError as error:
-        raise C2paError("ZIP document does not contain a C2PA manifest store") from error
+        raise C2paError(
+            "ZIP document does not contain a C2PA manifest store"
+        ) from error
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         raise C2paError(f"C2PA ZIP extraction failed: {error}") from error
 

@@ -40,6 +40,18 @@ Manifest
 .. automodule:: pact.manifest
    :members:
 
+Detection
+---------
+
+.. automodule:: pact.detection.probes
+   :members:
+
+.. automodule:: pact.detection.statistics
+   :members:
+
+.. automodule:: pact.detection.evidence
+   :members:
+
 Carriers
 --------
 

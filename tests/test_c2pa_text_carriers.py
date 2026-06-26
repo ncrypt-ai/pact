@@ -100,7 +100,9 @@ def test_structured_c2pa_text_round_trip(
         ),
     )
 
-    asset = embed_c2pa_text_structured("hello", mime_type="text/markdown", manifest_store_bytes=b"abc")
+    asset = embed_c2pa_text_structured(
+        "hello", mime_type="text/markdown", manifest_store_bytes=b"abc"
+    )
     extracted = extract_c2pa_text_structured(asset.text)
 
     assert extracted is not None
