@@ -53,6 +53,18 @@ certificates, and dispute records, but it does not need private nonces or
 private keys. Content carriers and evidence packages define how an authorized
 verifier obtains a nonce.
 
+``audit_signed_manifest_publication`` checks a signed manifest against local
+content, nonce, and other private values before publication. It treats the
+registry-scoped claimant key identifier and salted content commitment as public
+disclosures, and reports private material such as nonces, raw content,
+unsalted content hashes, private keys, probe contents, prompts, and provider
+responses as errors. ``pact privacy audit`` exposes the same check from the
+CLI.
+
+Claim registration accepts only a signed manifest envelope. Extra fields such
+as raw content, nonces, probe material, or responses are rejected before the
+registry appends an event.
+
 Registry challenge boundary
 ---------------------------
 

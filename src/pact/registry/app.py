@@ -23,6 +23,7 @@ from pact.crypto import (
 )
 from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
+from pact.privacy import PrivacyAuditError, audit_registry_claim_payload
 from pact.registry.store import (
     FileRegistryStore,
     RegistryEvent,
@@ -1057,6 +1058,12 @@ class RegistryService:
             ChallengePurpose.CLAIM_REGISTRATION,
         )
         self.get_profile(request.claimant_key_id)
+        try:
+            audit_registry_claim_payload(request.payload).require_passed()
+        except PrivacyAuditError as error:
+            raise RegistryError(
+                f"claim registration failed privacy audit: {error}"
+            ) from error
         manifest_json = request.payload.get("signed_manifest_json")
         if not isinstance(manifest_json, str):
             raise RegistryError("signed_manifest_json must be a string")

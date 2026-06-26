@@ -354,6 +354,7 @@ The CLI currently exposes:
 
 - ``pact identity init|show|export|import|rotate``
 - ``pact sign``
+- ``pact privacy audit``
 - ``pact watermark image``
 - ``pact watermark text``
 - ``pact verify``

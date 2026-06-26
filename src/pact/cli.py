@@ -34,6 +34,7 @@ from pact.manifest import (
     verify_manifest,
 )
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
+from pact.privacy import audit_signed_manifest_publication
 from pact.registry import RegistryCertificateAuthority, RegistryService
 from pact.registry.store import FileRegistryStore
 from pact.watermarks import (
@@ -509,6 +510,23 @@ def _cmd_probe_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_privacy_audit(args: argparse.Namespace) -> int:
+    signed = SignedManifest.from_json(Path(args.manifest).read_bytes())
+    content = Path(args.content).read_bytes() if args.content else None
+    nonce = Path(args.nonce).read_bytes() if args.nonce else None
+    private_values = tuple(
+        Path(path).read_bytes() for path in cast(list[str], args.private_value)
+    )
+    report = audit_signed_manifest_publication(
+        signed,
+        content=content,
+        nonce=nonce,
+        private_values=private_values,
+    )
+    print(_serialize_json(report.to_dict()))
+    return 0 if report.passed else 1
+
+
 def _serve(
     *,
     data_dir: Path,
@@ -675,6 +693,17 @@ def build_parser() -> argparse.ArgumentParser:
     probe_export.add_argument("--identity-password")
     probe_export.add_argument("--registry", default="https://registry.example")
     probe_export.set_defaults(handler=_cmd_probe_export)
+
+    privacy = subparsers.add_parser("privacy")
+    privacy_subparsers = privacy.add_subparsers(
+        dest="privacy_command", required=True
+    )
+    privacy_audit = privacy_subparsers.add_parser("audit")
+    privacy_audit.add_argument("manifest")
+    privacy_audit.add_argument("--content")
+    privacy_audit.add_argument("--nonce")
+    privacy_audit.add_argument("--private-value", action="append", default=[])
+    privacy_audit.set_defaults(handler=_cmd_privacy_audit)
 
     registry = subparsers.add_parser("registry")
     registry_subparsers = registry.add_subparsers(

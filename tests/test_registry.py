@@ -259,6 +259,32 @@ def test_registry_claim_verification_reports_partial_content_match(
     assert report.content_binding_valid is False
 
 
+def test_registry_rejects_claim_payload_private_fields(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = make_signed_manifest(identity)
+    challenge = service.issue_challenge(
+        ChallengePurpose.CLAIM_REGISTRATION,
+        difficulty=4,
+        bound_key_id=identity.key_id,
+    )
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload={
+            "signed_manifest_json": signed_manifest.to_json().decode("utf-8"),
+            "content": "hello world",
+        },
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    with pytest.raises(RegistryError, match="privacy audit"):
+        service.register_claim(request)
+
+
 def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
     service, _admin_identity = make_service(tmp_path)
     identity = ClaimantIdentity.generate(service.registry_url)

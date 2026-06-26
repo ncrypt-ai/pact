@@ -99,6 +99,23 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     inspect_output = json.loads(capsys.readouterr().out)
     assert inspect_output["manifest"]["registry_url"] == registry
 
+    assert (
+        main(
+            [
+                "privacy",
+                "audit",
+                str(manifest_path),
+                "--content",
+                str(content_path),
+                "--nonce",
+                str(nonce_path),
+            ]
+        )
+        == 0
+    )
+    privacy_output = json.loads(capsys.readouterr().out)
+    assert privacy_output["passed"] is True
+
 
 def test_cli_web_command_bootstraps_local_app(
     tmp_path: Path,

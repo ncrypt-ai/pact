@@ -40,6 +40,12 @@ Manifest
 .. automodule:: pact.manifest
    :members:
 
+Privacy
+-------
+
+.. automodule:: pact.privacy
+   :members:
+
 Detection
 ---------
 

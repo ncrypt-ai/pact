@@ -103,6 +103,15 @@ from pact.policy import (
     PolicyEntry,
     PolicyError,
 )
+from pact.privacy import (
+    PrivacyAuditError,
+    PrivacyAuditReport,
+    PrivacyFinding,
+    PrivacySeverity,
+    audit_public_json_payload,
+    audit_registry_claim_payload,
+    audit_signed_manifest_publication,
+)
 from pact.registry import (
     ChallengePurpose,
     ClaimantProfile,
@@ -203,6 +212,10 @@ __all__ = [
     "Policy",
     "PolicyEntry",
     "PolicyError",
+    "PrivacyAuditError",
+    "PrivacyAuditReport",
+    "PrivacyFinding",
+    "PrivacySeverity",
     "Probe",
     "ProbeAnalysisReport",
     "ProbeConclusion",
@@ -313,6 +326,9 @@ __all__ = [
     "apply_text_watermark_plugins",
     "assess_text_watermark_eligibility",
     "analyze_probe_responses",
+    "audit_public_json_payload",
+    "audit_registry_claim_payload",
+    "audit_signed_manifest_publication",
     "trustmark_supported_image_mime_types",
     "create_probe_set",
     "validate_c2pa_text_document",
