@@ -9,15 +9,18 @@
     border: 1px solid var(--color-background-border);
     border-radius: 12px;
     background: var(--pact-hero-bg);
+    color: #16324f;
 }
 
 .hero-banner h2 {
     margin: 0.2rem 0 0.6rem;
     font-size: 1.35rem;
+    color: #0f172a;
 }
 
 .hero-banner p {
     margin: 0;
+    color: #16324f;
 }
 
 .hero-kicker {

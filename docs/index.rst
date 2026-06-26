@@ -1,4 +1,4 @@
-pact Documentation
+PACT Documentation
 ==================
 
 Open-source identity, policy, signing, and verification primitives for
@@ -8,7 +8,7 @@ portable content provenance.
 
    <div class="hero-banner">
      <p class="hero-kicker">Python 3.11</p>
-     <h2>pact</h2>
+     <h2>PACT</h2>
      <p>Project documentation and API reference.</p>
    </div>
 

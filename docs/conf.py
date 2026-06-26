@@ -6,7 +6,7 @@ from importlib.metadata import version as distribution_version
 
 sys.path.insert(0, os.path.abspath("../src"))
 
-project = "Pact"
+project = "PACT"
 copyright = "2026, Rex Stockham"
 author = "Rex Stockham"
 
@@ -28,7 +28,7 @@ autodoc_member_order = "bysource"
 autodoc_typehints = "description"
 
 html_theme = "furo"
-html_title = "Pact Documentation"
+html_title = "PACT Documentation"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
