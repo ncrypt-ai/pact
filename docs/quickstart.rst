@@ -6,7 +6,8 @@ policies, signed manifests, local verification, text/HTML/XML carrier
 embedding, an initial C2PA integration layer for supported image and
 document containers, and a registry-core library layer with replay
 challenges, append-only event storage, certificates, rotations, revocations,
-and disputes. The hosted API, CLI, and web UI remain later work.
+and disputes. It also now ships a CLI entrypoint plus FastAPI-based public
+API and proof-page surfaces for hosted and loopback-local deployment.
 
 Create and sign a manifest
 --------------------------
@@ -223,3 +224,51 @@ profile evidence:
    profile = service.register_profile(request)
 
    assert profile.key_id == identity.key_id
+
+Run the hosted registry/API service
+-----------------------------------
+
+Use the CLI entrypoint to serve the JSON API plus public claim and profile
+pages:
+
+.. code-block:: bash
+
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --public-base-url https://registry.example
+
+This serves:
+
+- ``/api/v1/registry``
+- ``/api/v1/challenges``
+- ``/api/v1/profiles/{key_id}``
+- ``/api/v1/profiles/{key_id}/evidence``
+- ``/api/v1/claims/{claim_id}``
+- ``/api/v1/disputes/{dispute_id}``
+- public HTML proof pages at ``/profiles/{key_id}``, ``/claims/{claim_id}``,
+  and ``/verify/claim/{claim_id}``
+
+Run the loopback-local web UI
+-----------------------------
+
+For a local-only browser workflow, bind to loopback:
+
+.. code-block:: bash
+
+   pact web --data-dir ./local-registry --port 8000
+
+That starts the same API and proof-page app on ``127.0.0.1`` with a local
+base URL.
+
+Use the CLI for manifest workflows
+----------------------------------
+
+The CLI currently exposes:
+
+- ``pact identity init|show|export|import|rotate``
+- ``pact sign``
+- ``pact verify``
+- ``pact inspect``
+- ``pact registry serve``
+- ``pact web``

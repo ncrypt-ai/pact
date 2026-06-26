@@ -65,9 +65,9 @@ registry trust decisions.
 Current scope
 -------------
 
-This implementation now provides a registry-core library layer and certificate
-authority material generation, but it does not yet provide the hosted HTTP
-API, CLI, or web UI. It can also embed an already-built C2PA manifest store
+This implementation now provides a registry-core library layer, certificate
+authority material generation, a FastAPI HTTP/API surface, HTML proof pages,
+and a CLI entrypoint. It can also embed an already-built C2PA manifest store
 into PDF and ZIP-based document containers, but it still does not generate
 new spec-compliant C2PA manifest stores for PDF or OOXML through a first-class
 official writer API. Instead, it uses the official CAI signer path in detached
@@ -75,3 +75,19 @@ mode and then applies official embeddable-manifest formatting plus local
 container patching. Public-key trust and registry-root trust remain caller
 decisions. The format and carrier schemes must receive an independent
 cryptographic review before being declared stable.
+
+Current transport limitations
+-----------------------------
+
+The HTTP and HTML layer is present, but several production-hardening items
+from the plan remain future work:
+
+- strict CSRF and cookie-based browser auth flows;
+- hardened CORS and Host/Origin policy;
+- SSRF-safe live domain-verification fetches;
+- resource-isolated worker processes for untrusted file handling;
+- public batch-root timestamp publication;
+- full hosted-browser consent and recovery UX.
+
+The current transport layer should be treated as a functional foundation, not
+as a finished internet-exposed service profile.

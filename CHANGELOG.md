@@ -32,3 +32,6 @@ and this project adheres to
   validation, profile registration, claim registration, key rotation,
   revocation, disputes, domain verification, certificate issuance, and Merkle
   batch hashing.
+- FastAPI registry API, public HTML claim/profile proof pages, loopback-local
+  web mode, and a ``pact`` CLI entrypoint for identity, signing, verification,
+  inspection, and service startup.
