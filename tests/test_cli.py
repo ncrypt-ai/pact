@@ -175,3 +175,22 @@ def test_cli_parser_exposes_registry_serve_command() -> None:
     )
     assert args.command == "registry"
     assert args.registry_command == "serve"
+
+
+def test_cli_parser_exposes_watermark_image_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "watermark",
+            "image",
+            "input.png",
+            "--claim-id",
+            "018f7f79-7b42-7c00-8000-000000000123",
+            "--registry-root-fingerprint",
+            "A" * 43,
+            "--output",
+            "out.png",
+        ]
+    )
+    assert args.command == "watermark"
+    assert args.watermark_command == "image"

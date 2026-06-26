@@ -91,6 +91,21 @@ from pact.registry import (
     TrustLabel,
     merkle_root,
 )
+from pact.watermarks import (
+    TRUSTMARK_WATERMARK_ID,
+    DecodedImageWatermark,
+    ImageSoftBindingVerification,
+    ImageWatermark,
+    ImageWatermarkDependencyError,
+    TrustMarkBackend,
+    TrustMarkLocator,
+    WatermarkError,
+    decode_image_soft_binding,
+    embed_image_soft_binding,
+    trustmark_supported_image_mime_types,
+    verify_image_soft_binding,
+    watermark_id_for_image_soft_binding,
+)
 from pact.web import create_app
 
 __all__ = [
@@ -141,8 +156,16 @@ __all__ = [
     "SignedManifest",
     "StructuredCarrierExtraction",
     "TextCarrierExtraction",
+    "TrustMarkBackend",
+    "TrustMarkLocator",
     "TrustLabel",
+    "TRUSTMARK_WATERMARK_ID",
     "VerificationReport",
+    "DecodedImageWatermark",
+    "ImageSoftBindingVerification",
+    "ImageWatermark",
+    "ImageWatermarkDependencyError",
+    "WatermarkError",
     "__version__",
     "base64url_decode",
     "base64url_encode",
@@ -164,6 +187,8 @@ __all__ = [
     "embed_xml_carrier",
     "extract_c2pa_manifest_from_pdf",
     "extract_c2pa_manifest_from_zip_document",
+    "decode_image_soft_binding",
+    "embed_image_soft_binding",
     "pdf_external_manifest_reference",
     "read_c2pa_asset",
     "sign_c2pa_document",
@@ -174,7 +199,10 @@ __all__ = [
     "normalize_registry_url",
     "merkle_root",
     "sign_manifest",
+    "trustmark_supported_image_mime_types",
     "verify_manifest",
+    "verify_image_soft_binding",
+    "watermark_id_for_image_soft_binding",
 ]
 
 __version__ = version("pact")

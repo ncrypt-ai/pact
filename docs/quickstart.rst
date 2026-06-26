@@ -266,6 +266,29 @@ For a local-only browser workflow, bind to loopback:
 That starts the same API and proof-page app on ``127.0.0.1`` with a local
 base URL.
 
+Embed a TrustMark soft binding
+------------------------------
+
+For supported raster formats, PACT can embed a compact claim locator as a
+TrustMark soft binding:
+
+.. code-block:: python
+
+   from pact import embed_image_soft_binding, verify_image_soft_binding
+
+   watermarked = embed_image_soft_binding(
+       image_bytes,
+       "image/png",
+       claim_id=claim.claim_id,
+       registry_root_fingerprint=claim.signed_manifest.manifest.registry_root_fingerprint,
+   )
+   verification = verify_image_soft_binding(
+       watermarked.image_bytes,
+       "image/png",
+       registry_service=service,
+   )
+   assert verification.registry_match
+
 Use the CLI for manifest workflows
 ----------------------------------
 
@@ -273,6 +296,7 @@ The CLI currently exposes:
 
 - ``pact identity init|show|export|import|rotate``
 - ``pact sign``
+- ``pact watermark image``
 - ``pact verify``
 - ``pact inspect``
 - ``pact registry serve``

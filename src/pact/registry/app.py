@@ -29,6 +29,7 @@ from pact.registry.store import (
     RegistryEventType,
     RegistryStoreError,
 )
+from pact.watermarks.base import TrustMarkLocator
 
 
 class RegistryError(ValueError):
@@ -813,6 +814,26 @@ class RegistryService:
             return claims[claim_id]
         except KeyError as error:
             raise RegistryError("registered claim does not exist") from error
+
+    def find_claim_by_watermark_locator(
+        self,
+        locator: TrustMarkLocator,
+    ) -> RegisteredClaim | None:
+        """Resolve a decoded image watermark locator to one registered claim."""
+
+        matches = [
+            claim
+            for claim in self._load_claims().values()
+            if locator.matches_claim(
+                claim.claim_id,
+                claim.signed_manifest.manifest.registry_root_fingerprint,
+            )
+        ]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RegistryError("watermark locator matched multiple claims")
+        return matches[0]
 
     def get_dispute(self, dispute_id: UUID) -> DisputeRecord:
         """Return one dispute record."""

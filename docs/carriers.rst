@@ -159,3 +159,30 @@ come from the official CAI SDK.
 For legacy ``.doc`` and other formats without an embedded-carrier path, PACT
 can still produce a detached manifest store, but the external-manifest
 bootstrap remains the portable delivery option.
+
+TrustMark soft bindings
+-----------------------
+
+PACT step 6 adds an optional image watermark layer for JPEG, PNG, TIFF, and
+WebP using TrustMark.
+
+The payload is intentionally small. It carries a 96-bit compact claim locator,
+not the manifest signature itself. The locator is enough to resolve one claim
+on the configured registry and then verify the registry record, claimant
+signature, and any C2PA binding separately.
+
+PACT uses a raw binary TrustMark payload here because the ECC mode leaves too
+little usable capacity for a practical claim locator.
+
+.. code-block:: python
+
+   from pact import decode_image_soft_binding, embed_image_soft_binding
+
+   watermarked = embed_image_soft_binding(
+       image_bytes,
+       "image/png",
+       claim_id=claim.claim_id,
+       registry_root_fingerprint=claim.signed_manifest.manifest.registry_root_fingerprint,
+   )
+   decoded = decode_image_soft_binding(watermarked.image_bytes, "image/png")
+   assert decoded.locator is not None

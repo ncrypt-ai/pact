@@ -8,6 +8,7 @@ import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import uvicorn
 
@@ -28,6 +29,7 @@ from pact.manifest import (
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.registry import RegistryCertificateAuthority, RegistryService
 from pact.registry.store import FileRegistryStore
+from pact.watermarks import decode_image_soft_binding, embed_image_soft_binding
 from pact.web import create_app
 
 
@@ -280,11 +282,35 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         return 0
     except Exception:
         pass
+    mime_type = args.mime_type or _infer_mime_type(target)
+    if mime_type.startswith("image/"):
+        try:
+            decoded = decode_image_soft_binding(payload, mime_type)
+        except Exception:
+            pass
+        else:
+            print(_serialize_json(decoded.to_dict()))
+            return 0
     try:
-        result = read_c2pa_asset(payload, mime_type=args.mime_type or _infer_mime_type(target))
+        result = read_c2pa_asset(payload, mime_type=mime_type)
     except C2paError as error:
         raise SystemExit(str(error)) from error
     print(_serialize_json(result.manifest_store_json))
+    return 0
+
+
+def _cmd_watermark_image(args: argparse.Namespace) -> int:
+    input_path = Path(args.input)
+    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(input_path)
+    result = embed_image_soft_binding(
+        input_path.read_bytes(),
+        mime_type,
+        claim_id=UUID(cast(str, args.claim_id)),
+        registry_root_fingerprint=cast(str, args.registry_root_fingerprint),
+        strength=cast(float, args.strength),
+    )
+    Path(args.output).write_bytes(result.image_bytes)
+    print(_serialize_json(result.to_dict()))
     return 0
 
 
@@ -398,6 +424,20 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("input")
     inspect.add_argument("--mime-type")
     inspect.set_defaults(handler=_cmd_inspect)
+
+    watermark = subparsers.add_parser("watermark")
+    watermark_subparsers = watermark.add_subparsers(
+        dest="watermark_command",
+        required=True,
+    )
+    watermark_image = watermark_subparsers.add_parser("image")
+    watermark_image.add_argument("input")
+    watermark_image.add_argument("--claim-id", required=True)
+    watermark_image.add_argument("--registry-root-fingerprint", required=True)
+    watermark_image.add_argument("--output", required=True)
+    watermark_image.add_argument("--strength", type=float, default=1.0)
+    watermark_image.add_argument("--mime-type")
+    watermark_image.set_defaults(handler=_cmd_watermark_image)
 
     registry = subparsers.add_parser("registry")
     registry_subparsers = registry.add_subparsers(dest="registry_command", required=True)

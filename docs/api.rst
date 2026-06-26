@@ -50,3 +50,14 @@ Carriers
 
 .. automodule:: pact.carriers.c2pa
    :members:
+
+Watermarks
+----------
+
+.. automodule:: pact.watermarks.base
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.image
+   :members:
+   :no-index:
