@@ -210,6 +210,44 @@ For legacy ``.doc`` and other formats without an embedded-carrier path, PACT
 can still produce a detached manifest store, but the external-manifest
 bootstrap remains the portable delivery option.
 
+C2PA text containers
+~~~~~~~~~~~~~~~~~~~~
+
+PACT step 8 adds a text-container layer that stays aligned with the
+``c2pa-text`` reference implementation instead of defining a new wire format.
+
+Supported methods:
+
+- unstructured Unicode variation-selector wrappers for plain text;
+- structured manifest blocks for comment-friendly text formats;
+- HTML ``<script type="application/c2pa">`` and
+  ``<link rel="c2pa-manifest">`` associations.
+
+PACT uses the reference package to encode and parse those containers, then
+reuses PACT's detached-manifest signer to produce the Manifest Store bytes that
+go inside them. Verification can inspect the text container itself and, when
+the container carries an inline Manifest Store, parse that store through the
+official C2PA SDK.
+
+.. code-block:: python
+
+   from pact import (
+       C2paSignerMaterial,
+       read_c2pa_text_asset,
+       sign_c2pa_text_asset,
+   )
+
+   protected = sign_c2pa_text_asset(
+       "# Notes\n",
+       mime_type="text/markdown",
+       signed=signed,
+       signer_material=C2paSignerMaterial(certificate_chain_pem, private_key_pem),
+       title="Protected notes",
+   )
+   inspected = read_c2pa_text_asset(protected.text, mime_type="text/markdown")
+   assert inspected is not None
+   assert inspected.validation.valid
+
 TrustMark soft bindings
 -----------------------
 

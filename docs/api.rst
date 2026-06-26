@@ -52,6 +52,9 @@ Carriers
 .. automodule:: pact.carriers.c2pa
    :members:
 
+.. automodule:: pact.carriers.c2pa_text
+   :members:
+
 Watermarks
 ----------
 

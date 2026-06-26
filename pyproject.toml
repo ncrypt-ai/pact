@@ -55,6 +55,7 @@ server = [
 ]
 c2pa = [
     "c2pa-python>=0.36.0",
+    "c2pa-text>=3.0.0",
     "pypdf>=6.1.3",
 ]
 image-watermark = [
@@ -69,6 +70,7 @@ all = [
     "python-multipart>=0.0.32",
     "uvicorn>=0.49.0",
     "c2pa-python>=0.36.0",
+    "c2pa-text>=3.0.0",
     "pillow>=12.2.0",
     "pypdf>=6.1.3",
     "trustmark>=0.9.1",
@@ -101,6 +103,7 @@ server = [
 ]
 c2pa = [
     "c2pa-python>=0.36.0",
+    "c2pa-text>=3.0.0",
     "pypdf>=6.1.3",
 ]
 image-watermark = [
@@ -115,6 +118,7 @@ all = [
     "python-multipart>=0.0.32",
     "uvicorn>=0.49.0",
     "c2pa-python>=0.36.0",
+    "c2pa-text>=3.0.0",
     "pillow>=12.2.0",
     "pypdf>=6.1.3",
     "trustmark>=0.9.1",

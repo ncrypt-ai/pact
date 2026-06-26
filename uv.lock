@@ -268,6 +268,15 @@ wheels = [
 ]
 
 [[package]]
+name = "c2pa-text"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/2c/a0bdd36a79dbd7fa90de1c0e805ea9acc8e59fb5cb7cede2963530e35e49/c2pa_text-3.0.0.tar.gz", hash = "sha256:f81a42ee60ddea9487410363ba27cf7c4ef512c24da7e722fcc7494d94088183", size = 20972, upload-time = "2026-06-19T16:44:03.145Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ad/c1/4f18081e44d01c50b1728fd85e6131cc94aced1529a6c246a21691cf4069/c2pa_text-3.0.0-py3-none-any.whl", hash = "sha256:81aba99653380a1c623b10118e24c40a8e42eda606422c39830181045e107253", size = 19618, upload-time = "2026-06-19T16:44:01.88Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
@@ -1411,6 +1420,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "c2pa-python" },
+    { name = "c2pa-text" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "pillow" },
@@ -1421,6 +1431,7 @@ all = [
 ]
 c2pa = [
     { name = "c2pa-python" },
+    { name = "c2pa-text" },
     { name = "pypdf" },
 ]
 image-watermark = [
@@ -1437,6 +1448,7 @@ server = [
 [package.dev-dependencies]
 all = [
     { name = "c2pa-python" },
+    { name = "c2pa-text" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "pillow" },
@@ -1447,6 +1459,7 @@ all = [
 ]
 c2pa = [
     { name = "c2pa-python" },
+    { name = "c2pa-text" },
     { name = "pypdf" },
 ]
 dev = [
@@ -1477,6 +1490,8 @@ requires-dist = [
     { name = "c2pa-python", specifier = ">=0.36.0" },
     { name = "c2pa-python", marker = "extra == 'all'", specifier = ">=0.36.0" },
     { name = "c2pa-python", marker = "extra == 'c2pa'", specifier = ">=0.36.0" },
+    { name = "c2pa-text", marker = "extra == 'all'", specifier = ">=3.0.0" },
+    { name = "c2pa-text", marker = "extra == 'c2pa'", specifier = ">=3.0.0" },
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.138.1" },
@@ -1507,6 +1522,7 @@ provides-extras = ["server", "c2pa", "image-watermark", "text-watermark", "attes
 [package.metadata.requires-dev]
 all = [
     { name = "c2pa-python", specifier = ">=0.36.0" },
+    { name = "c2pa-text", specifier = ">=3.0.0" },
     { name = "fastapi", specifier = ">=0.138.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "pillow", specifier = ">=12.2.0" },
@@ -1518,6 +1534,7 @@ all = [
 attestation = []
 c2pa = [
     { name = "c2pa-python", specifier = ">=0.36.0" },
+    { name = "c2pa-text", specifier = ">=3.0.0" },
     { name = "pypdf", specifier = ">=6.1.3" },
 ]
 dev = [
