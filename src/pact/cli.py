@@ -7,7 +7,7 @@ import os
 import secrets
 from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 import uvicorn
@@ -29,8 +29,22 @@ from pact.manifest import (
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.registry import RegistryCertificateAuthority, RegistryService
 from pact.registry.store import FileRegistryStore
-from pact.watermarks import decode_image_soft_binding, embed_image_soft_binding
+from pact.watermarks import (
+    CanaryPhrasePlugin,
+    InvisibleFramePlugin,
+    LexicalSubstitutionPlugin,
+    SemanticParaphrasePlugin,
+    StatisticalSentencePatternPlugin,
+    SyntacticVariationPlugin,
+    TextWatermarkParameters,
+    apply_text_watermark_plugins,
+    decode_image_soft_binding,
+    embed_image_soft_binding,
+)
 from pact.web import create_app
+
+if TYPE_CHECKING:
+    from pact.watermarks.base import TextWatermarkPlugin
 
 
 def _identity_store(args: argparse.Namespace) -> KeyringIdentityStore | EncryptedFileIdentityStore:
@@ -314,6 +328,47 @@ def _cmd_watermark_image(args: argparse.Namespace) -> int:
     return 0
 
 
+def _text_watermark_plugins(methods: str) -> tuple["TextWatermarkPlugin", ...]:
+    available = {
+        "invisible": InvisibleFramePlugin,
+        "lexical": LexicalSubstitutionPlugin,
+        "syntactic": SyntacticVariationPlugin,
+        "semantic": SemanticParaphrasePlugin,
+        "canary": CanaryPhrasePlugin,
+        "statistical": StatisticalSentencePatternPlugin,
+    }
+    plugins = []
+    for name in [item.strip() for item in methods.split(",") if item.strip()]:
+        plugin = available.get(name)
+        if plugin is None:
+            raise SystemExit(f"unknown text watermark method: {name}")
+        plugins.append(plugin())
+    if not plugins:
+        raise SystemExit("at least one text watermark method is required")
+    return tuple(plugins)
+
+
+def _cmd_watermark_text(args: argparse.Namespace) -> int:
+    input_path = Path(args.input)
+    content = input_path.read_text(encoding="utf-8")
+    parameters = TextWatermarkParameters(
+        user_confirmation=bool(args.confirm),
+        allow_semantic_methods=bool(args.allow_semantic),
+        approved_canary_phrase=cast(str | None, args.canary_phrase),
+        max_changes=args.max_changes,
+        selection_stride=args.selection_stride,
+    )
+    pipeline = apply_text_watermark_plugins(
+        content,
+        cast(str, args.secret),
+        _text_watermark_plugins(args.methods),
+        parameters,
+    )
+    Path(args.output).write_text(pipeline.transformed_content, encoding="utf-8")
+    print(_serialize_json(pipeline.to_dict()))
+    return 0
+
+
 def _serve(
     *,
     data_dir: Path,
@@ -438,6 +493,17 @@ def build_parser() -> argparse.ArgumentParser:
     watermark_image.add_argument("--strength", type=float, default=1.0)
     watermark_image.add_argument("--mime-type")
     watermark_image.set_defaults(handler=_cmd_watermark_image)
+    watermark_text = watermark_subparsers.add_parser("text")
+    watermark_text.add_argument("input")
+    watermark_text.add_argument("--methods", required=True)
+    watermark_text.add_argument("--secret", required=True)
+    watermark_text.add_argument("--output", required=True)
+    watermark_text.add_argument("--confirm", action="store_true")
+    watermark_text.add_argument("--allow-semantic", action="store_true")
+    watermark_text.add_argument("--canary-phrase")
+    watermark_text.add_argument("--max-changes", type=int, default=8)
+    watermark_text.add_argument("--selection-stride", type=int, default=3)
+    watermark_text.set_defaults(handler=_cmd_watermark_text)
 
     registry = subparsers.add_parser("registry")
     registry_subparsers = registry.add_subparsers(dest="registry_command", required=True)

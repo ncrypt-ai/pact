@@ -114,10 +114,10 @@ def test_both_text_carrier_round_trip() -> None:
     assert extraction.locator.matches_manifest(manifest, NONCE)
 
 
-def test_text_carrier_rejects_experimental_mode() -> None:
+def test_text_carrier_experimental_mode_requires_secret_and_plugins() -> None:
     _manifest, signed = make_signed_manifest()
 
-    with pytest.raises(CarrierError, match="later step"):
+    with pytest.raises(CarrierError, match="require a secret"):
         embed_text_carrier(
             CONTENT,
             signed,

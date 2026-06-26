@@ -1,12 +1,14 @@
 """Plain-text carrier formats for signed PACT manifests."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Self, cast
+from typing import TYPE_CHECKING, Self, cast
 from uuid import UUID
 
 from pact.canonical import (
@@ -18,6 +20,12 @@ from pact.canonical import (
 )
 from pact.crypto import CryptographyError, base64url_decode, base64url_encode
 from pact.manifest import Manifest, SignedManifest
+
+if TYPE_CHECKING:
+    from pact.watermarks.base import (
+        TextWatermarkParameters,
+        TextWatermarkPlugin,
+    )
 
 _VISIBLE_HEADER = "-----BEGIN PACT MANIFEST-----\n"
 _VISIBLE_FOOTER = "\n-----END PACT MANIFEST-----\n\n"
@@ -287,13 +295,32 @@ def embed_text_carrier(
     *,
     nonce: bytes,
     mode: CarrierMode = CarrierMode.BOTH,
+    secret: bytes | str | None = None,
+    plugins: tuple[TextWatermarkPlugin, ...] = (),
+    plugin_parameters: TextWatermarkParameters | None = None,
 ) -> bytes:
     """Embed a signed manifest in a plain-text carrier document."""
 
     if signed.manifest.canonicalization is not CanonicalizationProfile.TEXT_V1:
         raise CarrierError("text carriers require pact.text.v1 manifests")
     if mode is CarrierMode.EXPERIMENTAL:
-        raise CarrierError("experimental text carriers are a later step")
+        if secret is None:
+            raise CarrierError("experimental text carriers require a secret")
+        if not plugins:
+            raise CarrierError("experimental text carriers require at least one plugin")
+        from pact.watermarks.base import TextWatermarkParameters
+        from pact.watermarks.textual import embed_experimental_text_carrier
+
+        parameters = plugin_parameters or TextWatermarkParameters()
+        embedded, _pipeline = embed_experimental_text_carrier(
+            _canonical_text_bytes(content).decode("utf-8"),
+            signed,
+            nonce=nonce,
+            secret=secret,
+            plugins=plugins,
+            parameters=parameters,
+        )
+        return embedded
     if mode not in {
         CarrierMode.VISIBLE,
         CarrierMode.INVISIBLE,

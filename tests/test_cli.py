@@ -194,3 +194,23 @@ def test_cli_parser_exposes_watermark_image_command() -> None:
     )
     assert args.command == "watermark"
     assert args.watermark_command == "image"
+
+
+def test_cli_parser_exposes_watermark_text_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "watermark",
+            "text",
+            "input.txt",
+            "--methods",
+            "lexical,syntactic",
+            "--secret",
+            "secret",
+            "--output",
+            "out.txt",
+            "--confirm",
+        ]
+    )
+    assert args.command == "watermark"
+    assert args.watermark_command == "text"

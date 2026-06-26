@@ -114,6 +114,40 @@ Structured HTML and XML files have dedicated helpers:
    protected_html = embed_html_carrier(html_document, signed, nonce=nonce, include_locator=True)
    protected_xml = embed_xml_carrier(xml_document, signed, nonce=nonce, include_locator=True)
 
+Apply experimental text watermark plugins
+-----------------------------------------
+
+The text watermark layer is deliberately conservative. It only runs when you
+explicitly confirm the change and it rejects content that looks unsafe to
+rewrite.
+
+.. code-block:: python
+
+   from pact import (
+       LexicalSubstitutionPlugin,
+       TextWatermarkParameters,
+       apply_text_watermark_plugins,
+   )
+
+   result = apply_text_watermark_plugins(
+       "We help new users start quickly because clear setup steps matter.",
+       "secret",
+       (LexicalSubstitutionPlugin(),),
+       TextWatermarkParameters(user_confirmation=True),
+   )
+   assert result.transformed_content != ""
+
+Use the CLI for text watermarking
+---------------------------------
+
+.. code-block:: bash
+
+   pact watermark text work.txt \
+     --methods lexical,syntactic \
+     --secret 'store-this-safely' \
+     --output work-watermarked.txt \
+     --confirm
+
 Embed a C2PA image credential
 -----------------------------
 

@@ -37,6 +37,56 @@ authoritative proof object.
    assert extracted.signed_manifest == signed
    assert extracted.locator is not None
 
+Experimental text watermark plugins
+-----------------------------------
+
+PACT step 7 adds an experimental plugin layer for prose-only text
+watermarking.
+
+Implemented plugins:
+
+- invisible framing;
+- context-limited lexical substitution;
+- keyed syntactic variation;
+- local semantic paraphrasing;
+- user-approved canary phrases;
+- statistical sentence-selection markers.
+
+All text watermark transforms require explicit confirmation. Semantic methods
+are disabled by default. The safety gate rejects content that looks like code,
+configuration, structured records, legal text, or medical/safety text.
+
+.. code-block:: python
+
+   from pact import (
+       LexicalSubstitutionPlugin,
+       TextWatermarkParameters,
+       apply_text_watermark_plugins,
+   )
+
+   result = apply_text_watermark_plugins(
+       "We help new users start quickly because clear setup steps matter.",
+       "secret",
+       (LexicalSubstitutionPlugin(),),
+       TextWatermarkParameters(user_confirmation=True),
+   )
+   assert result.embeddings
+
+The ``experimental`` text carrier mode now composes the normal text carrier
+with one or more selected plugins:
+
+.. code-block:: python
+
+   protected = embed_text_carrier(
+       content,
+       signed,
+       nonce=nonce,
+       mode=CarrierMode.EXPERIMENTAL,
+       secret="secret",
+       plugins=(LexicalSubstitutionPlugin(),),
+       plugin_parameters=TextWatermarkParameters(user_confirmation=True),
+   )
+
 HTML
 ----
 

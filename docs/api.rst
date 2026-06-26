@@ -8,6 +8,7 @@ Public package
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:
 
 Canonicalization
 ----------------
@@ -59,5 +60,33 @@ Watermarks
    :no-index:
 
 .. automodule:: pact.watermarks.image
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.invisible
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.lexical
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.syntactic
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.semantic
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.canary
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.statistical
+   :members:
+   :no-index:
+
+.. automodule:: pact.watermarks.textual
    :members:
    :no-index:
