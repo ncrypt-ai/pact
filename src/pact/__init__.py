@@ -91,6 +91,7 @@ from pact.registry import (
     TrustLabel,
     merkle_root,
 )
+from pact.web import create_app
 
 __all__ = [
     "CanonicalizationProfile",
@@ -149,6 +150,7 @@ __all__ = [
     "build_external_manifest_reference",
     "canonical_json",
     "canonicalize_content",
+    "create_app",
     "c2pa_pdf_embedding_supported",
     "c2pa_supported_builder_mime_types",
     "c2pa_supported_embedded_document_mime_types",

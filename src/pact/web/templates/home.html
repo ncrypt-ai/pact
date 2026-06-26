@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>PACT Registry</title>
+  </head>
+  <body>
+    <h1>PACT Registry</h1>
+    <p>Registry: {{ registry_url }}</p>
+    <p>Base URL: {{ public_base_url }}</p>
+    <p>Mode: {{ "local loopback" if local_mode else "public hosted" }}</p>
+
+    <h2>Available public routes</h2>
+    <ul>
+      <li><a href="/api/v1/registry">Registry API metadata</a></li>
+      <li>Profile pages at <code>/profiles/&lt;key_id&gt;</code></li>
+      <li>Claim pages at <code>/claims/&lt;claim_id&gt;</code></li>
+      <li>Verification pages at <code>/verify/claim/&lt;claim_id&gt;</code></li>
+    </ul>
+  </body>
+</html>

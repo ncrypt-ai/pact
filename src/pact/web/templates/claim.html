@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>PACT Claim</title>
+  </head>
+  <body>
+    <h1>Claim {{ claim.claim_id }}</h1>
+    <p><strong>Claimant:</strong> <a href="/profiles/{{ profile.key_id }}">{{ profile.key_id }}</a></p>
+    <p><strong>Registered:</strong> {{ claim.registered_at }}</p>
+    <p><strong>Status:</strong> {{ "revoked" if claim.revoked_at else "current" }}</p>
+    {% if claim.revoked_at %}
+    <p><strong>Revoked at:</strong> {{ claim.revoked_at }}</p>
+    <p><strong>Reason:</strong> {{ claim.revocation_reason }}</p>
+    {% endif %}
+    <h2>Manifest</h2>
+    <pre>{{ claim.signed_manifest }}</pre>
+  </body>
+</html>

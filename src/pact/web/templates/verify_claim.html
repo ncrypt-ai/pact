@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>PACT Verification</title>
+  </head>
+  <body>
+    <h1>Verification result</h1>
+    <p><strong>Claim:</strong> {{ claim.claim_id }}</p>
+    <p><strong>Claimant:</strong> {{ profile.key_id }}</p>
+    <p><strong>Registry state:</strong> {{ verification_state }}</p>
+    <p><strong>Proof page:</strong> <a href="/claims/{{ claim.claim_id }}">claim page</a></p>
+  </body>
+</html>

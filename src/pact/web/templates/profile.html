@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>PACT Profile</title>
+  </head>
+  <body>
+    <h1>Claimant profile</h1>
+    <p><strong>Key ID:</strong> {{ profile.key_id }}</p>
+    <p><strong>Display name:</strong> {{ profile.display_name or "—" }}</p>
+    <p><strong>Created:</strong> {{ profile.created_at }}</p>
+    <p><strong>Verified domains:</strong> {{ evidence.verified_domains|join(", ") or "none" }}</p>
+    <p><strong>Trust labels:</strong> {{ evidence.trust_labels|join(", ") }}</p>
+    <p><strong>Active claims:</strong> {{ evidence.active_claim_count }}</p>
+    <p><strong>Revoked claims:</strong> {{ evidence.revoked_claim_count }}</p>
+  </body>
+</html>
