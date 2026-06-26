@@ -262,9 +262,22 @@ signature, and any C2PA binding separately.
 PACT uses a raw binary TrustMark payload here because the ECC mode leaves too
 little usable capacity for a practical claim locator.
 
+PACT step 9 adds perceptual image fingerprints beside the TrustMark locator.
+The fingerprint is not a secret and is not an authentication proof. It is a
+matching aid made from multiple 64-bit perceptual hashes across deterministic
+views of the image: original pixels, resize, center crops, recompression, and a
+small photo-style resampling pass. This lets verification compare a transformed
+image against a registered claim even when the embedded TrustMark signal is
+lost or copied.
+
 .. code-block:: python
 
-   from pact import decode_image_soft_binding, embed_image_soft_binding
+   from pact import (
+       compare_image_perceptual_fingerprints,
+       create_image_perceptual_fingerprint,
+       decode_image_soft_binding,
+       embed_image_soft_binding,
+   )
 
    watermarked = embed_image_soft_binding(
        image_bytes,
@@ -274,3 +287,8 @@ little usable capacity for a practical claim locator.
    )
    decoded = decode_image_soft_binding(watermarked.image_bytes, "image/png")
    assert decoded.locator is not None
+
+   expected = create_image_perceptual_fingerprint(image_bytes, "image/png")
+   observed = create_image_perceptual_fingerprint(transformed_bytes, "image/png")
+   match = compare_image_perceptual_fingerprints(expected, observed)
+   assert match.matched

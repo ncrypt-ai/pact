@@ -18,8 +18,11 @@ from pact import (
     RegistryCertificateAuthority,
     RegistryService,
     TrustMarkLocator,
+    compare_image_perceptual_fingerprints,
+    create_image_perceptual_fingerprint,
     decode_image_soft_binding,
     embed_image_soft_binding,
+    perceptual_image_watermark_id,
     sign_manifest,
     verify_image_soft_binding,
 )
@@ -66,9 +69,34 @@ def solve_pow(challenge) -> int:
 
 
 def make_png_bytes() -> bytes:
-    image = Image.new("RGB", (32, 32), "white")
+    image = Image.new("RGB", (64, 64), "white")
+    for x in range(64):
+        for y in range(64):
+            if 12 <= x <= 52 and 18 <= y <= 46:
+                image.putpixel((x, y), (32 + x * 3 % 200, 64 + y * 2 % 160, 180))
+            if x == y or x + y == 63:
+                image.putpixel((x, y), (0, 0, 0))
     buffer = BytesIO()
     image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def make_different_png_bytes() -> bytes:
+    image = Image.new("RGB", (64, 64), "black")
+    for x in range(64):
+        for y in range(64):
+            if (x // 8 + y // 8) % 2 == 0:
+                image.putpixel((x, y), (240, 240, 40))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def crop_and_resize_png_bytes(image_bytes: bytes) -> bytes:
+    image = Image.open(BytesIO(image_bytes)).convert("RGB")
+    cropped = image.crop((4, 4, 60, 60)).resize((64, 64))
+    buffer = BytesIO()
+    cropped.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -185,3 +213,62 @@ def test_verify_image_soft_binding_resolves_registered_claim(
     assert verification.detected is True
     assert verification.claim is not None
     assert verification.claim.claim_id == claim.claim_id
+
+
+def test_image_perceptual_fingerprint_round_trip() -> None:
+    fingerprint = create_image_perceptual_fingerprint(make_png_bytes(), "image/png")
+    parsed = type(fingerprint).from_dict(fingerprint.to_dict())
+
+    assert parsed == fingerprint
+    assert perceptual_image_watermark_id() == "pact.perceptual.image.v1"
+    assert len(fingerprint.hashes) == 24
+    assert {item.algorithm for item in fingerprint.hashes} == {
+        "ahash",
+        "dhash",
+        "phash",
+    }
+    assert {item.transform for item in fingerprint.hashes} >= {
+        "crop-75",
+        "format-jpeg",
+        "format-webp",
+        "photo-resample",
+        "recompress",
+        "resize-half",
+    }
+
+
+def test_image_perceptual_fingerprint_matches_transformed_image() -> None:
+    original = make_png_bytes()
+    expected = create_image_perceptual_fingerprint(original, "image/png")
+    observed = create_image_perceptual_fingerprint(
+        crop_and_resize_png_bytes(original),
+        "image/png",
+    )
+
+    match = compare_image_perceptual_fingerprints(
+        expected,
+        observed,
+        threshold=12,
+        minimum_score=0.45,
+    )
+
+    assert match.matched
+    assert match.matches > 0
+    assert match.inspected == len(expected.hashes)
+
+
+def test_image_perceptual_fingerprint_rejects_unrelated_image() -> None:
+    expected = create_image_perceptual_fingerprint(make_png_bytes(), "image/png")
+    observed = create_image_perceptual_fingerprint(
+        make_different_png_bytes(),
+        "image/png",
+    )
+
+    match = compare_image_perceptual_fingerprints(
+        expected,
+        observed,
+        threshold=4,
+        minimum_score=0.80,
+    )
+
+    assert not match.matched
