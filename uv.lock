@@ -753,10 +753,43 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "c2pa-python" },
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "pypdf" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+]
+c2pa = [
+    { name = "c2pa-python" },
+    { name = "pypdf" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+]
+
 [package.dev-dependencies]
+all = [
+    { name = "c2pa-python" },
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "pypdf" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+]
+c2pa = [
+    { name = "c2pa-python" },
+    { name = "pypdf" },
+]
 dev = [
     { name = "coverage" },
     { name = "furo" },
+    { name = "httpx" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -765,26 +798,59 @@ dev = [
     { name = "sphinx-remove-toctrees" },
     { name = "ty" },
 ]
+server = [
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "c2pa-python", specifier = ">=0.36.0" },
+    { name = "c2pa-python", marker = "extra == 'all'", specifier = ">=0.36.0" },
+    { name = "c2pa-python", marker = "extra == 'c2pa'", specifier = ">=0.36.0" },
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "fastapi", specifier = ">=0.138.1" },
+    { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.138.1" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.138.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "jinja2", marker = "extra == 'all'", specifier = ">=3.1.6" },
+    { name = "jinja2", marker = "extra == 'server'", specifier = ">=3.1.6" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "pypdf", specifier = ">=6.1.3" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=6.1.3" },
+    { name = "pypdf", marker = "extra == 'c2pa'", specifier = ">=6.1.3" },
     { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.32" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.32" },
     { name = "rfc8785", specifier = ">=0.1.4" },
     { name = "uvicorn", specifier = ">=0.49.0" },
+    { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.49.0" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.49.0" },
 ]
+provides-extras = ["server", "c2pa", "image-watermark", "text-watermark", "attestation", "all"]
 
 [package.metadata.requires-dev]
+all = [
+    { name = "c2pa-python", specifier = ">=0.36.0" },
+    { name = "fastapi", specifier = ">=0.138.1" },
+    { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "pypdf", specifier = ">=6.1.3" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "uvicorn", specifier = ">=0.49.0" },
+]
+attestation = []
+c2pa = [
+    { name = "c2pa-python", specifier = ">=0.36.0" },
+    { name = "pypdf", specifier = ">=6.1.3" },
+]
 dev = [
     { name = "coverage", specifier = ">=7.14.2" },
     { name = "furo", specifier = ">=2025.12.19" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.15.18" },
     { name = "sphinx", specifier = ">=9.0.4" },
@@ -792,6 +858,14 @@ dev = [
     { name = "sphinx-remove-toctrees", specifier = ">=1.0.0.post1" },
     { name = "ty", specifier = ">=0.0.51" },
 ]
+image-watermark = []
+server = [
+    { name = "fastapi", specifier = ">=0.138.1" },
+    { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "uvicorn", specifier = ">=0.49.0" },
+]
+text-watermark = []
 
 [[package]]
 name = "pluggy"

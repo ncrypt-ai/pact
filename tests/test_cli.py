@@ -126,6 +126,37 @@ def test_cli_web_command_bootstraps_local_app(
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8123
     assert calls["app_title"] == "PACT Registry"
+    assert not (tmp_path / "web-data" / "ca" / "offline_root_private_key.pem").exists()
+
+
+def test_cli_registry_init_writes_online_and_offline_ca_material(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    data_dir = tmp_path / "registry-data"
+
+    assert (
+        main(
+            [
+                "registry",
+                "init",
+                "--registry",
+                "https://registry.example",
+                "--data-dir",
+                str(data_dir),
+                "--root-key-password",
+                "offline-secret",
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry_url"] == "https://registry.example"
+    assert (data_dir / "ca" / "root_certificate.pem").exists()
+    assert (data_dir / "ca" / "offline_root_private_key.pem").exists()
+    assert (data_dir / "ca" / "intermediate_certificate.pem").exists()
+    assert (data_dir / "ca" / "intermediate_private_key.pem").exists()
 
 
 def test_cli_parser_exposes_registry_serve_command() -> None:

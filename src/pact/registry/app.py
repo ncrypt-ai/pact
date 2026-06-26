@@ -307,7 +307,7 @@ class RegistryCertificateAuthority:
 
     registry_url: str
     root_certificate_pem: bytes
-    root_private_key_pem: bytes
+    root_private_key_pem: bytes | None
     intermediate_certificate_pem: bytes
     intermediate_private_key_pem: bytes
 
@@ -327,6 +327,7 @@ class RegistryCertificateAuthority:
         *,
         root_common_name: str = "PACT Offline Root CA",
         intermediate_common_name: str = "PACT Online Intermediate CA",
+        root_private_key_password: str | None = None,
     ) -> Self:
         registry_url = normalize_registry_url(registry_url)
         now = _utc_now()
@@ -419,7 +420,11 @@ class RegistryCertificateAuthority:
             root_private_key_pem=root_key.private_bytes(
                 serialization.Encoding.PEM,
                 serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
+                serialization.BestAvailableEncryption(
+                    root_private_key_password.encode("utf-8")
+                )
+                if root_private_key_password
+                else serialization.NoEncryption(),
             ),
             intermediate_certificate_pem=intermediate_certificate.public_bytes(
                 serialization.Encoding.PEM
@@ -494,6 +499,17 @@ class RegistryCertificateAuthority:
         certificate_pem = certificate.public_bytes(serialization.Encoding.PEM)
         chain_pem = certificate_pem + self.intermediate_certificate_pem
         return certificate_pem, chain_pem
+
+    def online_material(self) -> Self:
+        """Return the subset of CA material required by the online service."""
+
+        return type(self)(
+            registry_url=self.registry_url,
+            root_certificate_pem=self.root_certificate_pem,
+            root_private_key_pem=None,
+            intermediate_certificate_pem=self.intermediate_certificate_pem,
+            intermediate_private_key_pem=self.intermediate_private_key_pem,
+        )
 
 
 @dataclass(frozen=True, slots=True)

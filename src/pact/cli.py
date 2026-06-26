@@ -3,6 +3,7 @@
 import argparse
 import json
 import mimetypes
+import os
 import secrets
 from dataclasses import asdict
 from pathlib import Path
@@ -83,32 +84,50 @@ def _authority_paths(data_dir: Path) -> dict[str, Path]:
     ca_dir = data_dir / "ca"
     return {
         "root_certificate": ca_dir / "root_certificate.pem",
-        "root_private_key": ca_dir / "root_private_key.pem",
+        "root_private_key": ca_dir / "offline_root_private_key.pem",
         "intermediate_certificate": ca_dir / "intermediate_certificate.pem",
         "intermediate_private_key": ca_dir / "intermediate_private_key.pem",
     }
 
 
-def _load_or_create_authority(
+def _load_authority(
     data_dir: Path,
     registry_url: str,
 ) -> RegistryCertificateAuthority:
     paths = _authority_paths(data_dir)
-    if all(path.exists() for path in paths.values()):
-        return RegistryCertificateAuthority(
-            registry_url=registry_url,
-            root_certificate_pem=paths["root_certificate"].read_bytes(),
-            root_private_key_pem=paths["root_private_key"].read_bytes(),
-            intermediate_certificate_pem=paths["intermediate_certificate"].read_bytes(),
-            intermediate_private_key_pem=paths["intermediate_private_key"].read_bytes(),
+    required = (
+        paths["root_certificate"],
+        paths["intermediate_certificate"],
+        paths["intermediate_private_key"],
+    )
+    if not all(path.exists() for path in required):
+        raise SystemExit(
+            "registry CA material is missing; run `pact registry init` first"
         )
-    authority = RegistryCertificateAuthority.initialize(registry_url)
+    root_private_key = (
+        paths["root_private_key"].read_bytes()
+        if paths["root_private_key"].exists()
+        else None
+    )
+    return RegistryCertificateAuthority(
+        registry_url=registry_url,
+        root_certificate_pem=paths["root_certificate"].read_bytes(),
+        root_private_key_pem=root_private_key,
+        intermediate_certificate_pem=paths["intermediate_certificate"].read_bytes(),
+        intermediate_private_key_pem=paths["intermediate_private_key"].read_bytes(),
+    )
+
+
+def _write_authority(data_dir: Path, authority: RegistryCertificateAuthority) -> None:
+    paths = _authority_paths(data_dir)
     paths["root_certificate"].parent.mkdir(parents=True, exist_ok=True)
     paths["root_certificate"].write_bytes(authority.root_certificate_pem)
-    paths["root_private_key"].write_bytes(authority.root_private_key_pem)
+    if authority.root_private_key_pem is not None:
+        paths["root_private_key"].write_bytes(authority.root_private_key_pem)
+        os.chmod(paths["root_private_key"], 0o600)
     paths["intermediate_certificate"].write_bytes(authority.intermediate_certificate_pem)
     paths["intermediate_private_key"].write_bytes(authority.intermediate_private_key_pem)
-    return authority
+    os.chmod(paths["intermediate_private_key"], 0o600)
 
 
 def _load_admin_jwks(paths: list[str]) -> tuple[dict[str, str], ...]:
@@ -127,7 +146,7 @@ def _bootstrap_service(
     *,
     admin_jwk_files: list[str] | None = None,
 ) -> RegistryService:
-    authority = _load_or_create_authority(data_dir, registry_url)
+    authority = _load_authority(data_dir, registry_url).online_material()
     store = FileRegistryStore(data_dir / "store")
     admin_public_jwks = _load_admin_jwks(admin_jwk_files or [])
     return RegistryService(
@@ -216,6 +235,25 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_registry_init(args: argparse.Namespace) -> int:
+    data_dir = Path(args.data_dir).expanduser()
+    authority = RegistryCertificateAuthority.initialize(
+        normalize_registry_url(args.registry),
+        root_private_key_password=cast(str, args.root_key_password),
+    )
+    _write_authority(data_dir, authority)
+    print(
+        _serialize_json(
+            {
+                "registry_url": authority.registry_url,
+                "root_fingerprint": authority.root_fingerprint,
+                "ca_directory": str((_authority_paths(data_dir)["root_certificate"]).parent),
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     signed = SignedManifest.from_json(Path(args.manifest).read_bytes())
     public_jwk = json.loads(Path(args.public_jwk).read_text(encoding="utf-8"))
@@ -289,8 +327,18 @@ def _cmd_registry_serve(args: argparse.Namespace) -> int:
 def _cmd_web(args: argparse.Namespace) -> int:
     port = args.port
     public_base_url = f"http://127.0.0.1:{port}"
+    data_dir = Path(args.data_dir).expanduser()
+    try:
+        _load_authority(data_dir, normalize_registry_url(args.registry))
+    except SystemExit:
+        _write_authority(
+            data_dir,
+            RegistryCertificateAuthority.initialize(
+                normalize_registry_url(args.registry)
+            ).online_material(),
+        )
     return _serve(
-        data_dir=Path(args.data_dir).expanduser(),
+        data_dir=data_dir,
         registry_url=normalize_registry_url(args.registry),
         host="127.0.0.1",
         port=port,
@@ -353,6 +401,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     registry = subparsers.add_parser("registry")
     registry_subparsers = registry.add_subparsers(dest="registry_command", required=True)
+    registry_init = registry_subparsers.add_parser("init")
+    registry_init.add_argument("--registry", required=True)
+    registry_init.add_argument("--data-dir", required=True)
+    registry_init.add_argument("--root-key-password", required=True)
+    registry_init.set_defaults(handler=_cmd_registry_init)
     serve = registry_subparsers.add_parser("serve")
     serve.add_argument("--registry", required=True)
     serve.add_argument("--data-dir", required=True)

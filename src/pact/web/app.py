@@ -4,12 +4,15 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pact.registry import (
     ChallengePurpose,
@@ -115,14 +118,40 @@ def create_app(
     """Create the public registry API and proof-page application."""
 
     templates = _templates()
+    parsed_public_url = urlsplit(public_base_url)
+    allowed_hosts = [parsed_public_url.hostname or "localhost"]
+    if local_mode:
+        allowed_hosts.extend(["127.0.0.1", "localhost"])
     app = FastAPI(
         title="PACT Registry",
         version="0.0.1",
         summary="Public registry, proof pages, and local UI for PACT",
+        middleware=[
+            Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
+        ],
     )
     app.state.registry_service = service
     app.state.public_base_url = public_base_url.rstrip("/")
     app.state.local_mode = local_mode
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'self'; form-action 'self'; "
+            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'",
+        )
+        if local_mode:
+            response.headers.setdefault("Cache-Control", "no-store")
+        elif parsed_public_url.scheme == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request) -> HTMLResponse:
