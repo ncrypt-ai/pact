@@ -19,6 +19,7 @@ Start Here
 - :doc:`Carrier formats <carriers>`
 - :doc:`Manifest format <manifest>`
 - :doc:`Security model <security>`
+- :doc:`Server deployments <server>`
 - :doc:`API reference <api>`
 
 Build Documentation Locally
@@ -37,4 +38,5 @@ Build Documentation Locally
    carriers
    manifest
    security
+   server
    api

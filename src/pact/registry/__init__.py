@@ -20,10 +20,13 @@ from pact.registry.app import (
 )
 from pact.registry.store import (
     FileRegistryStore,
+    PostgresRegistryStore,
     RegistryBatch,
     RegistryEvent,
     RegistryEventType,
+    RegistryStore,
     RegistryStoreError,
+    SqliteRegistryStore,
     merkle_root,
 )
 
@@ -35,6 +38,7 @@ __all__ = [
     "DisputeStatus",
     "EvidenceProfile",
     "FileRegistryStore",
+    "PostgresRegistryStore",
     "KeyRotationRequest",
     "MutationChallenge",
     "MutationRequest",
@@ -44,8 +48,10 @@ __all__ = [
     "RegistryError",
     "RegistryEvent",
     "RegistryEventType",
+    "RegistryStore",
     "RegistryService",
     "RegistryStoreError",
+    "SqliteRegistryStore",
     "TrustLabel",
     "TrustTier",
     "VerificationLabel",

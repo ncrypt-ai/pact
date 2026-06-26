@@ -35,7 +35,11 @@ from pact.manifest import (
 )
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
-from pact.registry import RegistryCertificateAuthority, RegistryService
+from pact.registry import (
+    RegistryCertificateAuthority,
+    RegistryService,
+    SqliteRegistryStore,
+)
 from pact.registry.store import FileRegistryStore
 from pact.watermarks import (
     CanaryPhrasePlugin,
@@ -189,9 +193,16 @@ def _bootstrap_service(
     registry_url: str,
     *,
     admin_jwk_files: list[str] | None = None,
+    store_backend: str = "file",
+    sqlite_database: str = ":memory:",
 ) -> RegistryService:
     authority = _load_authority(data_dir, registry_url).online_material()
-    store = FileRegistryStore(data_dir / "store")
+    if store_backend == "file":
+        store = FileRegistryStore(data_dir / "store")
+    elif store_backend == "sqlite":
+        store = SqliteRegistryStore(sqlite_database)
+    else:
+        raise SystemExit("store backend must be file or sqlite")
     admin_public_jwks = _load_admin_jwks(admin_jwk_files or [])
     return RegistryService(
         registry_url,
@@ -536,11 +547,15 @@ def _serve(
     public_base_url: str,
     local_mode: bool,
     admin_jwk_files: list[str],
+    store_backend: str,
+    sqlite_database: str,
 ) -> int:
     service = _bootstrap_service(
         data_dir,
         registry_url,
         admin_jwk_files=admin_jwk_files,
+        store_backend=store_backend,
+        sqlite_database=sqlite_database,
     )
     app = create_app(
         service,
@@ -560,6 +575,8 @@ def _cmd_registry_serve(args: argparse.Namespace) -> int:
         public_base_url=args.public_base_url,
         local_mode=False,
         admin_jwk_files=args.admin_jwk_file,
+        store_backend=args.store_backend,
+        sqlite_database=args.sqlite_database,
     )
 
 
@@ -584,6 +601,8 @@ def _cmd_web(args: argparse.Namespace) -> int:
         public_base_url=public_base_url,
         local_mode=True,
         admin_jwk_files=args.admin_jwk_file,
+        store_backend=args.store_backend,
+        sqlite_database=args.sqlite_database,
     )
 
 
@@ -721,6 +740,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--admin-jwk-file", action="append", default=[])
+    serve.add_argument(
+        "--store-backend", choices=("file", "sqlite"), default="file"
+    )
+    serve.add_argument("--sqlite-database", default=":memory:")
     serve.set_defaults(handler=_cmd_registry_serve)
 
     web = subparsers.add_parser("web")
@@ -728,6 +751,10 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--data-dir", required=True)
     web.add_argument("--port", type=int, default=8000)
     web.add_argument("--admin-jwk-file", action="append", default=[])
+    web.add_argument(
+        "--store-backend", choices=("file", "sqlite"), default="sqlite"
+    )
+    web.add_argument("--sqlite-database", default=":memory:")
     web.set_defaults(handler=_cmd_web)
 
     return parser

@@ -21,6 +21,7 @@ from pact.registry import (
     RegistryError,
     RegistryService,
 )
+from pact.server.config import default_routes
 
 
 def _templates() -> Jinja2Templates:
@@ -173,6 +174,12 @@ def create_app(
     @app.get("/api/v1/registry")
     async def registry_info() -> dict[str, object]:
         return _registry_info(service)
+
+    @app.get("/api/v1/server/routes")
+    async def server_routes() -> dict[str, object]:
+        return {
+            "routes": [route.to_dict() for route in default_routes()],
+        }
 
     @app.post("/api/v1/challenges")
     async def issue_challenge(

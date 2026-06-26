@@ -1,66 +1,77 @@
 # PACT
 
-PACT stands for Policy Authenticated Content Token.
+Policy Authenticated Content Token.
 
-PACT is a Python toolkit for policy-bound content claims and machine-readable
-rights enforcement.
+PACT is policy-bound content for machine-readable rights enforcement. It is a
+Python toolkit for signing content claims, attaching those claims to files, and
+checking them against registry evidence.
 
-The package version in this repo is `0.0.1`. It is currently pre-alpha.
-User-visible changes are tracked in `CHANGELOG.md`. Tagged releases should map
-to the package version in `pyproject.toml`.
+PACT is not a detector for whether content is real, fake, edited, or AI
+generated. It is a way to make specific claims about content explicit,
+portable, and verifiable.
 
-It covers four parts of the problem:
+## What it does
 
-- registry-scoped claimant identities
-- signed manifests over canonicalized content
-- carrier formats for attaching those manifests to files
-- registry and verification surfaces for publishing and checking claims
+PACT gives developers primitives for answering narrower questions:
 
-In practice, PACT is trying to give developers a way to say:
+- which registry-scoped key signed this claim
+- which content commitment the claim is bound to
+- which policy assertions the claimant attached to the work
+- whether a registry has seen, revoked, disputed, or attested to the claim
 
-- this key signed this claim
-- this claim is bound to this exact content commitment
-- this work carries these policy assertions
-- this registry has or has not seen, revoked, disputed, or attested to that claim
-
-Current surface area:
+The current implementation includes:
 
 - P-256 claimant identities with OS keyring or encrypted-file storage
 - RFC 8785 canonical JSON manifests with ES256 signatures
 - text, HTML, and XML carriers
 - C2PA helpers for supported image, PDF, DOCX, and text workflows
-- append-only registry services with challenges, proof-of-work, certificate issuance, key rotation, revocation, disputes, and verification labels
-- FastAPI registry app and `pact` CLI
-- optional image watermark, text watermark, privacy-audit, and training-use probe tooling
+- append-only registry services with replay challenges, proof-of-work,
+  certificate issuance, key rotation, revocation, disputes, and verification
+  labels
+- a FastAPI registry app and `pact` CLI
+- optional image watermark, text watermark, privacy-audit, and training-use
+  probe tooling
 
-PACT treats C2PA as an interoperability layer and evidence carrier, not as the trust model.
+## Trust model
 
-The design is intentionally conservative about what it claims to prove. A lot
-of provenance systems fail by collapsing different questions into one result:
-who signed something, who created it, who owns it, whether it was edited,
-whether a container still has a readable credential, and whether any of that
-should be trusted. PACT keeps those separate.
+PACT treats C2PA as an interoperability layer and evidence carrier, not as the
+source of trust.
 
-It is also trying to avoid a few predictable failure modes:
+A valid PACT manifest proves:
+
+- a registry-scoped claimant key signed the manifest
+- when content and nonce are supplied, the content commitment matches
+
+It does not prove:
+
+- that the content is real
+- that the claimant is a unique human
+- that the claimant authored or owns the content
+- that the attached policy is legally enforceable
+- that a readable C2PA asset is trustworthy by itself
+
+The point is to avoid collapsing different questions into one result. Signing,
+authorship, ownership, policy intent, registry state, revocation, disputes, and
+container-level credentials are separate signals.
+
+PACT is designed to avoid these failure modes:
 
 - treating a valid signature as proof of authorship or ownership
 - treating a readable C2PA asset as proof of trust
-- treating content provenance as a detector for whether something is "real" or "AI"
-- binding trust to opaque central services instead of explicit registry state and evidence
-- leaking raw content, nonces, prompts, or other private material into public registry records
-- silently weakening key storage or verification boundaries for convenience
+- presenting provenance as an AI-content detector
+- relying on opaque central services instead of explicit registry state
+- publishing raw content, nonces, prompts, or private evidence to the registry
+- silently weakening key storage or verification for convenience
 
-What a valid manifest proves:
+## Version and releases
 
-- a registry-scoped claimant key signed the manifest
-- if you supply the original content and nonce, the content commitment matches
+- Package: `pact`
+- Current version: `0.0.1`
+- Status: pre-alpha
+- Python: `>=3.11`
+- Release notes: `CHANGELOG.md`
 
-What it does not prove:
-
-- that content is "real"
-- that a claimant is a unique human
-- authorship, ownership, or licensing by signature alone
-- trust in a C2PA asset by itself
+Tagged releases should match the package version in `pyproject.toml`.
 
 ## Install
 
@@ -68,15 +79,13 @@ What it does not prove:
 uv sync --locked
 ```
 
-Optional features:
+Optional extras:
 
 ```bash
 uv sync --locked --extra c2pa
 uv sync --locked --extra image-watermark
 uv sync --locked --extra aws
 ```
-
-Requires Python `>=3.11`.
 
 ## Quick start
 
@@ -89,7 +98,7 @@ pact identity init \
   --identity-password 'change-this'
 ```
 
-Show the public JWK for that identity:
+Show the public JWK:
 
 ```bash
 pact identity show \
@@ -110,7 +119,7 @@ pact sign ./work.txt \
   --identity-password 'change-this'
 ```
 
-Verify a manifest:
+Verify the manifest:
 
 ```bash
 pact verify ./work.manifest.json \
@@ -171,7 +180,7 @@ assert report.valid
 
 ## Development
 
-Run the checks used by this repo:
+Run the repo checks:
 
 ```bash
 uv run ruff format --check .
@@ -184,13 +193,6 @@ uv build
 ```
 
 Docs live in `docs/`. The local API and proof-page app is in `src/pact/web/`.
-
-## Releases
-
-- Package name: `pact`
-- Current version in this repo: `0.0.1`
-- Status: pre-alpha
-- Release notes: `CHANGELOG.md`
 
 ## License
 

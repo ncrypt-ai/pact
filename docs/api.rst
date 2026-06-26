@@ -114,3 +114,27 @@ Watermarks
 .. automodule:: pact.watermarks.textual
    :members:
    :no-index:
+
+Registry
+--------
+
+.. automodule:: pact.registry.app
+   :members:
+
+.. automodule:: pact.registry.store
+   :members:
+
+Server
+------
+
+.. automodule:: pact.server.config
+   :members:
+
+.. automodule:: pact.server.aws
+   :members:
+
+.. automodule:: pact.server.runtime
+   :members:
+
+.. automodule:: pact.server.lambda_app
+   :members:

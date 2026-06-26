@@ -1,12 +1,15 @@
 """Append-only registry event persistence and batch hashing."""
 
 import hashlib
+import importlib
 import json
+import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Self, cast
+from typing import Any, Protocol, Self, cast
 from uuid import UUID, uuid4
 
 from pact.canonical import JsonValue, canonical_json
@@ -28,6 +31,27 @@ class RegistryEventType(StrEnum):
     DOMAIN_VERIFIED = "domain_verified"
     DISPUTE_OPENED = "dispute_opened"
     DISPUTE_RESOLVED = "dispute_resolved"
+
+
+class RegistryStore(Protocol):
+    """Persistence interface required by the registry service."""
+
+    def list_events(self) -> tuple["RegistryEvent", ...]:
+        """Load every persisted event in order."""
+        ...
+
+    def list_batches(self) -> tuple["RegistryBatch", ...]:
+        """Load every persisted batch in order."""
+        ...
+
+    def append(
+        self,
+        event_type: RegistryEventType,
+        actor_key_id: str | None,
+        data: dict[str, object],
+    ) -> "RegistryEvent":
+        """Append one event and its disclosure batch."""
+        ...
 
 
 def _utc_now() -> datetime:
@@ -308,4 +332,285 @@ class FileRegistryStore:
             self.batches_path,
             batch.to_dict(),
         )
+        return event
+
+
+class SqliteRegistryStore:
+    """SQLite-backed registry persistence for monolith deployments."""
+
+    def __init__(self, database: str | Path = ":memory:") -> None:
+        self.database = str(database)
+        self._lock = threading.Lock()
+        self.connection = sqlite3.connect(
+            self.database,
+            check_same_thread=False,
+        )
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        self.connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS registry_events (
+                sequence INTEGER PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE,
+                event_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS registry_batches (
+                batch_id TEXT PRIMARY KEY,
+                first_sequence INTEGER NOT NULL,
+                last_sequence INTEGER NOT NULL,
+                batch_json TEXT NOT NULL
+            );
+            """
+        )
+        self.connection.commit()
+
+    def _load_json_rows(
+        self,
+        query: str,
+    ) -> list[dict[str, object]]:
+        rows = self.connection.execute(query).fetchall()
+        result: list[dict[str, object]] = []
+        for (payload,) in rows:
+            if not isinstance(payload, str):
+                raise RegistryStoreError("stored SQLite payload is invalid")
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError as error:
+                raise RegistryStoreError(
+                    "SQLite registry payload contains invalid JSON"
+                ) from error
+            if not isinstance(parsed, dict):
+                raise RegistryStoreError(
+                    "SQLite registry payloads must be objects"
+                )
+            result.append(cast(dict[str, object], parsed))
+        return result
+
+    def list_events(self) -> tuple[RegistryEvent, ...]:
+        """Load every persisted event in order."""
+
+        return tuple(
+            RegistryEvent.from_dict(item)
+            for item in self._load_json_rows(
+                "SELECT event_json FROM registry_events ORDER BY sequence"
+            )
+        )
+
+    def list_batches(self) -> tuple[RegistryBatch, ...]:
+        """Load every persisted batch in order."""
+
+        return tuple(
+            RegistryBatch.from_dict(item)
+            for item in self._load_json_rows(
+                "SELECT batch_json FROM registry_batches ORDER BY first_sequence"
+            )
+        )
+
+    def append(
+        self,
+        event_type: RegistryEventType,
+        actor_key_id: str | None,
+        data: dict[str, object],
+    ) -> RegistryEvent:
+        """Append one event and one disclosure batch."""
+
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM registry_events"
+            ).fetchone()
+            next_sequence = int(row[0])
+            event = RegistryEvent(
+                sequence=next_sequence,
+                event_id=uuid4(),
+                event_type=event_type,
+                occurred_at=_utc_now(),
+                actor_key_id=actor_key_id,
+                data=data,
+            )
+            batch = RegistryBatch.from_events([event])
+            with self.connection:
+                self.connection.execute(
+                    """
+                    INSERT INTO registry_events(sequence, event_id, event_json)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        event.sequence,
+                        str(event.event_id),
+                        canonical_json(event.to_dict()).decode("utf-8"),
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    INSERT INTO registry_batches(
+                        batch_id,
+                        first_sequence,
+                        last_sequence,
+                        batch_json
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        str(batch.batch_id),
+                        batch.first_sequence,
+                        batch.last_sequence,
+                        canonical_json(batch.to_dict()).decode("utf-8"),
+                    ),
+                )
+            return event
+
+
+class PostgresRegistryStore:
+    """Postgres-backed registry persistence for serverless deployments."""
+
+    def __init__(self, dsn: str) -> None:
+        try:
+            psycopg = importlib.import_module("psycopg")
+        except ImportError as error:
+            raise RegistryStoreError(
+                "Postgres storage requires the pact[aws] optional dependencies"
+            ) from error
+        self._psycopg = cast(Any, psycopg)
+        self.connection = psycopg.connect(dsn)
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        self.connection.execute(
+            "CREATE SEQUENCE IF NOT EXISTS registry_event_sequence"
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registry_events (
+                sequence BIGINT PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE,
+                event_json TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registry_batches (
+                batch_id TEXT PRIMARY KEY,
+                first_sequence BIGINT NOT NULL,
+                last_sequence BIGINT NOT NULL,
+                batch_json TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            SELECT setval(
+                'registry_event_sequence',
+                GREATEST(
+                    COALESCE((SELECT MAX(sequence) FROM registry_events), 0)
+                    + 1,
+                    1
+                ),
+                false
+            )
+            """
+        )
+        self.connection.commit()
+
+    def _load_json_rows(self, query: str) -> list[dict[str, object]]:
+        rows = self.connection.execute(query).fetchall()
+        result: list[dict[str, object]] = []
+        for row in rows:
+            payload = row[0]
+            if not isinstance(payload, str):
+                raise RegistryStoreError("stored Postgres payload is invalid")
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError as error:
+                raise RegistryStoreError(
+                    "Postgres registry payload contains invalid JSON"
+                ) from error
+            if not isinstance(parsed, dict):
+                raise RegistryStoreError(
+                    "Postgres registry payloads must be objects"
+                )
+            result.append(cast(dict[str, object], parsed))
+        return result
+
+    def list_events(self) -> tuple[RegistryEvent, ...]:
+        """Load every persisted event in order."""
+
+        return tuple(
+            RegistryEvent.from_dict(item)
+            for item in self._load_json_rows(
+                "SELECT event_json FROM registry_events ORDER BY sequence"
+            )
+        )
+
+    def list_batches(self) -> tuple[RegistryBatch, ...]:
+        """Load every persisted batch in order."""
+
+        return tuple(
+            RegistryBatch.from_dict(item)
+            for item in self._load_json_rows(
+                "SELECT batch_json FROM registry_batches ORDER BY first_sequence"
+            )
+        )
+
+    def append(
+        self,
+        event_type: RegistryEventType,
+        actor_key_id: str | None,
+        data: dict[str, object],
+    ) -> RegistryEvent:
+        """Append one event and one disclosure batch."""
+
+        row = self.connection.execute(
+            "SELECT nextval('registry_event_sequence')"
+        ).fetchone()
+        if row is None:
+            raise RegistryStoreError(
+                "Postgres sequence query returned no rows"
+            )
+        next_sequence = int(row[0])
+        event = RegistryEvent(
+            sequence=next_sequence,
+            event_id=uuid4(),
+            event_type=event_type,
+            occurred_at=_utc_now(),
+            actor_key_id=actor_key_id,
+            data=data,
+        )
+        batch = RegistryBatch.from_events([event])
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO registry_events(sequence, event_id, event_json)
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    event.sequence,
+                    str(event.event_id),
+                    canonical_json(event.to_dict()).decode("utf-8"),
+                ),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO registry_batches(
+                    batch_id,
+                    first_sequence,
+                    last_sequence,
+                    batch_json
+                )
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    str(batch.batch_id),
+                    batch.first_sequence,
+                    batch.last_sequence,
+                    canonical_json(batch.to_dict()).decode("utf-8"),
+                ),
+            )
+        except Exception:
+            self.connection.rollback()
+            raise
+        self.connection.commit()
         return event

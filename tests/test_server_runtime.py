@@ -1,0 +1,81 @@
+from typing import cast
+
+from pact import (
+    AuthProvider,
+    RouteAuth,
+    RuntimeConfig,
+    SecurityProfile,
+    SqliteRegistryStore,
+    StoreBackend,
+    aws_lambda_routes,
+    create_registry_store,
+    default_routes,
+)
+from pact.registry import RegistryEventType
+
+
+def test_sqlite_registry_store_persists_events_and_batches() -> None:
+    store = SqliteRegistryStore(":memory:")
+
+    event = store.append(
+        RegistryEventType.PROFILE_REGISTERED,
+        "key-1",
+        {"key_id": "key-1", "public_jwk": {"kty": "EC"}},
+    )
+
+    assert event.sequence == 1
+    assert store.list_events()[0].event_id == event.event_id
+    assert store.list_batches()[0].first_sequence == 1
+
+
+def test_runtime_config_creates_sqlite_store() -> None:
+    config = RuntimeConfig(
+        registry_url="https://registry.example",
+        public_base_url="https://registry.example",
+        store_backend=StoreBackend.SQLITE,
+    )
+
+    store = create_registry_store(config)
+
+    assert isinstance(store, SqliteRegistryStore)
+
+
+def test_runtime_config_requires_postgres_dsn() -> None:
+    config = RuntimeConfig(
+        registry_url="https://registry.example",
+        public_base_url="https://registry.example",
+        store_backend=StoreBackend.POSTGRES,
+    )
+
+    try:
+        create_registry_store(config)
+    except Exception as error:
+        assert "postgres_dsn" in str(error)
+    else:
+        raise AssertionError("Postgres store creation should require a DSN")
+
+
+def test_aws_lambda_route_metadata_maps_auth_and_scopes() -> None:
+    routes = aws_lambda_routes(default_routes())
+    route_by_name = {route.name: route for route in routes}
+
+    assert route_by_name["registry_info"].auth is RouteAuth.PUBLIC
+    assert route_by_name["registry_info"].cognito_scope is None
+    assert route_by_name["server_routes"].path == "/api/v1/server/routes"
+    assert route_by_name["register_claim"].lambda_name == "pact-register-claim"
+    assert route_by_name["register_claim"].cognito_scope == "pact/claims:write"
+    assert route_by_name["resolve_dispute"].auth is RouteAuth.ADMIN
+
+
+def test_security_profile_exports_cognito_shape() -> None:
+    config = RuntimeConfig(
+        registry_url="https://registry.example",
+        public_base_url="https://registry.example",
+        security=SecurityProfile(auth_provider=AuthProvider.COGNITO),
+    )
+
+    exported = config.to_dict()
+    security = cast(dict[str, object], exported["security"])
+
+    assert isinstance(security, dict)
+    assert security["auth_provider"] == "cognito"

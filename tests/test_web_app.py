@@ -139,6 +139,12 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     ).json()
 
     assert client.get("/api/v1/registry").status_code == 200
+    routes = client.get("/api/v1/server/routes")
+    assert routes.status_code == 200
+    route_names = {route["name"] for route in routes.json()["routes"]}
+    assert {"registry_info", "register_claim", "verify_claim_page"}.issubset(
+        route_names
+    )
     assert client.get(f"/api/v1/profiles/{identity.key_id}").status_code == 200
     assert (
         client.get(f"/api/v1/profiles/{identity.key_id}/evidence").status_code

@@ -25,9 +25,9 @@ from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
 from pact.privacy import PrivacyAuditError, audit_registry_claim_payload
 from pact.registry.store import (
-    FileRegistryStore,
     RegistryEvent,
     RegistryEventType,
+    RegistryStore,
     RegistryStoreError,
 )
 from pact.watermarks.base import TrustMarkLocator
@@ -713,7 +713,7 @@ class RegistryService:
         self,
         registry_url: str,
         *,
-        store: FileRegistryStore,
+        store: RegistryStore,
         certificate_authority: RegistryCertificateAuthority,
         admin_public_jwks: tuple[Mapping[str, object], ...] = (),
     ) -> None:
