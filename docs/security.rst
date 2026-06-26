@@ -23,6 +23,12 @@ C2PA signatures, recovered watermarks, and perceptual hash matches are
 reported as evidence signals; they do not authenticate ownership by
 themselves.
 
+``create_training_use_risk_report`` combines local probe analysis, text
+watermark or canary detections, image watermark recovery, perceptual image
+matches, and registry verification into one evidence report. The score is an
+explanation aid, not a legal or technical assertion that a provider trained on
+specific material.
+
 Trust tiers currently distinguish unauthenticated device continuity, hosted
 account status, domain verification, platform attestation, and third-party
 attestation. Verification labels are evidence-based: ``verified_claim``,

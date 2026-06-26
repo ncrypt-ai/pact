@@ -8,8 +8,11 @@ from pact import (
     ProbeKind,
     ProbeResponse,
     ProbeSet,
+    TextWatermarkDetection,
+    TrainingUseRiskLevel,
     analyze_probe_responses,
     create_probe_set,
+    create_training_use_risk_report,
     responses_from_jsonl,
 )
 
@@ -72,6 +75,57 @@ def test_probe_analysis_detects_treatment_enrichment() -> None:
     assert report.treatment_matches == 1
     assert report.control_matches == 0
     assert report.conclusion is ProbeConclusion.WATERMARK_SIGNAL_DETECTED
+    assert report.adjusted_p_value is not None
+    assert report.effect_size_interval.lower <= report.effect_size
+    assert report.effect_size <= report.effect_size_interval.upper
+    assert {test.name for test in report.hypothesis_tests} == {
+        "aggregate_match_enrichment",
+        "exact_reproduction_enrichment",
+    }
+
+
+def test_training_use_risk_report_combines_probe_and_canary_evidence() -> None:
+    probe_set = create_probe_set(
+        protected_texts=(PROTECTED,),
+        control_texts=(CONTROL,),
+        target_model="model-a",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    treatment = next(
+        probe
+        for probe in probe_set.probes
+        if probe.kind is ProbeKind.TREATMENT
+    )
+    control = next(
+        probe for probe in probe_set.probes if probe.kind is ProbeKind.CONTROL
+    )
+    analysis = analyze_probe_responses(
+        probe_set,
+        (
+            ProbeResponse(treatment.probe_id, treatment.expected_continuation),
+            ProbeResponse(control.probe_id, "I do not know."),
+        ),
+    )
+    canary = TextWatermarkDetection(
+        method_id="pact.text.canary.v1",
+        detected=True,
+        score=1.0,
+        inspected=1,
+        matches=1,
+        details={"phrase": "approved canary"},
+    )
+
+    report = create_training_use_risk_report(
+        probe_analysis=analysis,
+        text_watermark_detections=(canary,),
+    )
+
+    assert report.risk_level is TrainingUseRiskLevel.HIGH
+    assert report.score >= 0.7
+    assert {signal.kind for signal in report.signals if signal.present} == {
+        "probe",
+        "text_watermark",
+    }
 
 
 def test_probe_evidence_package_digest_and_signature_round_trip() -> None:

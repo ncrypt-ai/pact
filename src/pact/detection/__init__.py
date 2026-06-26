@@ -12,7 +12,15 @@ from pact.detection.probes import (
     create_probe_set,
     responses_from_jsonl,
 )
+from pact.detection.risk import (
+    EvidenceSignal,
+    TrainingUseRiskLevel,
+    TrainingUseRiskReport,
+    create_training_use_risk_report,
+)
 from pact.detection.statistics import (
+    ConfidenceInterval,
+    HypothesisTest,
     ProbeAnalysisReport,
     ProbeConclusion,
     ProbeMeasurement,
@@ -29,7 +37,13 @@ __all__ = [
     "ProbeMeasurement",
     "ProbeResponse",
     "ProbeSet",
+    "ConfidenceInterval",
+    "EvidenceSignal",
+    "HypothesisTest",
+    "TrainingUseRiskLevel",
+    "TrainingUseRiskReport",
     "analyze_probe_responses",
     "create_probe_set",
+    "create_training_use_risk_report",
     "responses_from_jsonl",
 ]

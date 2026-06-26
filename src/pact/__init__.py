@@ -63,6 +63,9 @@ from pact.carriers import (
 )
 from pact.crypto import CryptographyError, base64url_decode, base64url_encode
 from pact.detection import (
+    ConfidenceInterval,
+    EvidenceSignal,
+    HypothesisTest,
     Probe,
     ProbeAnalysisReport,
     ProbeConclusion,
@@ -72,8 +75,11 @@ from pact.detection import (
     ProbeMeasurement,
     ProbeResponse,
     ProbeSet,
+    TrainingUseRiskLevel,
+    TrainingUseRiskReport,
     analyze_probe_responses,
     create_probe_set,
+    create_training_use_risk_report,
     responses_from_jsonl,
 )
 from pact.identity import (
@@ -225,6 +231,11 @@ __all__ = [
     "ProbeMeasurement",
     "ProbeResponse",
     "ProbeSet",
+    "ConfidenceInterval",
+    "EvidenceSignal",
+    "HypothesisTest",
+    "TrainingUseRiskLevel",
+    "TrainingUseRiskReport",
     "PERCEPTUAL_IMAGE_WATERMARK_ID",
     "PACT_XML_NAMESPACE",
     "ChallengePurpose",
@@ -331,6 +342,7 @@ __all__ = [
     "audit_signed_manifest_publication",
     "trustmark_supported_image_mime_types",
     "create_probe_set",
+    "create_training_use_risk_report",
     "validate_c2pa_text_document",
     "validate_c2pa_text_manifest_store",
     "verify_manifest",

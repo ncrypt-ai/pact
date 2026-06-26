@@ -347,6 +347,11 @@ responses, or analysis package unless the user explicitly publishes them.
 The ``responses.jsonl`` file contains one JSON object per provider response,
 for example ``{"probe_id": "...", "response": "..."}``.
 
+Probe analysis includes confidence intervals and corrected p-values. Library
+callers can pass the probe report, watermark or canary detections, image
+matches, and registry verification into ``create_training_use_risk_report`` to
+produce a combined evidence summary.
+
 Use the CLI for manifest workflows
 ----------------------------------
 

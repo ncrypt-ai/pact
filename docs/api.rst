@@ -58,6 +58,9 @@ Detection
 .. automodule:: pact.detection.evidence
    :members:
 
+.. automodule:: pact.detection.risk
+   :members:
+
 Carriers
 --------
 
