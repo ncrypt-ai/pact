@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PACT registry API backed by Lambda, API Gateway, Cognito, and Postgres.
+
+Parameters:
+  RegistryUrl:
+    Type: String
+  PublicBaseUrl:
+    Type: String
+  PostgresDsn:
+    Type: String
+    NoEcho: true
+  CognitoIssuer:
+    Type: String
+  CognitoUserPoolId:
+    Type: String
+  CognitoAppClientId:
+    Type: String
+  RootCertificatePem:
+    Type: String
+    NoEcho: true
+  IntermediateCertificatePem:
+    Type: String
+    NoEcho: true
+  IntermediatePrivateKeyPem:
+    Type: String
+    NoEcho: true
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        PACT_DEPLOYMENT_MODE: aws_lambda
+        PACT_STORE_BACKEND: postgres
+        PACT_AUTH_PROVIDER: cognito
+        PACT_REGISTRY_URL: !Ref RegistryUrl
+        PACT_PUBLIC_BASE_URL: !Ref PublicBaseUrl
+        PACT_POSTGRES_DSN: !Ref PostgresDsn
+        PACT_COGNITO_ISSUER: !Ref CognitoIssuer
+        PACT_COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+        PACT_COGNITO_APP_CLIENT_ID: !Ref CognitoAppClientId
+        PACT_AWS_REGION: !Ref AWS::Region
+        PACT_ROOT_CERTIFICATE_PEM: !Ref RootCertificatePem
+        PACT_INTERMEDIATE_CERTIFICATE_PEM: !Ref IntermediateCertificatePem
+        PACT_INTERMEDIATE_PRIVATE_KEY_PEM: !Ref IntermediatePrivateKeyPem
+
+Resources:
+  RegistryHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Ref CognitoIssuer
+              audience:
+                - !Ref CognitoAppClientId
+
+  RegistryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ../..
+      Dockerfile: services/lambdas/registry/Dockerfile
+    Properties:
+      PackageType: Image
+      Events:
+        Home:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /
+            Auth:
+              Authorizer: NONE
+        RegistryInfo:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/registry
+            Auth:
+              Authorizer: NONE
+        ServerRoutes:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/server/routes
+            Auth:
+              Authorizer: NONE
+        IssueChallenge:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/challenges
+            Auth:
+              Authorizer: NONE
+        RegisterProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/profiles
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/profiles:write
+        GetProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/profiles/{key_id}
+            Auth:
+              Authorizer: NONE
+        GetProfileEvidence:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/profiles/{key_id}/evidence
+            Auth:
+              Authorizer: NONE
+        IssueCertificate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/certificates
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/certificates:write
+        RegisterClaim:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/claims
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/claims:write
+        GetClaim:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/claims/{claim_id}
+            Auth:
+              Authorizer: NONE
+        RevokeClaim:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/claims/{claim_id}/revoke
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/claims:revoke
+        RotateKey:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/rotations
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/profiles:rotate
+        VerifyDomain:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/domains/verify
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/domains:write
+        OpenDispute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/disputes
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/disputes:write
+        GetDispute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /api/v1/disputes/{dispute_id}
+            Auth:
+              Authorizer: NONE
+        ResolveDispute:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/disputes/{dispute_id}/resolve
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/disputes:resolve
+        PublicProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /profiles/{key_id}
+            Auth:
+              Authorizer: NONE
+        PublicClaim:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /claims/{claim_id}
+            Auth:
+              Authorizer: NONE
+        VerifyClaimPage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: GET
+            Path: /verify/claim/{claim_id}
+            Auth:
+              Authorizer: NONE
+
+Outputs:
+  RegistryApiUrl:
+    Description: Base URL for the deployed registry API.
+    Value: !Sub "https://${RegistryHttpApi}.execute-api.${AWS::Region}.amazonaws.com"

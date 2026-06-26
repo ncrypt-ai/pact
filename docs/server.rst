@@ -69,7 +69,20 @@ the ``pact[aws]`` optional dependencies and these environment variables:
    PACT_INTERMEDIATE_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_PRIVATE_KEY_PEM=...
 
-The current AWS package surface provides the Lambda entrypoint, route metadata,
-Cognito scope metadata, and Postgres-backed registry store. Infrastructure
-templates can consume those open route definitions rather than duplicating
-route names and permissions by hand.
+The repository includes a Lambda container package at
+``services/lambdas/registry/Dockerfile`` and a SAM template at
+``deploy/aws/registry.sam.yaml``. The template maps every public URL to the
+registry Lambda, keeps read-only proof pages public, and applies Cognito scopes
+to mutation routes.
+
+Build and deploy from the repository root:
+
+.. code-block:: bash
+
+   sam build --template-file deploy/aws/registry.sam.yaml
+   sam deploy --guided
+
+The SAM deployment expects an existing Postgres DSN and Cognito user pool. The
+template keeps those values as parameters so operators can wire in RDS, Aurora
+Serverless, or another managed Postgres endpoint without changing application
+code.
