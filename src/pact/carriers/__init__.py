@@ -1,4 +1,4 @@
-"""Carrier helpers for embedding signed manifests in text documents."""
+"""Public carrier exports for text, structured, and C2PA assets."""
 
 from pact.carriers.c2pa import (
     C2paAsset,

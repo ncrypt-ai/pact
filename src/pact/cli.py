@@ -1,4 +1,4 @@
-"""Command-line interface for local PACT workflows and registry hosting."""
+"""Command-line entry point for signing, inspection, and registry hosting."""
 
 import argparse
 import json

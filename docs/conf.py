@@ -1,4 +1,4 @@
-"""Sphinx configuration for pact."""
+"""Sphinx configuration for PACT."""
 
 import os
 import sys

@@ -233,6 +233,11 @@ pages:
 
 .. code-block:: bash
 
+   pact registry init \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --root-key-password 'store-this-offline'
+
    pact registry serve \
      --registry https://registry.example \
      --data-dir ./registry-data \

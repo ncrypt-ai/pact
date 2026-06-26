@@ -35,3 +35,5 @@ and this project adheres to
 - FastAPI registry API, public HTML claim/profile proof pages, loopback-local
   web mode, and a ``pact`` CLI entrypoint for identity, signing, verification,
   inspection, and service startup.
+- Registry bootstrap hardening so explicit registry initialization writes an
+  encrypted offline root key while serving uses only online CA material.

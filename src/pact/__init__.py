@@ -1,4 +1,4 @@
-"""Pact package."""
+"""Public package exports for PACT."""
 
 from importlib.metadata import version
 

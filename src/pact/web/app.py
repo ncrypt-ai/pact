@@ -1,4 +1,4 @@
-"""FastAPI application for the public registry API and web UI."""
+"""FastAPI application for the registry API and proof pages."""
 
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -115,7 +115,7 @@ def create_app(
     public_base_url: str,
     local_mode: bool = False,
 ) -> FastAPI:
-    """Create the public registry API and proof-page application."""
+    """Build the registry API and proof-page application."""
 
     templates = _templates()
     parsed_public_url = urlsplit(public_base_url)
@@ -125,7 +125,7 @@ def create_app(
     app = FastAPI(
         title="PACT Registry",
         version="0.0.1",
-        summary="Public registry, proof pages, and local UI for PACT",
+        summary="Registry API and proof pages for PACT",
         middleware=[
             Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
         ],

@@ -76,6 +76,14 @@ container patching. Public-key trust and registry-root trust remain caller
 decisions. The format and carrier schemes must receive an independent
 cryptographic review before being declared stable.
 
+CA handling
+-----------
+
+``pact registry init`` writes an encrypted offline root private key and the
+online intermediate material required by the serving process. ``pact registry
+serve`` loads only the public root certificate plus the intermediate key and
+certificate; it does not require the offline root private key at runtime.
+
 Current transport limitations
 -----------------------------
 

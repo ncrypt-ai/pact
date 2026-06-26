@@ -1,1 +1,1 @@
-"""Sphinx documentation configuration package."""
+"""Documentation package."""

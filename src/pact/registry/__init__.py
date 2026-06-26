@@ -1,4 +1,4 @@
-"""Registry services, state, and append-only storage."""
+"""Public registry exports."""
 
 from pact.registry.app import (
     ChallengePurpose,
