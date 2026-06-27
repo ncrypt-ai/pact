@@ -1,10 +1,48 @@
 const output = document.querySelector("#output");
+const sessionStatus = document.querySelector("#session-status");
 const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
-let identity = null;
+let identity = JSON.parse(localStorage.getItem("pact.identity") || "null");
 let signedManifest = null;
 let nonceBase64 = null;
 let probeSet = null;
+
+function pageButtons() {
+  return [...document.querySelectorAll("[data-page-button]")];
+}
+
+function pages() {
+  return [...document.querySelectorAll("[data-page]")];
+}
+
+function setPage(name) {
+  for (const section of pages()) {
+    section.hidden = section.dataset.page !== name;
+  }
+  for (const button of pageButtons()) {
+    if (button.dataset.pageButton === name) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  }
+}
+
+function updateSession() {
+  const authenticated = Boolean(identity);
+  sessionStatus.textContent = authenticated
+    ? `Identity loaded: ${identity.key_id}`
+    : "No identity loaded.";
+  for (const button of pageButtons()) {
+    if (button.dataset.pageButton !== "identity") {
+      button.disabled = !authenticated;
+    }
+  }
+}
+
+for (const button of pageButtons()) {
+  button.onclick = () => setPage(button.dataset.pageButton);
+}
 
 worker.onmessage = (event) => {
   const { id, ok, result, error } = event.data;
@@ -31,6 +69,14 @@ function callPython(name, args = [], feature = null) {
 
 function registryUrl() {
   return document.querySelector("#registry-url").value.trim();
+}
+
+function requireIdentity() {
+  if (!identity) {
+    setPage("identity");
+    throw new Error("Create or import an identity first.");
+  }
+  return identity;
 }
 
 function password() {
@@ -129,14 +175,12 @@ async function browserFingerprint() {
 }
 
 async function signedMutation(purpose, payload, boundKeyId = null) {
-  if (!identity) {
-    throw new Error("Create or import an identity first.");
-  }
+  const currentIdentity = requireIdentity();
   const issued = await challenge(purpose, boundKeyId);
   return JSON.parse(
     await callPython("create_mutation_request", [
       registryUrl(),
-      identity.encrypted_pkcs8_b64,
+      currentIdentity.encrypted_pkcs8_b64,
       password(),
       JSON.stringify(issued),
       JSON.stringify(payload)
@@ -159,6 +203,8 @@ document.querySelector("#create-identity").onclick = () =>
       await callPython("create_identity", [registryUrl(), password()])
     );
     localStorage.setItem("pact.identity", JSON.stringify(identity));
+    updateSession();
+    setPage("claims");
     show(identity);
   });
 
@@ -194,13 +240,16 @@ document.querySelector("#identity-import").onchange = (event) =>
       password()
     ]);
     localStorage.setItem("pact.identity", JSON.stringify(identity));
+    updateSession();
+    setPage("claims");
     show("Identity imported and verified.");
   });
 
 document.querySelector("#register-profile").onclick = () =>
   run(async () => {
+    const displayName = document.querySelector("#display-name").value.trim();
     const request = await signedMutation("profile_registration", {
-      display_name: document.querySelector("#display-name").value || null,
+      ...(displayName ? { display_name: displayName } : {}),
       hosted_account: false,
       device_fingerprint: await browserFingerprint()
     });
@@ -215,10 +264,11 @@ document.querySelector("#sign-content").onclick = () =>
   run(async () => {
     const registry = await registryJson("/api/v1/registry");
     const content = await readBase64(document.querySelector("#content-file"));
+    const currentIdentity = requireIdentity();
     const result = JSON.parse(
       await callPython("sign_content", [
         registryUrl(),
-        identity.encrypted_pkcs8_b64,
+        currentIdentity.encrypted_pkcs8_b64,
         password(),
         content,
         registry.root_fingerprint,
@@ -233,17 +283,45 @@ document.querySelector("#sign-content").onclick = () =>
     show(result);
   });
 
+document.querySelector("#go-register-claim").onclick = () => setPage("claims");
+
 document.querySelector("#register-claim").onclick = () =>
   run(async () => {
     if (!signedManifest) {
-      signedManifest = await readText(document.querySelector("#manifest-file"));
+      signedManifest = await readText(
+        document.querySelector("#claim-manifest-file")
+      );
     }
+    const currentIdentity = requireIdentity();
     const request = await signedMutation(
       "claim_registration",
       { signed_manifest_json: signedManifest },
-      identity.key_id
+      currentIdentity.key_id
     );
     const claim = await registryJson("/api/v1/claims", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    show(claim);
+  });
+
+document.querySelector("#revoke-claim").onclick = () =>
+  run(async () => {
+    const claimId = document.querySelector("#revoke-claim-id").value.trim();
+    if (!claimId) {
+      throw new Error("Enter the claim ID to revoke.");
+    }
+    const request = await signedMutation(
+      "claim_revocation",
+      {
+        claim_id: claimId,
+        reason:
+          document.querySelector("#revoke-reason").value.trim() ||
+          "revoked by claimant"
+      },
+      requireIdentity().key_id
+    );
+    const claim = await registryJson(`/api/v1/claims/${claimId}/revoke`, {
       method: "POST",
       body: JSON.stringify(request)
     });
@@ -284,6 +362,57 @@ document.querySelector("#audit-manifest").onclick = () =>
         ? await readBase64(document.querySelector("#nonce-file"))
         : nonceBase64
     ]);
+    show(result);
+  });
+
+document.querySelector("#watermark-text").onclick = () =>
+  run(async () => {
+    const result = JSON.parse(
+      await callPython("watermark_text", [
+        document.querySelector("#watermark-text-input").value,
+        document.querySelector("#watermark-secret").value,
+        JSON.stringify(
+          document
+            .querySelector("#watermark-methods")
+            .value.split(",")
+            .map((method) => method.trim())
+            .filter(Boolean)
+        ),
+        document.querySelector("#canary-phrase").value || null
+      ])
+    );
+    download(
+      "pact-watermarked.txt",
+      result.transformed_content,
+      "text/plain"
+    );
+    show(result);
+  });
+
+document.querySelector("#watermark-image").onclick = () =>
+  run(async () => {
+    const registry = await registryJson("/api/v1/registry");
+    const imageBase64 = await readBase64(
+      document.querySelector("#watermark-image-file")
+    );
+    const result = JSON.parse(
+      await callPython(
+        "watermark_image",
+        [
+          imageBase64,
+          document.querySelector("#watermark-image-mime-type").value ||
+            "image/png",
+          document.querySelector("#watermark-claim-id").value,
+          registry.root_fingerprint
+        ],
+        "image-watermarks"
+      )
+    );
+    download(
+      "pact-watermarked-image.b64",
+      result.image_b64,
+      "text/plain"
+    );
     show(result);
   });
 
@@ -347,4 +476,10 @@ document.querySelector("#analyze-probes").onclick = () =>
     show(result);
   });
 
-show("Pyodide worker ready. Create or import an identity to begin.");
+updateSession();
+setPage(identity ? "claims" : "identity");
+show(
+  identity
+    ? "Identity loaded. Choose an action page."
+    : "Pyodide worker ready. Create or import an identity to begin."
+);

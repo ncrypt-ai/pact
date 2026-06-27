@@ -1,3 +1,5 @@
+import io
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID
@@ -191,9 +193,24 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert workspace.status_code == 200
     assert "PACT Workspace" in workspace.text
     assert "Pyodide worker" in workspace.text
+    assert "<script>" not in workspace.text
+    assert 'data-page="identity"' in workspace.text
+    assert 'data-page="sign"' in workspace.text
+    assert "Display name (optional)" in workspace.text
+    csp = workspace.headers["Content-Security-Policy"]
+    assert "'wasm-unsafe-eval'" in csp
+    assert "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net" in csp
     package = enabled_client.get("/app/pact-browser-core.pyz")
     assert package.status_code == 200
     assert package.headers["content-type"] == "application/zip"
+    core_names = zipfile.ZipFile(io.BytesIO(package.content)).namelist()
+    assert "pact/browser.py" in core_names
+    assert "pact/carriers/c2pa_text.py" not in core_names
+
+    documents = enabled_client.get("/app/pact-browser-documents.pyz")
+    document_names = zipfile.ZipFile(io.BytesIO(documents.content)).namelist()
+    assert "pact/carriers/c2pa.py" in document_names
+    assert "pact/carriers/c2pa_text.py" not in document_names
 
 
 def test_web_workspace_can_run_without_local_registry_service() -> None:

@@ -55,8 +55,9 @@ JSON API and proof pages, or it can also expose ``/app``:
 The workspace runs PACT's Python logic in Pyodide inside a Web Worker. The
 JavaScript layer is limited to browser plumbing: file input/output, registry
 requests, local browser storage, and page updates. Feature packs are loaded on
-demand so identity, manifest, probe, C2PA carrier, PDF, and document workflows
-can stay aligned with the CLI without loading every dependency at startup.
+demand so identity, manifest, watermark, probe, C2PA carrier, PDF, and document
+workflows can stay aligned with the CLI without loading every dependency at
+startup.
 
 The workspace can also be hosted without a local registry service:
 

@@ -60,10 +60,7 @@ _BROWSER_C2PA_MODULES = (
     "carriers/c2pa.py",
     "carriers/c2pa_text.py",
 )
-_BROWSER_DOCUMENT_MODULES = (
-    "carriers/c2pa.py",
-    "carriers/c2pa_text.py",
-)
+_BROWSER_DOCUMENT_MODULES = ("carriers/c2pa.py",)
 _BROWSER_IMAGE_MODULES = ("watermarks/image.py",)
 
 
@@ -83,7 +80,7 @@ def _source_directory() -> Path:
 def _browser_python_archive(feature: str) -> bytes:
     source_directory = _source_directory()
     modules = list(_BROWSER_CORE_MODULES)
-    if feature in {"c2pa", "documents"}:
+    if feature == "c2pa":
         modules.extend(_BROWSER_C2PA_MODULES)
     if feature == "documents":
         modules.extend(_BROWSER_DOCUMENT_MODULES)
@@ -246,7 +243,7 @@ def create_app(
             "Content-Security-Policy",
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
             "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' https://cdn.jsdelivr.net; "
+            "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
             "worker-src 'self'; connect-src 'self' https: http://localhost:* "
             "http://127.0.0.1:*",
         )

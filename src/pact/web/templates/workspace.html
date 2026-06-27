@@ -5,7 +5,7 @@
     <title>PACT Workspace</title>
     <link rel="stylesheet" href="/static/workspace.css">
   </head>
-  <body>
+  <body data-registry-url="{{ registry_url }}" data-public-base-url="{{ public_base_url }}">
     <header>
       <p><a href="/">PACT Registry</a></p>
       <h1>PACT Workspace</h1>
@@ -21,20 +21,37 @@
         Private keys stay in this browser unless you export them. Registry
         actions are signed locally before they are submitted.
       </p>
+      <p id="session-status" class="session-status">No identity loaded.</p>
+      <nav class="workspace-nav" aria-label="Workspace actions">
+        <button type="button" data-page-button="identity">Identity</button>
+        <button type="button" data-page-button="claims">Claims</button>
+        <button type="button" data-page-button="sign">Sign</button>
+        <button type="button" data-page-button="verify">Verify</button>
+        <button type="button" data-page-button="watermarks">Watermarks</button>
+        <button type="button" data-page-button="documents">Documents</button>
+        <button type="button" data-page-button="probes">Probes</button>
+      </nav>
     </header>
 
     <main>
-      <section>
-        <h2>1. Identity</h2>
+      <section data-page="identity">
+        <h2>Identity</h2>
         <p>
           Create or import the key that signs your claims. Save the encrypted
-          export; losing it means losing the signing identity.
+          export; losing it means losing the signing identity. Once an identity
+          is loaded, the rest of the workspace stays available for additional
+          files and claims.
         </p>
-        <label>Password <input id="identity-password" type="password"></label>
+        <form id="identity-form">
+          <label>
+            Password
+            <input id="identity-password" type="password" autocomplete="current-password">
+          </label>
+        </form>
         <div class="actions">
-          <button id="create-identity">Create identity</button>
-          <button id="show-identity">Show identity</button>
-          <button id="export-identity">Download encrypted identity</button>
+          <button type="button" id="create-identity">Create identity</button>
+          <button type="button" id="show-identity">Show identity</button>
+          <button type="button" id="export-identity">Download encrypted identity</button>
         </div>
         <label>
           Import encrypted identity
@@ -42,23 +59,36 @@
         </label>
       </section>
 
-      <section>
-        <h2>2. Register profile</h2>
+      <section data-page="claims">
+        <h2>Claims and profile</h2>
         <p>
           This publishes your public key and device/browser fingerprint to the
-          registry. The fingerprint is anti-spam friction, not proof of legal
-          identity.
+          registry. After that, you can register signed manifests as claims
+          without recreating the identity. Display name is optional; leave it
+          blank to use a pseudonymous key ID only.
         </p>
-        <label>Display name <input id="display-name"></label>
-        <button id="register-profile">Register profile</button>
+        <label>Display name (optional) <input id="display-name"></label>
+        <button type="button" id="register-profile">Register profile</button>
+        <hr>
+        <p>
+          Register a signed manifest from the signing page, or upload one that
+          was created earlier.
+        </p>
+        <label>Signed manifest <input id="claim-manifest-file" type="file"></label>
+        <button type="button" id="register-claim">Register signed claim</button>
+        <hr>
+        <p>Revoke one of your claims if it should no longer be trusted.</p>
+        <label>Claim ID <input id="revoke-claim-id"></label>
+        <label>Reason <input id="revoke-reason"></label>
+        <button type="button" id="revoke-claim">Revoke claim</button>
       </section>
 
-      <section>
-        <h2>3. Sign and register content</h2>
+      <section data-page="sign">
+        <h2>Sign content</h2>
         <p>
           The file is read in your browser. PACT stores a signed manifest and
-          nonce for verification; the registry receives the signed manifest when
-          you register the claim.
+          nonce for verification. Register the resulting manifest from the
+          claims page.
         </p>
         <input id="content-file" type="file">
         <label>MIME type <input id="mime-type" placeholder="text/plain"></label>
@@ -70,13 +100,13 @@
           </select>
         </label>
         <div class="actions">
-          <button id="sign-content">Sign content</button>
-          <button id="register-claim">Register signed claim</button>
+          <button type="button" id="sign-content">Sign content</button>
+          <button type="button" id="go-register-claim">Go to claims</button>
         </div>
       </section>
 
-      <section>
-        <h2>4. Verify and audit</h2>
+      <section data-page="verify">
+        <h2>Verify and audit</h2>
         <p>
           Verification checks signatures and optional content binding. Privacy
           audit checks what would become public before you register a claim.
@@ -85,13 +115,36 @@
         <label>Nonce <input id="nonce-file" type="file"></label>
         <label>Original content <input id="verify-content-file" type="file"></label>
         <div class="actions">
-          <button id="verify-manifest">Verify manifest</button>
-          <button id="audit-manifest">Privacy audit</button>
+          <button type="button" id="verify-manifest">Verify manifest</button>
+          <button type="button" id="audit-manifest">Privacy audit</button>
         </div>
       </section>
 
-      <section>
-        <h2>5. Document carriers</h2>
+      <section data-page="watermarks">
+        <h2>Watermarks</h2>
+        <p>
+          Text watermarking edits prose in your browser. Image watermarking
+          uses the same TrustMark-backed Python path as the CLI when the
+          browser runtime can load the required image dependencies.
+        </p>
+        <label>Text to watermark <textarea id="watermark-text-input"></textarea></label>
+        <label>Watermark secret <input id="watermark-secret"></label>
+        <label>
+          Text methods
+          <input id="watermark-methods" value="invisible">
+        </label>
+        <label>Canary phrase <input id="canary-phrase"></label>
+        <label>Image to watermark <input id="watermark-image-file" type="file"></label>
+        <label>Image MIME type <input id="watermark-image-mime-type" placeholder="image/png"></label>
+        <label>Claim ID <input id="watermark-claim-id"></label>
+        <div class="actions">
+          <button type="button" id="watermark-text">Watermark text</button>
+          <button type="button" id="watermark-image">Watermark image</button>
+        </div>
+      </section>
+
+      <section data-page="documents">
+        <h2>Document carriers</h2>
         <p>
           PDF and ZIP-based documents use the same Python embedding code as the
           CLI. Native C2PA SDK operations load only when available in the
@@ -101,13 +154,13 @@
         <label>Manifest store <input id="manifest-store-file" type="file"></label>
         <label>Document MIME type <input id="document-mime-type" placeholder="application/pdf"></label>
         <div class="actions">
-          <button id="embed-document">Embed manifest store</button>
-          <button id="extract-document">Extract manifest store</button>
+          <button type="button" id="embed-document">Embed manifest store</button>
+          <button type="button" id="extract-document">Extract manifest store</button>
         </div>
       </section>
 
-      <section>
-        <h2>6. Model probes</h2>
+      <section data-page="probes">
+        <h2>Model probes</h2>
         <p>
           Create probes locally, paste model responses later, and export the
           evidence package.
@@ -117,8 +170,8 @@
         <label>Target model <input id="target-model"></label>
         <label>Responses JSONL <textarea id="responses-jsonl"></textarea></label>
         <div class="actions">
-          <button id="create-probes">Create probes</button>
-          <button id="analyze-probes">Analyze responses</button>
+          <button type="button" id="create-probes">Create probes</button>
+          <button type="button" id="analyze-probes">Analyze responses</button>
         </div>
       </section>
 
@@ -128,12 +181,6 @@
       </section>
     </main>
 
-    <script>
-      window.PACT_WORKSPACE = {
-        registryUrl: "{{ registry_url }}",
-        publicBaseUrl: "{{ public_base_url }}"
-      };
-    </script>
     <script type="module" src="/static/workspace.js"></script>
   </body>
 </html>

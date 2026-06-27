@@ -121,7 +121,9 @@ _ZIP_BASED_MIME_TYPES = {
 }
 
 
-def format_embeddable(mime_type: str, manifest_bytes: bytes) -> tuple[int, bytes]:
+def format_embeddable(
+    mime_type: str, manifest_bytes: bytes
+) -> tuple[int, bytes]:
     """Format native C2PA manifest bytes for embeddable asset storage."""
 
     return cast(

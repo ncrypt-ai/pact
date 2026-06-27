@@ -9,20 +9,13 @@ from typing import cast
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile
-from pact.carriers.c2pa import (
-    C2paError,
-    embed_c2pa_manifest_in_pdf,
-    embed_c2pa_manifest_in_zip_document,
-    extract_c2pa_manifest_from_pdf,
-    extract_c2pa_manifest_from_zip_document,
-)
-from pact.detection import (
-    ProbeEvidencePackage,
+from pact.detection.evidence import ProbeEvidencePackage
+from pact.detection.probes import (
     ProbeSet,
-    analyze_probe_responses,
     create_probe_set,
     responses_from_jsonl,
 )
+from pact.detection.statistics import analyze_probe_responses
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
     Manifest,
@@ -283,8 +276,73 @@ def analyze_probes(
     return _json(package.to_dict())
 
 
+def watermark_text(
+    content: str,
+    secret: str,
+    methods_json: str = '["invisible"]',
+    canary_phrase: str | None = None,
+) -> str:
+    """Apply text watermark plugins to browser-provided prose."""
+
+    from pact.watermarks.base import TextWatermarkParameters
+    from pact.watermarks.canary import CanaryPhrasePlugin
+    from pact.watermarks.invisible import InvisibleFramePlugin
+    from pact.watermarks.lexical import LexicalSubstitutionPlugin
+    from pact.watermarks.statistical import StatisticalSentencePatternPlugin
+    from pact.watermarks.syntactic import SyntacticVariationPlugin
+    from pact.watermarks.textual import apply_text_watermark_plugins
+
+    available = {
+        "invisible": InvisibleFramePlugin,
+        "lexical": LexicalSubstitutionPlugin,
+        "syntactic": SyntacticVariationPlugin,
+        "canary": CanaryPhrasePlugin,
+        "statistical": StatisticalSentencePatternPlugin,
+    }
+    methods = json.loads(methods_json)
+    plugins = tuple(available[name]() for name in methods)
+    result = apply_text_watermark_plugins(
+        content,
+        secret,
+        plugins,
+        TextWatermarkParameters(
+            user_confirmation=True,
+            approved_canary_phrase=canary_phrase or None,
+        ),
+    )
+    return _json(result.to_dict())
+
+
+def watermark_image(
+    image_b64: str,
+    mime_type: str,
+    claim_id: str,
+    registry_root_fingerprint: str,
+    strength: float = 1.0,
+) -> str:
+    """Embed a TrustMark claim locator into a browser-provided image."""
+
+    from pact.watermarks.image import embed_image_soft_binding
+
+    result = embed_image_soft_binding(
+        _unb64(image_b64),
+        mime_type,
+        claim_id=UUID(claim_id),
+        registry_root_fingerprint=registry_root_fingerprint,
+        strength=strength,
+    )
+    return _json(
+        {
+            **result.to_dict(),
+            "image_b64": _b64(result.image_bytes),
+        }
+    )
+
+
 def embed_pdf_manifest(pdf_b64: str, manifest_store_b64: str) -> str:
     """Embed a C2PA manifest store into a PDF embedded file stream."""
+
+    from pact.carriers.c2pa import embed_c2pa_manifest_in_pdf
 
     result = embed_c2pa_manifest_in_pdf(
         _unb64(pdf_b64),
@@ -302,6 +360,8 @@ def embed_pdf_manifest(pdf_b64: str, manifest_store_b64: str) -> str:
 def extract_pdf_manifest(pdf_b64: str) -> str:
     """Extract a C2PA manifest store from a PDF embedded file stream."""
 
+    from pact.carriers.c2pa import extract_c2pa_manifest_from_pdf
+
     manifest_store = extract_c2pa_manifest_from_pdf(_unb64(pdf_b64))
     return _json({"manifest_store_b64": _b64(manifest_store)})
 
@@ -312,6 +372,8 @@ def embed_zip_document_manifest(
     manifest_store_b64: str,
 ) -> str:
     """Embed a C2PA manifest store into a ZIP-based document."""
+
+    from pact.carriers.c2pa import embed_c2pa_manifest_in_zip_document
 
     result = embed_c2pa_manifest_in_zip_document(
         _unb64(asset_b64),
@@ -330,6 +392,8 @@ def embed_zip_document_manifest(
 def extract_zip_document_manifest(asset_b64: str) -> str:
     """Extract a C2PA manifest store from a ZIP-based document."""
 
+    from pact.carriers.c2pa import extract_c2pa_manifest_from_zip_document
+
     return _json(
         {
             "manifest_store_b64": _b64(
@@ -345,6 +409,8 @@ def unavailable_native_c2pa() -> str:
     try:
         __import__("c2pa")
     except ImportError as error:
+        from pact.carriers.c2pa import C2paError
+
         raise C2paError(
             "native C2PA signing/reading is unavailable in this browser "
             "runtime unless the official C2PA SDK can be loaded"
