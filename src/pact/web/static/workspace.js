@@ -124,6 +124,23 @@ async function readText(input) {
   return await file.text();
 }
 
+async function readImportFile(file) {
+  const text = await file.text();
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("{")) {
+    return JSON.parse(text);
+  }
+  if (!trimmed.includes("ENCRYPTED PRIVATE KEY")) {
+    throw new Error(
+      "Choose a browser identity JSON export or a CLI encrypted PKCS#8 PEM export."
+    );
+  }
+  return {
+    registry_url: registryUrl(),
+    encrypted_pkcs8_b64: btoa(text)
+  };
+}
+
 function selectedFileStem(input) {
   const file = input.files[0];
   if (!file) {
@@ -277,12 +294,18 @@ document.querySelector("#export-identity").onclick = () =>
 
 document.querySelector("#identity-import").onchange = (event) =>
   run(async () => {
-    identity = JSON.parse(await event.target.files[0].text());
-    await callPython("import_identity", [
+    const imported = await readImportFile(event.target.files[0]);
+    const publicIdentity = JSON.parse(await callPython("import_identity", [
       registryUrl(),
-      identity.encrypted_pkcs8_b64,
+      imported.encrypted_pkcs8_b64,
       password()
-    ]);
+    ]));
+    identity = {
+      ...imported,
+      registry_url: publicIdentity.registry_url,
+      key_id: publicIdentity.key_id,
+      public_jwk: publicIdentity.public_jwk
+    };
     rememberPassword();
     localStorage.setItem("pact.identity", JSON.stringify(identity));
     updateSession();
