@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pact.inspection import inspect_content
+from pact.metadata import PACKAGE_VERSION, server_metadata
 from pact.registry.app import (
     ChallengePurpose,
     KeyRotationRequest,
@@ -128,6 +129,7 @@ def _registry_info(service: RegistryService) -> dict[str, object]:
         "intermediate_certificate_pem": authority.intermediate_certificate_pem.decode(
             "ascii"
         ),
+        "server": server_metadata(),
     }
 
 
@@ -223,7 +225,7 @@ def create_app(
         allowed_hosts.extend(["127.0.0.1", "localhost"])
     app = FastAPI(
         title="PACT Registry",
-        version="0.0.1",
+        version=PACKAGE_VERSION,
         summary="Registry API and proof pages for PACT",
         middleware=[
             Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
@@ -320,6 +322,14 @@ def create_app(
     async def server_routes() -> dict[str, object]:
         return {
             "routes": [route.to_dict() for route in default_routes()],
+        }
+
+    @app.get("/api/v1/server/info")
+    async def server_info() -> dict[str, object]:
+        return {
+            "registry_url": app.state.registry_url,
+            "public_base_url": app.state.public_base_url,
+            "server": server_metadata(),
         }
 
     @app.post("/api/v1/inspect")

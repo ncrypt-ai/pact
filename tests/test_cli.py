@@ -17,6 +17,7 @@ from pact import (
     sign_manifest,
 )
 from pact.cli import build_parser, main
+from pact.metadata import PACKAGE_VERSION
 
 
 @pytest.fixture(autouse=True)
@@ -298,6 +299,7 @@ def test_cli_web_command_bootstraps_local_app(
         calls["port"] = port
         calls["log_level"] = log_level
         calls["app_title"] = app.title
+        calls["app_version"] = app.version
 
     monkeypatch.setitem(
         sys.modules,
@@ -322,6 +324,7 @@ def test_cli_web_command_bootstraps_local_app(
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8123
     assert calls["app_title"] == "PACT Registry"
+    assert calls["app_version"] == PACKAGE_VERSION
     assert not (
         tmp_path / "web-data" / "ca" / "offline_root_private_key.pem"
     ).exists()

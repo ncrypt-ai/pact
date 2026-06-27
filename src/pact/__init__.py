@@ -1,7 +1,8 @@
 """Public package exports for PACT."""
 
 from importlib import import_module
-from importlib.metadata import version
+
+from pact.metadata import PACKAGE_VERSION
 
 _EXPORTS = {
     "CanonicalizationProfile": "pact.canonical",
@@ -172,7 +173,7 @@ _EXPORTS = {
 
 __all__ = sorted([*_EXPORTS, "__version__"])
 
-__version__ = version("pact")
+__version__ = PACKAGE_VERSION
 
 
 def __getattr__(name: str) -> object:

@@ -102,6 +102,9 @@ scopes such as ``pact/claims:write`` and ``pact/disputes:resolve``.
 The running web app exposes the same route map at
 ``/api/v1/server/routes`` so operators and clients can discover the public
 URLs and mutation permissions supported by a deployment.
+``/api/v1/server/info`` reports the package version and deployed commit hash.
+Set ``PACT_COMMIT_SHA`` during deployment so serverless or container builds do
+not depend on a local ``.git`` directory.
 ``/api/v1/inspect`` is public and accepts multipart uploads for signed
 manifest JSON or raw carrier media. It reports embedded references and, when
 the referenced claim exists in the registry, registry verification evidence.

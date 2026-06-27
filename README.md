@@ -66,7 +66,8 @@ PACT is designed to avoid these failure modes:
 ## Version and releases
 
 - Package: `pact`
-- Current version: `0.0.1`
+- Current version: defined once in `pyproject.toml` and exposed as package
+  metadata
 - Status: pre-alpha
 - Python: `>=3.11`
 - Release notes: `CHANGELOG.md`

@@ -22,6 +22,7 @@ from pact import (
     embed_text_carrier,
     sign_manifest,
 )
+from pact.metadata import PACKAGE_VERSION
 from pact.registry import MutationChallenge
 from pact.web import create_app
 
@@ -154,8 +155,9 @@ def register_claim(
 
 
 def test_web_app_serves_registry_profile_claim_and_verify_pages(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setenv("PACT_COMMIT_SHA", "abc123def456")
     client, identity = make_client(tmp_path)
     register_profile(client, identity)
 
@@ -166,9 +168,18 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     routes = client.get("/api/v1/server/routes")
     assert routes.status_code == 200
     route_names = {route["name"] for route in routes.json()["routes"]}
-    assert {"registry_info", "register_claim", "verify_claim_page"}.issubset(
-        route_names
-    )
+    assert {
+        "registry_info",
+        "register_claim",
+        "server_info",
+        "verify_claim_page",
+    }.issubset(route_names)
+    registry_info = client.get("/api/v1/registry").json()
+    assert registry_info["server"]["version"] == PACKAGE_VERSION
+    assert registry_info["server"]["commit"] == "abc123def456"
+    server_info = client.get("/api/v1/server/info")
+    assert server_info.status_code == 200
+    assert server_info.json()["server"] == registry_info["server"]
     assert client.get(f"/api/v1/profiles/{identity.key_id}").status_code == 200
     assert (
         client.get(f"/api/v1/profiles/{identity.key_id}/evidence").status_code

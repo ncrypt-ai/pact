@@ -299,6 +299,7 @@ custom request scripts:
 This serves:
 
 - ``/api/v1/registry``
+- ``/api/v1/server/info``
 - ``/api/v1/inspect``
 - ``/api/v1/challenges``
 - ``/api/v1/profiles/{key_id}``

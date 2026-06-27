@@ -181,6 +181,13 @@ def default_routes() -> tuple[RouteConfig, ...]:
             "server_routes",
         ),
         RouteConfig(
+            "server_info",
+            "GET",
+            "/api/v1/server/info",
+            RouteAuth.PUBLIC,
+            "server_info",
+        ),
+        RouteConfig(
             "inspect",
             "POST",
             "/api/v1/inspect",
