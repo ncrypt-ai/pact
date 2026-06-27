@@ -1,14 +1,15 @@
 """Browser-facing helpers used by the Pyodide workspace."""
 
 import base64
+import hashlib
 import json
 import os
 from dataclasses import asdict
-from datetime import datetime
 from typing import cast
 from uuid import UUID
 
-from pact.canonical import CanonicalizationProfile
+from pact.canonical import CanonicalizationProfile, JsonValue, canonical_json
+from pact.crypto import sign_es256
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.probes import (
     ProbeSet,
@@ -25,7 +26,6 @@ from pact.manifest import (
 )
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
-from pact.registry import ChallengePurpose, MutationChallenge, MutationRequest
 
 
 def _b64(value: bytes) -> str:
@@ -103,20 +103,46 @@ def rotate_identity(
     )
 
 
-def challenge_from_json(value: str) -> MutationChallenge:
+def challenge_from_json(value: str) -> dict[str, object]:
     """Parse a registry challenge JSON response."""
 
     data = json.loads(value)
-    return MutationChallenge(
-        registry_url=data["registry_url"],
-        challenge_id=UUID(data["challenge_id"]),
-        purpose=ChallengePurpose(data["purpose"]),
-        issued_at=datetime.fromisoformat(data["issued_at"]),
-        expires_at=datetime.fromisoformat(data["expires_at"]),
-        challenge_nonce=data["challenge_nonce"],
-        difficulty=data["difficulty"],
-        bound_key_id=data.get("bound_key_id"),
-    )
+    challenge: dict[str, object] = {
+        "registry_url": data["registry_url"],
+        "challenge_id": data["challenge_id"],
+        "purpose": data["purpose"],
+        "issued_at": data["issued_at"],
+        "expires_at": data["expires_at"],
+        "challenge_nonce": data["challenge_nonce"],
+        "difficulty": data["difficulty"],
+    }
+    if data.get("bound_key_id") is not None:
+        challenge["bound_key_id"] = data["bound_key_id"]
+    return challenge
+
+
+def _leading_zero_bits(value: bytes) -> int:
+    bits = 0
+    for byte in value:
+        if byte == 0:
+            bits += 8
+            continue
+        return bits + (8 - byte.bit_length())
+    return bits
+
+
+def _verify_pow(challenge: dict[str, object], solution: int) -> bool:
+    if solution < 0:
+        return False
+    digest = hashlib.sha256(
+        canonical_json(cast(JsonValue, challenge))
+        + b":"
+        + str(solution).encode("ascii")
+    ).digest()
+    difficulty = challenge["difficulty"]
+    if not isinstance(difficulty, int):
+        raise ValueError("challenge difficulty must be an integer")
+    return _leading_zero_bits(digest) >= difficulty
 
 
 def solve_pow(challenge_json: str) -> int:
@@ -124,7 +150,7 @@ def solve_pow(challenge_json: str) -> int:
 
     challenge = challenge_from_json(challenge_json)
     solution = 0
-    while not challenge.verify_solution(solution):
+    while not _verify_pow(challenge, solution):
         solution += 1
     return solution
 
@@ -140,19 +166,26 @@ def create_mutation_request(
 
     identity = _identity(registry_url, encrypted_pkcs8_b64, password)
     challenge = challenge_from_json(challenge_json)
-    request = MutationRequest.create(
-        identity,
-        challenge,
-        payload=cast(dict[str, object], json.loads(payload_json)),
-        proof_of_work_solution=solve_pow(challenge_json),
+    proof_of_work_solution = solve_pow(challenge_json)
+    payload = cast(dict[str, object], json.loads(payload_json))
+    signed_bytes = canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge,
+                "claimant_public_jwk": identity.public_jwk,
+                "proof_of_work_solution": proof_of_work_solution,
+                "payload": payload,
+            },
+        )
     )
     return _json(
         {
-            "challenge_id": str(request.challenge_id),
-            "claimant_public_jwk": request.claimant_public_jwk,
-            "proof_of_work_solution": request.proof_of_work_solution,
-            "payload": request.payload,
-            "signature": request.signature,
+            "challenge_id": challenge["challenge_id"],
+            "claimant_public_jwk": identity.public_jwk,
+            "proof_of_work_solution": proof_of_work_solution,
+            "payload": payload,
+            "signature": sign_es256(identity.private_key, signed_bytes),
         }
     )
 

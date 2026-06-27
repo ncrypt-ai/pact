@@ -243,7 +243,7 @@ def create_app(
             "Content-Security-Policy",
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
             "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
+            "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
             "worker-src 'self'; connect-src 'self' https: http://localhost:* "
             "http://127.0.0.1:*",
         )

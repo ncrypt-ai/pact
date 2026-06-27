@@ -200,9 +200,14 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert "Unlock saved identity" in workspace.text
     assert "Vault password" in workspace.text
     assert "CLI PKCS#8 identity export" in workspace.text
+    assert 'autocomplete="username"' in workspace.text
     csp = workspace.headers["Content-Security-Policy"]
+    assert "'unsafe-eval'" in csp
     assert "'wasm-unsafe-eval'" in csp
-    assert "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net" in csp
+    assert (
+        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net"
+        in csp
+    )
     package = enabled_client.get("/app/pact-browser-core.pyz")
     assert package.status_code == 200
     assert package.headers["content-type"] == "application/zip"
