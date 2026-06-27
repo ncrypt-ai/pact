@@ -8,7 +8,7 @@
   <body data-registry-url="{{ registry_url }}" data-public-base-url="{{ public_base_url }}">
     <header>
       <p><a href="/">PACT Registry</a></p>
-      <h1>PACT Workspace</h1>
+      <h1>PACT Web App</h1>
       <p>
         Registry:
         <input id="registry-url" value="{{ registry_url }}" size="48">
@@ -18,29 +18,29 @@
         {{ "standalone web interface" if standalone else "registry-hosted web interface" }}
       </p>
       <p class="note">
-        Private keys stay in this browser unless you export them. Registry
-        actions are signed locally before they are submitted.
+        Your private signing key stays in this browser. The registry only sees
+        public proof records you choose to publish.
       </p>
-      <p id="session-status" class="session-status">No identity loaded.</p>
+      <p id="session-status" class="session-status">No profile loaded.</p>
       <p id="workspace-message" role="status"></p>
       <nav class="workspace-nav" aria-label="Workspace actions">
-        <button type="button" data-page-button="identity">Identity</button>
-        <button type="button" data-page-button="claims">Claims</button>
-        <button type="button" data-page-button="sign">Sign</button>
-        <button type="button" data-page-button="verify">Verify</button>
-        <button type="button" data-page-button="watermarks">Watermarks</button>
-        <button type="button" data-page-button="documents">Documents</button>
-        <button type="button" data-page-button="probes">Probes</button>
+        <button type="button" data-page-button="identity">Your profile</button>
+        <button type="button" data-page-button="sign">Sign and publish</button>
+        <button type="button" data-page-button="mutations">Register edits</button>
+        <button type="button" data-page-button="inspect">Inspect or verify</button>
+        <button type="button" data-page-button="lookup">Look up records</button>
+        <button type="button" data-page-button="claims">Your claims</button>
+        <button type="button" data-page-button="disputes">Disputes</button>
       </nav>
     </header>
 
     <main>
       <section data-page="identity">
-        <h2>Get started</h2>
+        <h2>Your profile</h2>
         <p>
-          This browser keeps the signing key for this registry. If you already
-          used this site here, PACT will unlock it automatically. If not, it
-          creates a new private identity and registers a public profile for you.
+          Your browser profile is the private signing key saved in this
+          browser. Your public registry profile is the public record other
+          people can look up after you register.
         </p>
         <form id="identity-form">
           <input
@@ -58,25 +58,32 @@
             <input id="identity-passcode" type="password" autocomplete="current-password" required>
           </label>
           <p class="small">
-            Your public profile can be anonymous. The registry receives your
-            public key and a browser fingerprint used to limit duplicate
-            signups; your private key stays in this browser. Choose your own
-            passcode. PACT will not create one for you.
+            PACT will not create a passcode for you. If you lose it, you may
+            not be able to use this signing profile again.
           </p>
         </form>
         <div class="actions">
-          <button type="button" id="continue-identity">Continue</button>
+          <button type="button" id="continue-identity" class="primary-action">Continue</button>
           <button type="button" id="logout-identity" hidden>Log out</button>
         </div>
+        <p class="small">
+          <strong>Saved browser profile:</strong> the encrypted signing profile
+          stored in this browser.
+        </p>
+        <p class="small">
+          <strong>Public registry profile:</strong> the public record other
+          people can look up after registration.
+        </p>
+        <div id="browser-profile-summary" class="result" hidden></div>
+        <div id="public-profile-summary" class="result" hidden></div>
         <details>
-          <summary>Recovery and advanced options</summary>
-          <p>
-            Import an identity made by the CLI, or download a recovery file for
-            this browser identity. A CLI import may ask for the password used
-            when the CLI identity was exported.
+          <summary>Recovery and account options</summary>
+          <p class="small">
+            Use these when you want to inspect the public registry record,
+            download a backup, import an existing profile, or rotate keys.
           </p>
           <label>
-            Import browser recovery JSON or CLI PKCS#8 identity export
+            Import recovery file or CLI identity export
             <input id="identity-import" type="file">
           </label>
           <label>
@@ -84,126 +91,294 @@
             <input id="identity-import-password" type="password" autocomplete="current-password">
           </label>
           <div class="actions">
-            <button type="button" id="show-identity">Show public identity</button>
+            <button type="button" id="show-identity">Check public registry profile</button>
             <button type="button" id="export-identity">Download recovery file</button>
+            <button type="button" id="rotate-key">Rotate signing key</button>
           </div>
         </details>
       </section>
 
-      <section data-page="claims">
-        <h2>Claims and profile</h2>
-        <p>
-          This publishes your public key and device/browser fingerprint to the
-          registry. After that, you can register signed manifests as claims
-          without recreating the identity. Display name is optional; leave it
-          blank to use a pseudonymous key ID only.
-        </p>
-        <label>Display name (optional) <input id="display-name"></label>
-        <button type="button" id="register-profile">Register profile</button>
-        <hr>
-        <p>
-          Register a signed manifest from the signing page, or upload one that
-          was created earlier.
-        </p>
-        <label>Signed manifest <input id="claim-manifest-file" type="file"></label>
-        <button type="button" id="register-claim">Register signed claim</button>
-        <hr>
-        <p>Revoke one of your claims if it should no longer be trusted.</p>
-        <label>Claim ID <input id="revoke-claim-id"></label>
-        <label>Reason <input id="revoke-reason"></label>
-        <button type="button" id="revoke-claim">Revoke claim</button>
-      </section>
-
       <section data-page="sign">
-        <h2>Sign content</h2>
+        <h2>Sign and publish</h2>
         <p>
-          The file is read in your browser. PACT stores a signed manifest and
-          nonce for verification. Register the resulting manifest from the
-          claims page.
+          Choose a file, decide what others may do with it, and PACT will
+          download the proof files. By default it also publishes the proof so
+          other people can verify it later.
         </p>
-        <input id="content-file" type="file">
-        <label>MIME type <input id="mime-type" placeholder="text/plain"></label>
-        <label>
-          Canonicalization
-          <select id="canonicalization">
-            <option value="pact.text.v1">Text</option>
-            <option value="pact.binary.v1">Binary</option>
-          </select>
+        <label>File <input id="content-file" type="file"></label>
+        <fieldset>
+          <legend>Permissions</legend>
+          <p class="small">
+            Choose what people and model builders may do with this file. These
+            are the same permission categories PACT stores in the manifest.
+          </p>
+          <div id="sign-policy"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Claimed action</legend>
+          <label>
+            What are you claiming happened to this file?
+            <select id="c2pa-action">
+              <option value="c2pa.created">I created it</option>
+              <option value="c2pa.edited">I edited it</option>
+            </select>
+          </label>
+          <label>
+            Short description (optional)
+            <input id="c2pa-action-description" placeholder="Example: corrected color and exported final version">
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>Optional protection</legend>
+          <p class="small">
+            Text protection changes the text before signing. Image protection
+            adds a claim locator after the proof is published.
+          </p>
+          <div id="text-protection-options">
+            <label class="inline-choice">
+              <input id="protect-text-before-signing" type="checkbox">
+              <span>
+                Add text watermark before signing. Use this when you are
+                publishing text and want later copies to carry hidden or
+                visible evidence that points back to your proof. PACT changes
+                the text first, downloads a protected text copy, and signs that
+                protected copy so the watermark is covered by the proof.
+              </span>
+            </label>
+            <div class="option-grid">
+              <label class="inline-choice">
+                <input name="text-watermark-method" type="checkbox" value="invisible" checked>
+                <span>Invisible marks: hard-to-see Unicode changes.</span>
+              </label>
+              <label class="inline-choice">
+                <input name="text-watermark-method" type="checkbox" value="canary">
+                <span>Canary phrase: inserts your approved phrase.</span>
+              </label>
+              <label class="inline-choice">
+                <input name="text-watermark-method" type="checkbox" value="lexical">
+                <span>Lexical changes: swaps eligible words.</span>
+              </label>
+              <label class="inline-choice">
+                <input name="text-watermark-method" type="checkbox" value="syntactic">
+                <span>Syntactic changes: light sentence-structure variation.</span>
+              </label>
+              <label class="inline-choice">
+                <input name="text-watermark-method" type="checkbox" value="statistical">
+                <span>Statistical pattern: keyed sentence selection marks.</span>
+              </label>
+            </div>
+            <label>
+              Watermark secret
+              <input id="watermark-secret" placeholder="Required when text watermarking is on">
+            </label>
+            <label>
+              Canary phrase
+              <input id="canary-phrase" placeholder="Required only when canary phrase is selected">
+            </label>
+          </div>
+          <div id="image-protection-options">
+            <label class="inline-choice">
+              <input id="protect-image-after-publish" type="checkbox">
+              <span>
+                Add an image watermark after publishing. Use this for images
+                when you want copies of the image to carry a machine-readable
+                pointer to the registry claim. PACT first publishes the claim,
+                then downloads an image copy with a small claim locator embedded
+                so inspection can find the registry claim.
+              </span>
+            </label>
+          </div>
+          <div id="embedded-proof-options">
+            <label class="inline-choice">
+              <input id="download-embedded-proof" type="checkbox" checked>
+              <span>
+                Download a copy with the proof embedded. Use this when you want
+                the file itself to carry the proof, so someone can inspect the
+                file without separately receiving the proof JSON. This is
+                available only for supported file types such as text, HTML, XML,
+                PDF, and ZIP-based Office documents.
+              </span>
+            </label>
+          </div>
+        </fieldset>
+        <label class="inline-choice">
+          <input id="publish-after-signing" type="checkbox" checked>
+          <span>Publish proof to this registry</span>
         </label>
+        <details>
+          <summary>File type options</summary>
+          <label>MIME type <input id="mime-type" placeholder="text/plain"></label>
+          <label>
+            Canonicalization
+            <select id="canonicalization">
+              <option value="pact.text.v1">Text</option>
+              <option value="pact.binary.v1">Binary</option>
+            </select>
+          </label>
+        </details>
+        <p class="small">
+          Downloads: a proof JSON file and a nonce file. Keep both with the
+          original file if you want to verify claim ownership later.
+        </p>
         <div class="actions">
-          <button type="button" id="sign-content">Sign content</button>
-          <button type="button" id="go-register-claim">Go to claims</button>
+          <button type="button" id="sign-content" class="primary-action">Sign file</button>
         </div>
+        <div id="watermark-preview" class="result" hidden></div>
+        <div id="sign-result" class="result" hidden></div>
       </section>
 
-      <section data-page="verify">
-        <h2>Verify and audit</h2>
+      <section data-page="mutations">
+        <h2>Register edits</h2>
         <p>
-          Verification checks signatures and optional content binding. Privacy
-          audit checks what would become public before you register a claim.
+          Use this when you edited a file that already had a PACT proof. PACT
+          signs the edited file, publishes the new proof, and records the
+          previous proof as the source ingredient.
         </p>
-        <label>Signed manifest <input id="manifest-file" type="file"></label>
-        <label>Nonce <input id="nonce-file" type="file"></label>
-        <label>Original content <input id="verify-content-file" type="file"></label>
+        <label>Edited file <input id="mutation-edited-file" type="file"></label>
+        <fieldset>
+          <legend>Where should PACT find the previous proof?</legend>
+          <p class="small">
+            Choose one. If you leave the optional files empty, PACT will inspect
+            the edited file and look for a proof that survived the edit.
+          </p>
+          <label>
+            Previous proof JSON, if you have it
+            <input id="mutation-proof-file" type="file">
+          </label>
+          <label>
+            Original media file, if the proof is embedded there
+            <input id="mutation-original-file" type="file">
+          </label>
+          <label>
+            Original media MIME type, if needed
+            <input id="mutation-original-mime-type" placeholder="Leave blank to infer">
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>What changed?</legend>
+          <label>
+            Edit type
+            <select id="mutation-action">
+              <option value="c2pa.created">Created</option>
+              <option value="c2pa.edited">Edited</option>
+            </select>
+          </label>
+          <label>
+            Short description
+            <input id="mutation-action-description" placeholder="Example: cropped to square and adjusted brightness">
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>New proof settings</legend>
+          <p class="small">
+            These permissions describe the edited file, not the original source
+            file.
+          </p>
+          <div id="mutation-policy"></div>
+          <label>MIME type <input id="mutation-mime-type" placeholder="Leave blank to infer"></label>
+          <label>
+            Canonicalization
+            <select id="mutation-canonicalization">
+              <option value="pact.text.v1">Text</option>
+              <option value="pact.binary.v1">Binary</option>
+            </select>
+          </label>
+          <div id="mutation-embedded-proof-options">
+            <label class="inline-choice">
+              <input id="mutation-download-embedded-proof" type="checkbox" checked>
+              <span>Download a copy of the edited file with the new proof embedded, when supported.</span>
+            </label>
+          </div>
+        </fieldset>
         <div class="actions">
-          <button type="button" id="verify-manifest">Verify manifest</button>
-          <button type="button" id="audit-manifest">Privacy audit</button>
+          <button type="button" id="register-mutation" class="primary-action">Register edit</button>
         </div>
+        <div id="mutation-result" class="result" hidden></div>
       </section>
 
-      <section data-page="watermarks">
-        <h2>Watermarks</h2>
+      <section data-page="inspect">
+        <h2>Inspect or verify</h2>
         <p>
-          Text watermarking edits prose in your browser. Image watermarking
-          uses the same TrustMark-backed Python path as the CLI when the
-          browser runtime can load the required image dependencies.
+          Upload a document, media file, proof JSON, or embedded carrier. PACT
+          will show what it finds and verify registry evidence when possible.
         </p>
-        <label>Text to watermark <textarea id="watermark-text-input"></textarea></label>
-        <label>Watermark secret <input id="watermark-secret"></label>
+        <label>File to inspect <input id="inspect-file" type="file"></label>
+        <label>MIME type, if known <input id="inspect-mime-type" placeholder="Leave blank to infer"></label>
+        <details>
+          <summary>Claim ownership verification</summary>
+          <label>Proof file <input id="manifest-file" type="file"></label>
+          <label>Nonce <input id="nonce-file" type="file"></label>
+          <label>Original content <input id="verify-content-file" type="file"></label>
+          <button type="button" id="verify-manifest">Check proof file</button>
+        </details>
+        <div class="actions">
+          <button type="button" id="inspect-content" class="primary-action">Inspect file</button>
+          <button type="button" id="audit-manifest">Preview public proof data</button>
+        </div>
+        <div id="inspect-result" class="result" hidden></div>
+      </section>
+
+      <section data-page="lookup">
+        <h2>Look up records</h2>
+        <p>
+          Paste an ID to open a public registry record. Profile keys identify
+          claimants. Claim IDs identify published proofs. Dispute IDs identify
+          objections to claims.
+        </p>
+        <fieldset>
+          <legend>Claimant</legend>
+          <label>Profile key <input id="lookup-profile-key"></label>
+          <button type="button" id="lookup-profile" class="primary-action">Look up claimant</button>
+        </fieldset>
+        <fieldset>
+          <legend>Claim</legend>
+          <label>Claim ID <input id="lookup-claim-id"></label>
+          <button type="button" id="lookup-claim" class="primary-action">Look up claim</button>
+        </fieldset>
+        <fieldset>
+          <legend>Dispute</legend>
+          <label>Dispute ID <input id="lookup-dispute-id"></label>
+          <button type="button" id="lookup-dispute" class="primary-action">Look up dispute</button>
+        </fieldset>
+        <div id="lookup-result" class="result" hidden></div>
+      </section>
+
+      <section data-page="claims">
+        <h2>Your published claims</h2>
+        <p>
+          These are proofs you published to this registry from your current
+          profile.
+        </p>
+        <button type="button" id="refresh-claims" class="primary-action">Refresh claims</button>
+        <details>
+          <summary>Revoke a claim</summary>
+          <label>Claim ID <input id="revoke-claim-id"></label>
+          <label>Reason <input id="revoke-reason"></label>
+          <button type="button" id="revoke-claim">Revoke claim</button>
+        </details>
+        <div id="claims-result" class="result" hidden></div>
+      </section>
+
+      <section data-page="disputes">
+        <h2>Disputes</h2>
+        <p>
+          Open a dispute when a published claim appears wrong, or view disputes
+          for a claim or profile.
+        </p>
+        <label>Claim ID <input id="dispute-claim-id"></label>
         <label>
-          Text methods
-          <input id="watermark-methods" value="invisible">
+          Where did you see the misuse? (optional)
+          <input id="dispute-misuse-url" type="url" placeholder="https://example.com/copied-media">
         </label>
-        <label>Canary phrase <input id="canary-phrase"></label>
-        <label>Image to watermark <input id="watermark-image-file" type="file"></label>
-        <label>Image MIME type <input id="watermark-image-mime-type" placeholder="image/png"></label>
-        <label>Claim ID <input id="watermark-claim-id"></label>
+        <label>Reason <textarea id="dispute-reason"></textarea></label>
         <div class="actions">
-          <button type="button" id="watermark-text">Watermark text</button>
-          <button type="button" id="watermark-image">Watermark image</button>
+          <button type="button" id="open-dispute" class="primary-action">Open dispute</button>
+          <button type="button" id="view-claim-disputes">View claim disputes</button>
+          <button type="button" id="view-my-disputes">View my claim disputes</button>
         </div>
-      </section>
-
-      <section data-page="documents">
-        <h2>Document carriers</h2>
-        <p>
-          PDF and ZIP-based documents use the same Python embedding code as the
-          CLI. Native C2PA SDK operations load only when available in the
-          browser runtime.
-        </p>
-        <label>Document <input id="document-file" type="file"></label>
-        <label>Manifest store <input id="manifest-store-file" type="file"></label>
-        <label>Document MIME type <input id="document-mime-type" placeholder="application/pdf"></label>
-        <div class="actions">
-          <button type="button" id="embed-document">Embed manifest store</button>
-          <button type="button" id="extract-document">Extract manifest store</button>
-        </div>
-      </section>
-
-      <section data-page="probes">
-        <h2>Model probes</h2>
-        <p>
-          Create probes locally, paste model responses later, and export the
-          evidence package.
-        </p>
-        <label>Protected text <textarea id="protected-text"></textarea></label>
-        <label>Control text <textarea id="control-text"></textarea></label>
-        <label>Target model <input id="target-model"></label>
-        <label>Responses JSONL <textarea id="responses-jsonl"></textarea></label>
-        <div class="actions">
-          <button type="button" id="create-probes">Create probes</button>
-          <button type="button" id="analyze-probes">Analyze responses</button>
-        </div>
+        <label>Dispute ID <input id="view-dispute-id"></label>
+        <button type="button" id="view-dispute">View dispute</button>
+        <div id="dispute-result" class="result" hidden></div>
       </section>
     </main>
 

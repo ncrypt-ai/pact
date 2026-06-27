@@ -1,12 +1,59 @@
 body {
-  font-family: sans-serif;
-  line-height: 1.4;
-  margin: 1rem;
-  max-width: 60rem;
+  background: #f7f9ff;
+  color: #1f1f1f;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  margin: 18px auto;
+  max-width: 58rem;
+  padding: 0 12px;
+}
+
+a {
+  color: #0645ad;
+}
+
+h1,
+h2 {
+  line-height: 1.2;
+  margin-bottom: 0.35rem;
+}
+
+h1 {
+  color: #222;
+  font-size: 2rem;
+  font-weight: normal;
+  letter-spacing: 0;
+}
+
+h2 {
+  color: #222;
+  font-size: 1.25rem;
+}
+
+header {
+  background: #fff;
+  border: 1px solid #d8dfea;
+  margin-bottom: 1rem;
+  padding: 0.9rem;
 }
 
 section {
-  margin: 1.5rem 0;
+  background: #fff;
+  border: 1px solid #d8dfea;
+  margin: 0.75rem 0;
+  padding: 0.9rem;
+}
+
+fieldset {
+  background: #fbfcff;
+  border: 1px solid #d8dfea;
+  margin: 0.75rem 0;
+  padding: 0.65rem;
+}
+
+legend {
+  font-weight: 600;
 }
 
 label {
@@ -23,12 +70,55 @@ textarea {
   width: 100%;
 }
 
+input[type="checkbox"] {
+  display: inline-block;
+  margin: 0;
+  width: auto;
+}
+
 textarea {
   min-height: 7rem;
 }
 
+input,
+select,
+textarea {
+  background: #ffffff;
+  border: 1px solid #999;
+  font: inherit;
+  margin-top: 0.25rem;
+  padding: 0.35rem;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 1px;
+}
+
 button {
+  background: #f3f6fb;
+  border: 1px solid #9aa8bf;
+  color: #111;
+  cursor: pointer;
+  font: inherit;
   margin: 0.25rem 0.25rem 0.25rem 0;
+  padding: 0.32rem 0.6rem;
+}
+
+button:hover:not([disabled]) {
+  background: #e7eef9;
+}
+
+.primary-action {
+  background: #e7f0ff;
+  border-color: #6d91c7;
+  color: #0645ad;
+}
+
+.primary-action:hover:not([disabled]) {
+  background: #d8e8ff;
 }
 
 button[disabled] {
@@ -36,10 +126,116 @@ button[disabled] {
   opacity: 0.6;
 }
 
+.note,
+#workspace-message,
+.result {
+  background: #fffbea;
+  border: 1px solid #eadfba;
+  padding: 0.65rem;
+}
+
+#workspace-message:empty {
+  display: none;
+}
+
+#workspace-message[data-level="error"] {
+  background: #fff0f0;
+  border-color: #c00;
+}
+
+.session-status {
+  font-weight: 600;
+}
+
+.small {
+  color: #555;
+  font-size: 0.92rem;
+}
+
+.actions {
+  margin-top: 0.75rem;
+}
+
+.inline-choice {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.inline-choice input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.inline-choice span {
+  flex: 1;
+}
+
+[aria-invalid="true"] {
+  border-color: #b24f3f;
+}
+
+.option-grid {
+  margin: 0.75rem 0;
+}
+
+.option-grid label {
+  margin: 0.35rem 0;
+}
+
+.result {
+  margin-top: 1rem;
+}
+
+.result h3 {
+  margin-top: 0;
+}
+
+.result p {
+  margin: 0.35rem 0;
+}
+
+.result ol {
+  padding-left: 1.25rem;
+}
+
 .workspace-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  gap: 0.15rem;
+}
+
+.workspace-nav button[aria-current="page"] {
+  background: #fff;
+  border-color: #0645ad;
+  color: #0645ad;
+  font-weight: 600;
+}
+
+details {
+  margin-top: 1rem;
+}
+
+summary {
+  cursor: pointer;
+}
+
+.policy-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.policy-table th,
+.policy-table td {
+  border-bottom: 1px solid #ddd;
+  padding: 0.4rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.policy-table input,
+.policy-table select {
+  margin-top: 0;
 }
 
 [data-page][hidden],

@@ -4,11 +4,29 @@ const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
 const identityStorageKey = "pact.identity";
 const passcodeStorageKey = "pact.passcode";
-let identity = JSON.parse(localStorage.getItem(identityStorageKey) || "null");
+function savedIdentity() {
+  return JSON.parse(localStorage.getItem(identityStorageKey) || "null");
+}
+
+let identity = savedIdentity();
 let identityPassword = null;
 let signedManifest = null;
 let nonceBase64 = null;
-let probeSet = null;
+
+const policyPermissions = [
+  ["cawg.data_mining", "Data mining"],
+  ["cawg.ai_inference", "AI inference"],
+  ["cawg.ai_generative_training", "Generative AI training"],
+  ["cawg.ai_training", "Non-generative AI training"],
+  ["pact.commercial_training", "Commercial training"],
+  ["pact.noncommercial_training", "Noncommercial training"],
+  ["pact.fine_tuning", "Fine tuning"],
+  ["pact.embedding", "Embeddings"],
+  ["pact.model_evaluation", "Model evaluation"],
+  ["pact.synthetic_data", "Synthetic-data generation"],
+  ["pact.search_indexing", "Search indexing"],
+  ["pact.redistribution", "Redistribution"]
+];
 
 function pageButtons() {
   return [...document.querySelectorAll("[data-page-button]")];
@@ -31,13 +49,70 @@ function setPage(name) {
   }
 }
 
+function setVisible(selector, visible) {
+  const element = document.querySelector(selector);
+  if (element) {
+    element.hidden = !visible;
+  }
+}
+
+function embeddedProofSupported(mimeType) {
+  return (
+    mimeType.startsWith("text/") ||
+    [
+      "text/html",
+      "application/xhtml+xml",
+      "application/xml",
+      "text/xml",
+      "image/svg+xml",
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/epub+zip"
+    ].includes(mimeType)
+  );
+}
+
+function updateSigningOptions() {
+  const file = document.querySelector("#content-file").files[0];
+  const mimeType = file ? inferMimeType(file) : "";
+  const isText = mimeType.startsWith("text/");
+  const isImage = mimeType.startsWith("image/");
+  const canEmbed = Boolean(mimeType) && embeddedProofSupported(mimeType);
+  setVisible("#text-protection-options", isText);
+  setVisible("#image-protection-options", isImage);
+  setVisible("#embedded-proof-options", canEmbed);
+  if (!isText) {
+    document.querySelector("#protect-text-before-signing").checked = false;
+  }
+  if (!isImage) {
+    document.querySelector("#protect-image-after-publish").checked = false;
+  }
+  if (!canEmbed) {
+    document.querySelector("#download-embedded-proof").checked = false;
+  }
+}
+
+function updateMutationOptions() {
+  const file = document.querySelector("#mutation-edited-file").files[0];
+  const mimeType = file ? inferMimeTypeFrom(file, "#mutation-mime-type") : "";
+  setVisible(
+    "#mutation-embedded-proof-options",
+    embeddedProofSupported(mimeType)
+  );
+  if (!embeddedProofSupported(mimeType)) {
+    document.querySelector("#mutation-download-embedded-proof").checked = false;
+  }
+}
+
 function updateSession() {
   const authenticated = Boolean(identity);
   sessionStatus.textContent = authenticated
     ? identityPassword
-      ? `Ready: ${identity.key_id}`
-      : `Saved identity found: ${identity.key_id}`
-    : "No identity loaded.";
+      ? "Profile ready."
+      : "Saved profile found."
+    : "No profile loaded.";
   document.querySelector("#logout-identity").hidden = !authenticated;
   for (const button of pageButtons()) {
     if (button.dataset.pageButton !== "identity") {
@@ -46,9 +121,84 @@ function updateSession() {
   }
 }
 
+function showSavedBrowserProfile() {
+  const current = identity || savedIdentity();
+  if (!current) {
+    clearElement(document.querySelector("#browser-profile-summary"));
+    return;
+  }
+  identity = current;
+  renderObject("#browser-profile-summary", "Saved browser profile", [
+    ["What this is", "The private signing profile saved in this browser."],
+    ["Profile key", current.key_id],
+    ["Registry", current.registry_url],
+    [
+      "Status",
+      identityPassword ? "Unlocked for this session" : "Locked. Enter passcode to use it."
+    ]
+  ]);
+}
+
 for (const button of pageButtons()) {
   button.onclick = () => setPage(button.dataset.pageButton);
 }
+
+function buildPolicyControls(containerId) {
+  const container = document.querySelector(containerId);
+  if (!container) {
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "policy-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const heading of ["Use", "Permission", "Conditions", "License URL"]) {
+    const cell = document.createElement("th");
+    cell.textContent = heading;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  table.append(head);
+  const body = document.createElement("tbody");
+  for (const [permission, label] of policyPermissions) {
+    const rowElement = document.createElement("tr");
+    rowElement.dataset.permission = permission;
+    const labelCell = document.createElement("td");
+    labelCell.textContent = label;
+    const valueCell = document.createElement("td");
+    const select = document.createElement("select");
+    select.className = "policy-value";
+    for (const [value, text] of [
+      ["notAllowed", "Not allowed"],
+      ["allowed", "Allowed"],
+      ["constrained", "Allowed with conditions"]
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      select.append(option);
+    }
+    valueCell.append(select);
+    const conditionCell = document.createElement("td");
+    const condition = document.createElement("input");
+    condition.className = "policy-condition";
+    condition.placeholder = "Required if conditional";
+    conditionCell.append(condition);
+    const licenseCell = document.createElement("td");
+    const license = document.createElement("input");
+    license.className = "policy-license";
+    license.type = "url";
+    license.placeholder = "Optional";
+    licenseCell.append(license);
+    rowElement.append(labelCell, valueCell, conditionCell, licenseCell);
+    body.append(rowElement);
+  }
+  table.append(body);
+  container.append(table);
+}
+
+buildPolicyControls("#sign-policy");
+buildPolicyControls("#mutation-policy");
 
 worker.onmessage = (event) => {
   const { id, ok, result, error } = event.data;
@@ -77,10 +227,14 @@ function registryUrl() {
   return document.querySelector("#registry-url").value.trim();
 }
 
+function publicBaseUrl() {
+  return document.body.dataset.publicBaseUrl || registryUrl();
+}
+
 function requireIdentity() {
   if (!identity) {
     setPage("identity");
-    throw new Error("Use Continue to create or load your identity first.");
+    throw new Error("Create or open your profile first.");
   }
   return identity;
 }
@@ -93,24 +247,430 @@ function password() {
     document.querySelector("#identity-import-password").value;
   if (!value) {
     setPage("identity");
-    throw new Error("Enter your identity passcode.");
+    throw new Error("Enter your profile passcode.");
   }
   return value;
 }
 
 function rememberPassword() {
   identityPassword = password();
+  localStorage.setItem(passcodeStorageKey, identityPassword);
   updateSession();
 }
 
-function show(value, fallback = "Done.") {
-  if (typeof value === "string") {
-    workspaceMessage.textContent = value;
-    console.log(value);
-    return;
+function plainError(error) {
+  const message = error && error.message ? error.message : String(error);
+  if (
+    message.includes("already registered to another claimant profile") ||
+    message.includes("claimant profile already exists")
+  ) {
+    return "A profile already exists for this browser or signing key. Open the saved browser profile with its passcode, or import your recovery file instead of creating a new profile.";
   }
-  workspaceMessage.textContent = fallback;
-  console.log(value);
+  if (message.includes("Traceback")) {
+    const lines = message
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines[lines.length - 1].replace(/^[A-Za-z]+Error:\s*/, "");
+  }
+  if (message.includes("internal server error")) {
+    return "Something went wrong on the registry. Try again or check the server logs.";
+  }
+  return message.replace(/^Error:\s*/, "");
+}
+
+function clearValidation() {
+  for (const element of document.querySelectorAll("[aria-invalid='true']")) {
+    element.removeAttribute("aria-invalid");
+  }
+}
+
+function validationError(element, text) {
+  if (element) {
+    element.setAttribute("aria-invalid", "true");
+    element.focus();
+  }
+  throw new Error(text);
+}
+
+function message(text, level = "info") {
+  workspaceMessage.textContent = text;
+  workspaceMessage.dataset.level = level;
+}
+
+function clearElement(element) {
+  element.replaceChildren();
+  element.hidden = true;
+}
+
+function resultElement(id) {
+  const element = document.querySelector(id);
+  clearElement(element);
+  element.hidden = false;
+  return element;
+}
+
+function row(label, value) {
+  const item = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = `${label}: `;
+  item.append(strong, value == null || value === "" ? "—" : String(value));
+  return item;
+}
+
+function callout(text) {
+  const paragraph = document.createElement("p");
+  paragraph.className = "bottom-line";
+  paragraph.textContent = text;
+  return paragraph;
+}
+
+function renderObject(target, title, values) {
+  const element = resultElement(target);
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  element.append(heading);
+  for (const [label, value] of values) {
+    element.append(row(label, value));
+  }
+  return element;
+}
+
+function renderList(target, title, rows, emptyText) {
+  const element = resultElement(target);
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  element.append(heading);
+  if (!rows.length) {
+    element.append(row("Status", emptyText));
+    return element;
+  }
+  const list = document.createElement("ol");
+  for (const values of rows) {
+    const item = document.createElement("li");
+    for (const [label, value] of values) {
+      item.append(row(label, value));
+    }
+    list.append(item);
+  }
+  element.append(list);
+  return element;
+}
+
+function renderProfile(target, profile, evidence = null) {
+  renderObject(target, "Public registry profile", [
+    ["Display name", profile.display_name || "Anonymous"],
+    ["Profile key", profile.key_id],
+    ["Created", profile.created_at],
+    ["Verified domains", (profile.verified_domains || []).join(", ") || "None"],
+    ["Replacement key", profile.replacement_key_id || "None"],
+    ["Trust tier", evidence ? evidence.trust_tier : "Not loaded"],
+    ["Active claims", evidence ? evidence.active_claim_count : "Not loaded"],
+    ["Open disputes", evidence ? evidence.open_disputes : "Not loaded"]
+  ]);
+}
+
+function renderClaims(claims) {
+  renderList(
+    "#claims-result",
+    "Published claims",
+    claims.map((claim) => [
+      ["Claim ID", claim.claim_id],
+      ["Registered", claim.registered_at],
+      [
+        "Source URL",
+        claim.signed_manifest &&
+        claim.signed_manifest.manifest &&
+        claim.signed_manifest.manifest.source_url
+          ? claim.signed_manifest.manifest.source_url
+          : "—"
+      ],
+      ["Status", claim.revoked_at ? "Revoked" : "Active"],
+      ["Revocation reason", claim.revocation_reason || "—"]
+    ]),
+    "No published claims found for this profile."
+  );
+}
+
+function claimRows(claim) {
+  const manifest =
+    claim.signed_manifest && claim.signed_manifest.manifest
+      ? claim.signed_manifest.manifest
+      : {};
+  return [
+    ["Claim ID", claim.claim_id],
+    ["Claimant", claim.claimant_key_id],
+    ["Registered", claim.registered_at],
+    ["Source URL", manifest.source_url || "—"],
+    ["MIME type", manifest.mime_type || "—"],
+    ["Status", claim.revoked_at ? "Revoked" : "Active"],
+    ["Revocation reason", claim.revocation_reason || "—"]
+  ];
+}
+
+function renderClaim(target, claim, disputes = []) {
+  const element = renderObject(target, "Published claim", [
+    ...claimRows(claim),
+    ["Verification page", `${publicBaseUrl()}/verify/claim/${claim.claim_id}`],
+    ["Open disputes", disputes.length]
+  ]);
+  if (disputes.length) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Disputes";
+    details.append(summary);
+    for (const dispute of disputes) {
+      details.append(row("Dispute", `${dispute.status}: ${dispute.reason}`));
+      details.append(row("Dispute ID", dispute.dispute_id));
+    }
+    element.append(details);
+  }
+}
+
+function renderDisputes(target, disputes) {
+  renderList(
+    target,
+    "Disputes",
+    disputes.map((dispute) => [
+      ["Dispute ID", dispute.dispute_id],
+      ["Claim ID", dispute.claim_id],
+      ["Status", dispute.status],
+      ["Opened", dispute.opened_at],
+      ["Misuse URL", dispute.misuse_url || "—"],
+      ["Reason", dispute.reason],
+      ["Resolution", dispute.resolution_note || "—"]
+    ]),
+    "No disputes found."
+  );
+}
+
+function claimIdFromInspection(result) {
+  const reference = result.reference || {};
+  const verification = result.registry_verification || {};
+  const manifest = result.manifest || {};
+  return reference.claim_id || verification.claim_id || manifest.claim_id || null;
+}
+
+function claimantKeyFromInspection(result) {
+  const claim = result.registry_claim || {};
+  const manifest = result.manifest || {};
+  return claim.claimant_key_id || manifest.claimant_key_id || null;
+}
+
+async function inspectionContext(result) {
+  const claimId = claimIdFromInspection(result);
+  const claimantKey = claimantKeyFromInspection(result);
+  const context = {
+    claimDisputes: [],
+    claimantDisputes: [],
+    claimantEvidence: null
+  };
+  if (claimId) {
+    const disputes = await registryJson(`/api/v1/claims/${claimId}/disputes`);
+    context.claimDisputes = disputes.disputes || [];
+  }
+  if (claimantKey) {
+    const evidence = await registryJson(`/api/v1/profiles/${claimantKey}/evidence`);
+    const disputes = await registryJson(`/api/v1/profiles/${claimantKey}/disputes`);
+    context.claimantEvidence = evidence;
+    context.claimantDisputes = disputes.disputes || [];
+  }
+  return context;
+}
+
+function renderInspection(result, context = {}) {
+  const reference = result.reference || {};
+  const manifest = result.manifest || {};
+  const claim = result.registry_claim || {};
+  const verification = result.registry_verification || {};
+  const claimDisputes = context.claimDisputes || [];
+  const claimantDisputes = context.claimantDisputes || [];
+  const claimantEvidence = context.claimantEvidence || null;
+  const element = resultElement("#inspect-result");
+  const title = document.createElement("h3");
+  title.textContent = "Bottom line";
+  element.append(title);
+  if (!result.recognized) {
+    element.append(callout("No PACT proof or claim reference was found in this file."));
+  } else if (verification.revoked) {
+    element.append(callout("A claim exists, but it has been revoked."));
+  } else if (verification.disputed) {
+    element.append(callout("A claim exists, but there are open or upheld disputes."));
+  } else if (verification.label === "verified_claim") {
+    element.append(callout("A verified claim exists for this media."));
+  } else if (reference.claim_id || manifest.claim_id) {
+    element.append(callout("A claim reference exists, but registry verification is incomplete."));
+  } else {
+    element.append(callout("PACT metadata was found, but no registry claim was confirmed."));
+  }
+  const details = document.createElement("details");
+  details.open = true;
+  const summary = document.createElement("summary");
+  summary.textContent = "What PACT found";
+  details.append(summary);
+  for (const [label, value] of [
+    ["Recognized", result.recognized ? "Yes" : "No"],
+    ["Carrier", reference.carrier || "None found"],
+    ["Claim ID", claimIdFromInspection(result) || "None found"],
+    ["Source URL", manifest.source_url || "None provided"],
+    ["Requested protection", policySummary(manifest.policy)],
+    [
+      "Claimed actions",
+      manifestActions(manifest).map(actionSummary).join("; ") ||
+        "None claimed"
+    ],
+    [
+      "Source ingredients",
+      manifestIngredients(manifest).map(ingredientSummary).join("; ") ||
+        "None claimed"
+    ],
+    ["Created by", claimantKeyFromInspection(result) || "Unknown"],
+    ["Registered", claim.registered_at || "Unknown"],
+    ["Registry status", verification.label || "Not verified through registry"],
+    ["Trust level", verification.trust_tier || (claimantEvidence ? claimantEvidence.trust_tier : "Unknown")],
+    ["Trust labels", (verification.trust_labels || []).join(", ") || "None"],
+    ["Content binding", verification.content_binding_valid],
+    ["Revoked", verification.revoked],
+    ["Disputed", verification.disputed],
+    ["Disputes on this media", claimDisputes.length],
+    ["Disputes on claimant media", claimantDisputes.length],
+    ["Claimant active claims", claimantEvidence ? claimantEvidence.active_claim_count : "Unknown"]
+  ]) {
+    details.append(row(label, value));
+  }
+  element.append(details);
+  if (claimDisputes.length) {
+    const disputes = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Disputes against this media";
+    disputes.append(summary);
+    for (const dispute of claimDisputes) {
+      disputes.append(row("Dispute", `${dispute.status}: ${dispute.reason}`));
+      disputes.append(row("Misuse URL", dispute.misuse_url || "—"));
+    }
+    element.append(disputes);
+  }
+  console.log(result);
+}
+
+function policySummary(policy) {
+  if (!policy) {
+    return "Unknown";
+  }
+  if (policy.label === "cawg.training-mining" && policy.entries) {
+    return policySummary(policy.entries);
+  }
+  const entries = Object.entries(policy);
+  if (entries.length > 1) {
+    const blocked = entries
+      .filter(([, entry]) => entry.use === "notAllowed")
+      .map(([permission]) => permission);
+    const allowed = entries
+      .filter(([, entry]) => entry.use === "allowed")
+      .map(([permission]) => permission);
+    const constrained = entries
+      .filter(([, entry]) => entry.use === "constrained")
+      .map(([permission]) => permission);
+    return [
+      blocked.length ? `${blocked.length} not allowed` : null,
+      allowed.length ? `${allowed.length} allowed` : null,
+      constrained.length ? `${constrained.length} conditional` : null
+    ].filter(Boolean).join(", ");
+  }
+  const training =
+    policy["cawg.ai_generative_training"] ||
+    policy["cawg.ai_training"] ||
+    policy["cawg.data_mining"];
+  if (!training) {
+    return "No explicit AI-training permission found";
+  }
+  if (training.use === "notAllowed") {
+    return "AI training not allowed";
+  }
+  if (training.use === "allowed") {
+    return "AI training allowed";
+  }
+  if (training.use === "constrained") {
+    return `AI training constrained: ${training.constraint_info || "see proof"}`;
+  }
+  return String(training.use || "Unknown");
+}
+
+function collectPolicy(containerId) {
+  const policy = {};
+  for (const rowElement of document.querySelectorAll(`${containerId} tr[data-permission]`)) {
+    const permission = rowElement.dataset.permission;
+    const value = rowElement.querySelector(".policy-value").value;
+    const condition = rowElement.querySelector(".policy-condition").value.trim();
+    const license = rowElement.querySelector(".policy-license").value.trim();
+    if (value === "constrained" && !condition) {
+      validationError(
+        rowElement.querySelector(".policy-condition"),
+        `Add conditions for ${rowElement.firstChild.textContent}.`
+      );
+    }
+    policy[permission] = {
+      use: value,
+      ...(condition ? { constraint_info: condition } : {}),
+      ...(license ? { licensing_url: license } : {})
+    };
+  }
+  return policy;
+}
+
+function manifestActions(manifest) {
+  if (
+    !manifest ||
+    !manifest.actions ||
+    !Array.isArray(manifest.actions.actions)
+  ) {
+    return [];
+  }
+  return manifest.actions.actions;
+}
+
+function manifestIngredients(manifest) {
+  if (
+    !manifest ||
+    !manifest.ingredients ||
+    !Array.isArray(manifest.ingredients.ingredients)
+  ) {
+    return [];
+  }
+  return manifest.ingredients.ingredients;
+}
+
+function actionSummary(action) {
+  const parts = [action.action || "unknown action"];
+  if (action.description) {
+    parts.push(action.description);
+  }
+  if (action.when) {
+    parts.push(action.when);
+  }
+  return parts.join(" — ");
+}
+
+function ingredientSummary(ingredient) {
+  const parts = [ingredient.claim_id || "unknown source"];
+  if (ingredient.relationship) {
+    parts.push(ingredient.relationship);
+  }
+  if (ingredient.title) {
+    parts.push(ingredient.title);
+  }
+  return parts.join(" — ");
+}
+
+async function run(handler) {
+  try {
+    clearValidation();
+    message("Working...");
+    await handler();
+  } catch (error) {
+    console.error(error);
+    message(plainError(error), "error");
+  }
 }
 
 async function readBase64(input) {
@@ -118,6 +678,16 @@ async function readBase64(input) {
   if (!file) {
     throw new Error("Choose a file first.");
   }
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+async function readFileBase64(file) {
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -135,6 +705,15 @@ async function readText(input) {
   return await file.text();
 }
 
+function textToBase64(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
 async function readImportFile(file) {
   const text = await file.text();
   const trimmed = text.trimStart();
@@ -142,9 +721,7 @@ async function readImportFile(file) {
     return JSON.parse(text);
   }
   if (!trimmed.includes("ENCRYPTED PRIVATE KEY")) {
-    throw new Error(
-      "Choose a browser identity JSON export or a CLI encrypted PKCS#8 PEM export."
-    );
+    throw new Error("Choose a recovery JSON file or CLI identity export.");
   }
   return {
     registry_url: registryUrl(),
@@ -160,9 +737,178 @@ function selectedFileStem(input) {
   return file.name.replace(/\.[^.]+$/, "");
 }
 
+function selectedFileName(input, suffix) {
+  const file = input.files[0];
+  if (!file) {
+    return `pact${suffix}`;
+  }
+  const dot = file.name.lastIndexOf(".");
+  if (dot <= 0) {
+    return `${file.name}${suffix}`;
+  }
+  return `${file.name.slice(0, dot)}${suffix}${file.name.slice(dot)}`;
+}
+
+function selectedWatermarkMethods() {
+  return [
+    ...document.querySelectorAll("input[name='text-watermark-method']:checked")
+  ].map((input) => input.value);
+}
+
+function renderWatermarkPreview(result) {
+  const element = resultElement("#watermark-preview");
+  const heading = document.createElement("h3");
+  heading.textContent = "Text watermark preview";
+  element.append(heading);
+  for (const embedding of result.embeddings || []) {
+    const report = embedding.quality_report || {};
+    const details = document.createElement("details");
+    details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = `${report.method_id || "watermark"} changed ${
+      report.changed_characters || 0
+    } characters`;
+    details.append(summary);
+    details.append(row("Changed lines", report.changed_lines || 0));
+    details.append(row("Warnings", (report.warnings || []).join(", ") || "None"));
+    const diff = document.createElement("pre");
+    diff.textContent = report.unified_diff || "No visible diff.";
+    details.append(diff);
+    element.append(details);
+  }
+}
+
+function inferMimeType(file) {
+  return inferMimeTypeFrom(file, "#mime-type");
+}
+
+function inferMimeTypeFrom(file, selector) {
+  if (document.querySelector(selector).value) {
+    return document.querySelector(selector).value;
+  }
+  if (file && file.type) {
+    return file.type;
+  }
+  return "text/plain";
+}
+
+function validateSignForm(file, mimeType) {
+  if (!file) {
+    validationError(document.querySelector("#content-file"), "Choose a file to sign.");
+  }
+  if (
+    document.querySelector("#protect-text-before-signing").checked &&
+    !mimeType.startsWith("text/")
+  ) {
+    validationError(
+      document.querySelector("#protect-text-before-signing"),
+      "Text watermarking is only available for text files."
+    );
+  }
+  if (document.querySelector("#protect-text-before-signing").checked) {
+    if (!document.querySelector("#watermark-secret").value.trim()) {
+      validationError(
+        document.querySelector("#watermark-secret"),
+        "Enter a watermark secret before signing with text watermarking."
+      );
+    }
+    const methods = selectedWatermarkMethods();
+    if (!methods.length) {
+      validationError(
+        document.querySelector("#protect-text-before-signing"),
+        "Choose at least one text watermark mode."
+      );
+    }
+    if (
+      methods.includes("canary") &&
+      !document.querySelector("#canary-phrase").value.trim()
+    ) {
+      validationError(
+        document.querySelector("#canary-phrase"),
+        "Enter a canary phrase or turn off the canary watermark mode."
+      );
+    }
+  }
+  if (
+    document.querySelector("#protect-image-after-publish").checked &&
+    !mimeType.startsWith("image/")
+  ) {
+    validationError(
+      document.querySelector("#protect-image-after-publish"),
+      "Image watermarking is only available for image files."
+    );
+  }
+  if (
+    document.querySelector("#protect-image-after-publish").checked &&
+    !document.querySelector("#publish-after-signing").checked
+  ) {
+    validationError(
+      document.querySelector("#publish-after-signing"),
+      "Image watermarking requires publishing because the watermark points to the registry claim."
+    );
+  }
+  if (
+    document.querySelector("#download-embedded-proof").checked &&
+    !embeddedProofSupported(mimeType)
+  ) {
+    validationError(
+      document.querySelector("#download-embedded-proof"),
+      "Embedded proof downloads are not available for this file type."
+    );
+  }
+}
+
+async function inspectFile(file, mimeType) {
+  const form = new FormData();
+  form.append("file", file);
+  if (mimeType) {
+    form.append("mime_type", mimeType);
+  }
+  const response = await fetch(`${registryUrl()}/api/v1/inspect`, {
+    method: "POST",
+    body: form
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.detail || response.statusText);
+  }
+  return result;
+}
+
+async function previousProofForMutation(editedFile, editedMimeType) {
+  const proofFile = document.querySelector("#mutation-proof-file").files[0];
+  if (proofFile) {
+    return await inspectFile(proofFile, "application/json");
+  }
+  const originalFile = document.querySelector("#mutation-original-file").files[0];
+  if (originalFile) {
+    return await inspectFile(
+      originalFile,
+      inferMimeTypeFrom(originalFile, "#mutation-original-mime-type")
+    );
+  }
+  return await inspectFile(editedFile, editedMimeType);
+}
+
+async function downloadEmbeddedProofCopy(fileInput, mimeType, manifestJson) {
+  const file = fileInput.files[0];
+  if (!file) {
+    return null;
+  }
+  const result = JSON.parse(
+    await callPython(
+      "embed_signed_manifest_carrier",
+      [await readBase64(fileInput), mimeType, manifestJson],
+      "documents"
+    )
+  );
+  const filename = selectedFileName(fileInput, ".pact");
+  downloadBase64(filename, result.asset_b64, result.mime_type);
+  return filename;
+}
+
 function download(name, content, type = "application/json") {
-  const blob = new Blob([content], { type });
-  downloadBlob(name, blob);
+  downloadBlob(name, new Blob([content], { type }));
 }
 
 function downloadBase64(name, content, type = "application/octet-stream") {
@@ -191,7 +937,12 @@ async function registryJson(path, options = {}) {
       ...(options.headers || {})
     }
   });
-  const body = await response.json();
+  let body = {};
+  try {
+    body = await response.json();
+  } catch {
+    body = { detail: response.statusText };
+  }
   if (!response.ok) {
     throw new Error(body.detail || response.statusText);
   }
@@ -267,14 +1018,13 @@ async function unlockIdentity() {
 async function createIdentity() {
   identityPassword = document.querySelector("#identity-passcode").value;
   if (!identityPassword) {
-    throw new Error("Choose a passcode before creating an identity.");
+    throw new Error("Choose a passcode before creating a profile.");
   }
   identity = JSON.parse(
     await callPython("create_identity", [registryUrl(), identityPassword])
   );
-  localStorage.setItem(passcodeStorageKey, identityPassword);
   localStorage.setItem(identityStorageKey, JSON.stringify(identity));
-  updateSession();
+  rememberPassword();
 }
 
 async function ensureProfile() {
@@ -283,7 +1033,17 @@ async function ensureProfile() {
     .value.trim();
   const response = await fetch(`${registryUrl()}/api/v1/profiles/${identity.key_id}`);
   if (response.ok) {
-    return await response.json();
+    const profile = await response.json();
+    if (displayName && profile.display_name !== displayName) {
+      const request = await signedMutation("profile_update", {
+        display_name: displayName
+      });
+      return await registryJson(`/api/v1/profiles/${identity.key_id}/update`, {
+        method: "POST",
+        body: JSON.stringify(request)
+      });
+    }
+    return profile;
   }
   if (response.status !== 404 && response.status !== 400) {
     const body = await response.json();
@@ -300,17 +1060,35 @@ async function ensureProfile() {
   });
 }
 
-async function run(handler) {
+async function loadOwnProfile() {
   try {
-    workspaceMessage.textContent = "Working...";
-    await handler();
+    const profile = await registryJson(`/api/v1/profiles/${identity.key_id}`);
+    const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
+    renderProfile("#public-profile-summary", profile, evidence);
   } catch (error) {
-    console.error(error);
-    workspaceMessage.textContent = `Error: ${error.message}`;
+    renderObject("#public-profile-summary", "Public registry profile", [
+      ["What this is", "The public record other people can look up."],
+      ["Profile key", identity.key_id],
+      ["Registry status", "No public profile found yet"],
+      ["Next step", "Press Continue to register this browser profile."]
+    ]);
   }
 }
 
+async function publishSignedManifest(manifestJson) {
+  const request = await signedMutation(
+    "claim_registration",
+    { signed_manifest_json: manifestJson },
+    requireIdentity().key_id
+  );
+  return await registryJson("/api/v1/claims", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
 async function continueIdentity() {
+  identity = identity || savedIdentity();
   if (identity) {
     await unlockIdentity();
   } else {
@@ -318,8 +1096,10 @@ async function continueIdentity() {
   }
   const profile = await ensureProfile();
   updateSession();
-  setPage("claims");
-  show(profile, "Identity ready.");
+  showSavedBrowserProfile();
+  renderProfile("#public-profile-summary", profile);
+  setPage("sign");
+  message("Profile ready. Choose a file to sign.");
 }
 
 document.querySelector("#continue-identity").onclick = () =>
@@ -330,27 +1110,22 @@ document.querySelector("#continue-identity").onclick = () =>
 document.querySelector("#show-identity").onclick = () =>
   run(async () => {
     identity =
-      identity || JSON.parse(localStorage.getItem(identityStorageKey) || "null");
+      identity || savedIdentity();
     if (!identity) {
-      throw new Error("No browser identity is stored.");
+      throw new Error("No browser profile is stored.");
     }
-    show(
-      {
-        registry_url: identity.registry_url,
-        key_id: identity.key_id,
-        public_jwk: identity.public_jwk
-      },
-      "Public identity written to the console."
-    );
+    showSavedBrowserProfile();
+    await loadOwnProfile();
+    message("Public registry profile shown below.");
   });
 
 document.querySelector("#export-identity").onclick = () =>
   run(async () => {
     if (!identity) {
-      throw new Error("No browser identity is stored.");
+      throw new Error("No browser profile is stored.");
     }
     download(
-      "pact-identity-recovery.json",
+      "pact-profile-recovery.json",
       JSON.stringify(
         {
           ...identity,
@@ -360,7 +1135,7 @@ document.querySelector("#export-identity").onclick = () =>
         2
       )
     );
-    show("Recovery file downloaded. Keep it private.");
+    message("Recovery file downloaded. Keep it private.");
   });
 
 document.querySelector("#identity-import").onchange = (event) =>
@@ -384,80 +1159,375 @@ document.querySelector("#identity-import").onchange = (event) =>
     rememberPassword();
     localStorage.setItem(identityStorageKey, JSON.stringify(identity));
     updateSession();
-    setPage("claims");
-    show("Identity imported and verified.");
+    showSavedBrowserProfile();
+    await loadOwnProfile();
+    setPage("sign");
+    message("Profile imported. Choose a file to sign.");
+  });
+
+document.querySelector("#rotate-key").onclick = () =>
+  run(async () => {
+    const currentIdentity = requireIdentity();
+    const replacement = JSON.parse(
+      await callPython("rotate_identity", [
+        registryUrl(),
+        currentIdentity.encrypted_pkcs8_b64,
+        password()
+      ])
+    );
+    const issued = await challenge("key_rotation", currentIdentity.key_id);
+    const request = JSON.parse(
+      await callPython("create_rotation_request", [
+        registryUrl(),
+        currentIdentity.encrypted_pkcs8_b64,
+        replacement.encrypted_pkcs8_b64,
+        password(),
+        JSON.stringify(issued),
+        JSON.stringify({ reason: "Rotated from browser profile settings." })
+      ])
+    );
+    await registryJson("/api/v1/rotations", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    identity = {
+      registry_url: replacement.registry_url,
+      key_id: replacement.replacement_key_id,
+      public_jwk: replacement.public_jwk,
+      encrypted_pkcs8_b64: replacement.encrypted_pkcs8_b64
+    };
+    localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+    await loadOwnProfile();
+    message("Signing key rotated. Future claims will use the new key.");
   });
 
 document.querySelector("#logout-identity").onclick = () =>
   run(async () => {
-    identity = null;
     identityPassword = null;
-    localStorage.removeItem(identityStorageKey);
     localStorage.removeItem(passcodeStorageKey);
+    identity = savedIdentity();
     updateSession();
+    showSavedBrowserProfile();
+    clearElement(document.querySelector("#public-profile-summary"));
     setPage("identity");
-    show("This browser is logged out for this registry.");
-  });
-
-document.querySelector("#register-profile").onclick = () =>
-  run(async () => {
-    const displayName = document.querySelector("#display-name").value.trim();
-    const request = await signedMutation("profile_registration", {
-      ...(displayName ? { display_name: displayName } : {}),
-      hosted_account: false,
-      device_fingerprint: await browserFingerprint()
-    });
-    const profile = await registryJson("/api/v1/profiles", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    show(profile);
+    message("Profile locked on this browser. Enter your passcode and press Continue to use it again.");
   });
 
 document.querySelector("#sign-content").onclick = () =>
   run(async () => {
+    const fileInput = document.querySelector("#content-file");
+    const file = fileInput.files[0];
+    const stem = selectedFileStem(fileInput);
+    const mimeType = inferMimeType(file);
+    validateSignForm(file, mimeType);
     const registry = await registryJson("/api/v1/registry");
-    const content = await readBase64(document.querySelector("#content-file"));
-    const currentIdentity = requireIdentity();
+    const policy = collectPolicy("#sign-policy");
+    let content = await readBase64(fileInput);
+    const actions = [
+      {
+        action: document.querySelector("#c2pa-action").value,
+        ...(document.querySelector("#c2pa-action-description").value.trim()
+          ? {
+              description: document
+                .querySelector("#c2pa-action-description")
+                .value.trim()
+            }
+          : {})
+      }
+    ];
+    if (document.querySelector("#protect-text-before-signing").checked) {
+      if (!mimeType.startsWith("text/")) {
+        throw new Error("Text watermarking only works on text files.");
+      }
+      const secret = document.querySelector("#watermark-secret").value;
+      if (!secret) {
+        throw new Error("Enter a watermark secret or turn off text protection.");
+      }
+      const methods = selectedWatermarkMethods();
+      if (!methods.length) {
+        throw new Error("Choose at least one text watermark mode.");
+      }
+      const protectedText = JSON.parse(
+        await callPython("watermark_text", [
+          await file.text(),
+          secret,
+          JSON.stringify(methods),
+          document.querySelector("#canary-phrase").value || null
+        ])
+      );
+      renderWatermarkPreview(protectedText);
+      download(`${stem}.protected.txt`, protectedText.transformed_content, "text/plain");
+      content = textToBase64(protectedText.transformed_content);
+      actions.push({
+        action: "c2pa.edited",
+        description: `Added text watermark protection (${methods.join(", ")})`
+      });
+    }
     const result = JSON.parse(
       await callPython("sign_content", [
         registryUrl(),
-        currentIdentity.encrypted_pkcs8_b64,
+        requireIdentity().encrypted_pkcs8_b64,
         password(),
         content,
         registry.root_fingerprint,
-        document.querySelector("#mime-type").value || "text/plain",
-        document.querySelector("#canonicalization").value
+        mimeType,
+        document.querySelector("#canonicalization").value,
+        "custom",
+        "visible",
+        null,
+        JSON.stringify(actions),
+        "[]",
+        JSON.stringify(policy)
       ])
     );
     signedManifest = result.manifest_json;
     nonceBase64 = result.nonce_b64;
-    const stem = selectedFileStem(document.querySelector("#content-file"));
-    download(`${stem}.manifest.json`, signedManifest);
+    download(`${stem}.proof.json`, signedManifest);
     downloadBase64(`${stem}.nonce`, nonceBase64);
-    show(result);
+    let claim = null;
+    if (document.querySelector("#publish-after-signing").checked) {
+      claim = await publishSignedManifest(signedManifest);
+      document.querySelector("#revoke-claim-id").value = claim.claim_id;
+      document.querySelector("#dispute-claim-id").value = claim.claim_id;
+    }
+    let embeddedFilename = null;
+    if (document.querySelector("#download-embedded-proof").checked) {
+      try {
+        embeddedFilename = await downloadEmbeddedProofCopy(
+          fileInput,
+          mimeType,
+          signedManifest
+        );
+      } catch (error) {
+        console.warn(error);
+      }
+    }
+    let imageWatermarkDownloaded = null;
+    if (
+      claim &&
+      document.querySelector("#protect-image-after-publish").checked &&
+      mimeType.startsWith("image/")
+    ) {
+      const imageWatermark = JSON.parse(
+        await callPython(
+          "watermark_image",
+          [
+            await readBase64(fileInput),
+            mimeType,
+            claim.claim_id,
+            registry.root_fingerprint
+          ],
+          "image-watermarks"
+        )
+      );
+      imageWatermarkDownloaded = selectedFileName(fileInput, ".pact-watermarked");
+      downloadBase64(imageWatermarkDownloaded, imageWatermark.image_b64, mimeType);
+    }
+    renderObject("#sign-result", "Signed file", [
+      ["Claim ID", result.claim_id],
+      ["Requested protection", policySummary(policy)],
+      ["Claimed actions", actions.map(actionSummary).join("; ")],
+      ["Downloaded", `${stem}.proof.json and ${stem}.nonce`],
+      ["Embedded copy", embeddedFilename || "Not downloaded for this file type"],
+      ["Watermarked image", imageWatermarkDownloaded || "Not downloaded"],
+      ["Published", claim ? "Yes" : "No"],
+      ["Registry claim", claim ? claim.claim_id : "Not published"]
+    ]);
+    message(
+      claim
+        ? "File signed and proof published."
+        : "File signed. Proof files were downloaded but not published."
+    );
   });
 
-document.querySelector("#go-register-claim").onclick = () => setPage("claims");
-
-document.querySelector("#register-claim").onclick = () =>
+document.querySelector("#register-mutation").onclick = () =>
   run(async () => {
-    if (!signedManifest) {
-      signedManifest = await readText(
-        document.querySelector("#claim-manifest-file")
+    const fileInput = document.querySelector("#mutation-edited-file");
+    const file = fileInput.files[0];
+    if (!file) {
+      validationError(fileInput, "Choose the edited file.");
+    }
+    const registry = await registryJson("/api/v1/registry");
+    const mimeType = inferMimeTypeFrom(file, "#mutation-mime-type");
+    const policy = collectPolicy("#mutation-policy");
+    const previous = await previousProofForMutation(file, mimeType);
+    const previousManifest = previous.manifest || null;
+    if (!previous.recognized || !previousManifest || !previousManifest.claim_id) {
+      throw new Error(
+        "PACT could not find a previous manifest. Provide the previous proof JSON or original media."
       );
     }
-    const currentIdentity = requireIdentity();
-    const request = await signedMutation(
-      "claim_registration",
-      { signed_manifest_json: signedManifest },
-      currentIdentity.key_id
+    const action = {
+      action: document.querySelector("#mutation-action").value,
+      ...(document.querySelector("#mutation-action-description").value.trim()
+        ? {
+            description: document
+              .querySelector("#mutation-action-description")
+              .value.trim()
+          }
+        : {})
+    };
+    const ingredient = {
+      claim_id: previousManifest.claim_id,
+      registry_url: previousManifest.registry_url,
+      title: document.querySelector("#mutation-original-file").files[0]
+        ? document.querySelector("#mutation-original-file").files[0].name
+        : file.name,
+      format: previousManifest.mime_type,
+      relationship: "parentOf"
+    };
+    const result = JSON.parse(
+      await callPython("sign_content", [
+        registryUrl(),
+        requireIdentity().encrypted_pkcs8_b64,
+        password(),
+        await readFileBase64(file),
+        registry.root_fingerprint,
+        mimeType,
+        document.querySelector("#mutation-canonicalization").value,
+        "custom",
+        "visible",
+        null,
+        JSON.stringify([action]),
+        JSON.stringify([ingredient]),
+        JSON.stringify(policy)
+      ])
     );
-    const claim = await registryJson("/api/v1/claims", {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    show(claim);
+    signedManifest = result.manifest_json;
+    nonceBase64 = result.nonce_b64;
+    const stem = selectedFileStem(fileInput);
+    download(`${stem}.proof.json`, signedManifest);
+    downloadBase64(`${stem}.nonce`, nonceBase64);
+    const claim = await publishSignedManifest(signedManifest);
+    document.querySelector("#revoke-claim-id").value = claim.claim_id;
+    document.querySelector("#dispute-claim-id").value = claim.claim_id;
+    let embeddedFilename = null;
+    if (document.querySelector("#mutation-download-embedded-proof").checked) {
+      try {
+        embeddedFilename = await downloadEmbeddedProofCopy(
+          fileInput,
+          mimeType,
+          signedManifest
+        );
+      } catch (error) {
+        console.warn(error);
+      }
+    }
+    renderObject("#mutation-result", "Registered edit", [
+      ["New claim ID", claim.claim_id],
+      ["Previous claim ID", previousManifest.claim_id],
+      ["Requested protection", policySummary(policy)],
+      ["Edit action", actionSummary(action)],
+      ["Source ingredient", ingredientSummary(ingredient)],
+      ["Downloaded", `${stem}.proof.json and ${stem}.nonce`],
+      ["Embedded copy", embeddedFilename || "Not downloaded for this file type"]
+    ]);
+    message("Edited file signed and published as a new claim.");
+  });
+
+document.querySelector("#inspect-content").onclick = () =>
+  run(async () => {
+    const fileInput = document.querySelector("#inspect-file");
+    const file = fileInput.files[0];
+    if (!file) {
+      throw new Error("Choose a file to inspect.");
+    }
+    const mimeType = document.querySelector("#inspect-mime-type").value || file.type;
+    const result = await inspectFile(file, mimeType);
+    renderInspection(result, await inspectionContext(result));
+    message(result.recognized ? "Inspection complete." : "No proof found in that file.");
+  });
+
+document.querySelector("#verify-manifest").onclick = () =>
+  run(async () => {
+    const manifest =
+      signedManifest || (await readText(document.querySelector("#manifest-file")));
+    const parsed = JSON.parse(manifest);
+    const profile = await registryJson(
+      `/api/v1/profiles/${parsed.manifest.claimant_key_id}`
+    );
+    const result = JSON.parse(await callPython("verify_manifest_json", [
+      manifest,
+      JSON.stringify(profile.public_jwk),
+      document.querySelector("#verify-content-file").files[0]
+        ? await readBase64(document.querySelector("#verify-content-file"))
+        : null,
+      document.querySelector("#nonce-file").files[0]
+        ? await readBase64(document.querySelector("#nonce-file"))
+        : nonceBase64
+    ]));
+    renderObject("#inspect-result", "Proof check", [
+      ["Signature valid", result.signature_valid],
+      ["Content binding valid", result.content_binding_valid],
+      ["Errors", (result.errors || []).join(", ") || "None"]
+    ]);
+    message("Proof check complete.");
+  });
+
+document.querySelector("#audit-manifest").onclick = () =>
+  run(async () => {
+    const manifest =
+      signedManifest || (await readText(document.querySelector("#manifest-file")));
+    const result = JSON.parse(await callPython("privacy_audit", [
+      manifest,
+      document.querySelector("#verify-content-file").files[0]
+        ? await readBase64(document.querySelector("#verify-content-file"))
+        : null,
+      document.querySelector("#nonce-file").files[0]
+        ? await readBase64(document.querySelector("#nonce-file"))
+        : nonceBase64
+    ]));
+    renderObject("#inspect-result", "Public proof preview", [
+      ["Passed", result.passed ? "Yes" : "No"],
+      ["Findings", (result.findings || []).length]
+    ]);
+    console.log(result);
+    message("Preview complete.");
+  });
+
+document.querySelector("#lookup-profile").onclick = () =>
+  run(async () => {
+    const keyId = document.querySelector("#lookup-profile-key").value.trim();
+    if (!keyId) {
+      throw new Error("Enter a profile key.");
+    }
+    const profile = await registryJson(`/api/v1/profiles/${keyId}`);
+    const evidence = await registryJson(`/api/v1/profiles/${keyId}/evidence`);
+    renderProfile("#lookup-result", profile, evidence);
+    message("Profile loaded.");
+  });
+
+document.querySelector("#lookup-claim").onclick = () =>
+  run(async () => {
+    const claimId = document.querySelector("#lookup-claim-id").value.trim();
+    if (!claimId) {
+      throw new Error("Enter a claim ID.");
+    }
+    const claim = await registryJson(`/api/v1/claims/${claimId}`);
+    const disputes = await registryJson(`/api/v1/claims/${claimId}/disputes`);
+    renderClaim("#lookup-result", claim, disputes.disputes || []);
+    message("Claim loaded.");
+  });
+
+document.querySelector("#lookup-dispute").onclick = () =>
+  run(async () => {
+    const disputeId = document.querySelector("#lookup-dispute-id").value.trim();
+    if (!disputeId) {
+      throw new Error("Enter a dispute ID.");
+    }
+    const dispute = await registryJson(`/api/v1/disputes/${disputeId}`);
+    renderDisputes("#lookup-result", [dispute]);
+    message("Dispute loaded.");
+  });
+
+document.querySelector("#refresh-claims").onclick = () =>
+  run(async () => {
+    const currentIdentity = requireIdentity();
+    const response = await registryJson(
+      `/api/v1/profiles/${currentIdentity.key_id}/claims`
+    );
+    renderClaims(response.claims || []);
+    message("Claims loaded.");
   });
 
 document.querySelector("#revoke-claim").onclick = () =>
@@ -472,178 +1542,96 @@ document.querySelector("#revoke-claim").onclick = () =>
         claim_id: claimId,
         reason:
           document.querySelector("#revoke-reason").value.trim() ||
-          "revoked by claimant"
+          "Revoked by claimant."
       },
       requireIdentity().key_id
     );
-    const claim = await registryJson(`/api/v1/claims/${claimId}/revoke`, {
+    await registryJson(`/api/v1/claims/${claimId}/revoke`, {
       method: "POST",
       body: JSON.stringify(request)
     });
-    show(claim);
+    document.querySelector("#refresh-claims").click();
+    message("Claim revoked.");
   });
 
-document.querySelector("#verify-manifest").onclick = () =>
+document.querySelector("#open-dispute").onclick = () =>
   run(async () => {
-    const manifest =
-      signedManifest || (await readText(document.querySelector("#manifest-file")));
-    const parsed = JSON.parse(manifest);
-    const profile = await registryJson(
-      `/api/v1/profiles/${parsed.manifest.claimant_key_id}`
-    );
-    const result = await callPython("verify_manifest_json", [
-      manifest,
-      JSON.stringify(profile.public_jwk),
-      document.querySelector("#verify-content-file").files[0]
-        ? await readBase64(document.querySelector("#verify-content-file"))
-        : null,
-      document.querySelector("#nonce-file").files[0]
-        ? await readBase64(document.querySelector("#nonce-file"))
-        : nonceBase64
-    ]);
-    show(result);
-  });
-
-document.querySelector("#audit-manifest").onclick = () =>
-  run(async () => {
-    const manifest =
-      signedManifest || (await readText(document.querySelector("#manifest-file")));
-    const result = await callPython("privacy_audit", [
-      manifest,
-      document.querySelector("#verify-content-file").files[0]
-        ? await readBase64(document.querySelector("#verify-content-file"))
-        : null,
-      document.querySelector("#nonce-file").files[0]
-        ? await readBase64(document.querySelector("#nonce-file"))
-        : nonceBase64
-    ]);
-    show(result);
-  });
-
-document.querySelector("#watermark-text").onclick = () =>
-  run(async () => {
-    const result = JSON.parse(
-      await callPython("watermark_text", [
-        document.querySelector("#watermark-text-input").value,
-        document.querySelector("#watermark-secret").value,
-        JSON.stringify(
-          document
-            .querySelector("#watermark-methods")
-            .value.split(",")
-            .map((method) => method.trim())
-            .filter(Boolean)
-        ),
-        document.querySelector("#canary-phrase").value || null
-      ])
-    );
-    download(
-      "pact-watermarked.txt",
-      result.transformed_content,
-      "text/plain"
-    );
-    show(result);
-  });
-
-document.querySelector("#watermark-image").onclick = () =>
-  run(async () => {
-    const registry = await registryJson("/api/v1/registry");
-    const imageBase64 = await readBase64(
-      document.querySelector("#watermark-image-file")
-    );
-    const result = JSON.parse(
-      await callPython(
-        "watermark_image",
-        [
-          imageBase64,
-          document.querySelector("#watermark-image-mime-type").value ||
-            "image/png",
-          document.querySelector("#watermark-claim-id").value,
-          registry.root_fingerprint
-        ],
-        "image-watermarks"
-      )
-    );
-    download(
-      "pact-watermarked-image.b64",
-      result.image_b64,
-      "text/plain"
-    );
-    show(result);
-  });
-
-document.querySelector("#embed-document").onclick = () =>
-  run(async () => {
-    const mimeType =
-      document.querySelector("#document-mime-type").value || "application/pdf";
-    const documentBase64 = await readBase64(document.querySelector("#document-file"));
-    const storeBase64 = await readBase64(
-      document.querySelector("#manifest-store-file")
-    );
-    const result = await callPython(
-      mimeType === "application/pdf"
-        ? "embed_pdf_manifest"
-        : "embed_zip_document_manifest",
-      mimeType === "application/pdf"
-        ? [documentBase64, storeBase64]
-        : [documentBase64, mimeType, storeBase64],
-      "documents"
-    );
-    show(result);
-  });
-
-document.querySelector("#extract-document").onclick = () =>
-  run(async () => {
-    const mimeType =
-      document.querySelector("#document-mime-type").value || "application/pdf";
-    const documentBase64 = await readBase64(document.querySelector("#document-file"));
-    const result = await callPython(
-      mimeType === "application/pdf"
-        ? "extract_pdf_manifest"
-        : "extract_zip_document_manifest",
-      [documentBase64],
-      "documents"
-    );
-    show(result);
-  });
-
-document.querySelector("#create-probes").onclick = () =>
-  run(async () => {
-    const result = await callPython("create_probes", [
-      JSON.stringify([document.querySelector("#protected-text").value]),
-      JSON.stringify([document.querySelector("#control-text").value]),
-      document.querySelector("#target-model").value
-    ]);
-    probeSet = result;
-    download("pact-probes.json", result);
-    show(result);
-  });
-
-document.querySelector("#analyze-probes").onclick = () =>
-  run(async () => {
-    if (!probeSet) {
-      throw new Error("Create probes first.");
+    const claimId = document.querySelector("#dispute-claim-id").value.trim();
+    const reason = document.querySelector("#dispute-reason").value.trim();
+    const misuseUrl = document
+      .querySelector("#dispute-misuse-url")
+      .value.trim();
+    if (!claimId || !reason) {
+      throw new Error("Enter a claim ID and explain the dispute.");
     }
-    const result = await callPython("analyze_probes", [
-      probeSet,
-      document.querySelector("#responses-jsonl").value
-    ]);
-    download("pact-probe-evidence.json", result);
-    show(result);
+    const request = await signedMutation("dispute_open", {
+      claim_id: claimId,
+      reason,
+      ...(misuseUrl ? { misuse_url: misuseUrl } : {})
+    });
+    const dispute = await registryJson("/api/v1/disputes", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    renderDisputes("#dispute-result", [dispute]);
+    message("Dispute opened.");
   });
+
+document.querySelector("#view-claim-disputes").onclick = () =>
+  run(async () => {
+    const claimId = document.querySelector("#dispute-claim-id").value.trim();
+    if (!claimId) {
+      throw new Error("Enter a claim ID.");
+    }
+    const response = await registryJson(`/api/v1/claims/${claimId}/disputes`);
+    renderDisputes("#dispute-result", response.disputes || []);
+    message("Disputes loaded.");
+  });
+
+document.querySelector("#view-my-disputes").onclick = () =>
+  run(async () => {
+    const currentIdentity = requireIdentity();
+    const response = await registryJson(
+      `/api/v1/profiles/${currentIdentity.key_id}/disputes`
+    );
+    renderDisputes("#dispute-result", response.disputes || []);
+    message("Disputes loaded.");
+  });
+
+document.querySelector("#view-dispute").onclick = () =>
+  run(async () => {
+    const disputeId = document.querySelector("#view-dispute-id").value.trim();
+    if (!disputeId) {
+      throw new Error("Enter a dispute ID.");
+    }
+    const dispute = await registryJson(`/api/v1/disputes/${disputeId}`);
+    renderDisputes("#dispute-result", [dispute]);
+    message("Dispute loaded.");
+  });
+
+document.querySelector("#content-file").onchange = updateSigningOptions;
+document.querySelector("#mime-type").oninput = updateSigningOptions;
+document.querySelector("#mutation-edited-file").onchange = updateMutationOptions;
+document.querySelector("#mutation-mime-type").oninput = updateMutationOptions;
 
 updateSession();
-setPage(identity ? "claims" : "identity");
+showSavedBrowserProfile();
+updateSigningOptions();
+updateMutationOptions();
+setPage(identity && localStorage.getItem(passcodeStorageKey) ? "sign" : "identity");
 if (identity && localStorage.getItem(passcodeStorageKey)) {
   run(async () => {
     await unlockIdentity();
     await ensureProfile();
-    setPage("claims");
-    show("Identity restored. Choose an action page.");
+    showSavedBrowserProfile();
+    await loadOwnProfile();
+    setPage("sign");
+    message("Profile restored. Choose a file to sign.");
   });
 } else {
-  show(
+  message(
     identity
-      ? "Saved identity found. Use Continue to finish loading it."
-      : "Use Continue to create your browser identity and profile."
+      ? "Saved profile found. Enter your passcode and continue."
+      : "Create your profile to begin."
   );
 }

@@ -1,6 +1,10 @@
 """FastAPI application for the registry API and proof pages."""
 
 import json
+import time
+from collections import deque
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
@@ -24,6 +28,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from pact.crypto import jwk_thumbprint
 from pact.inspection import inspect_content
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
@@ -36,6 +41,169 @@ from pact.registry.app import (
 )
 from pact.server.config import default_routes
 from pact.web.browser_bundle import FEATURE_MODULES, browser_python_archive
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitConfig:
+    """Sliding-window limits for API requests."""
+
+    window_seconds: int = 60
+    ip_limit: int = 300
+    identity_limit: int = 60
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitDecision:
+    """Result of one rate-limit check."""
+
+    allowed: bool
+    limit: int
+    remaining: int
+    reset_seconds: int
+    retry_after: int
+
+
+class SlidingWindowRateLimiter:
+    """Small in-process sliding-window limiter."""
+
+    def __init__(self, config: RateLimitConfig) -> None:
+        self.config = config
+        self._hits: dict[str, deque[float]] = {}
+
+    def check(
+        self, key: str, *, limit: int | None = None
+    ) -> RateLimitDecision:
+        if not self.config.enabled:
+            effective_limit = limit or self.config.ip_limit
+            return RateLimitDecision(
+                allowed=True,
+                limit=effective_limit,
+                remaining=effective_limit,
+                reset_seconds=0,
+                retry_after=0,
+            )
+
+        effective_limit = limit or self.config.ip_limit
+        now = time.monotonic()
+        window = self.config.window_seconds
+        hits = self._hits.setdefault(key, deque())
+        cutoff = now - window
+        while hits and hits[0] <= cutoff:
+            hits.popleft()
+
+        if len(hits) >= effective_limit:
+            retry_after = max(1, int(hits[0] + window - now))
+            return RateLimitDecision(
+                allowed=False,
+                limit=effective_limit,
+                remaining=0,
+                reset_seconds=retry_after,
+                retry_after=retry_after,
+            )
+
+        hits.append(now)
+        remaining = max(0, effective_limit - len(hits))
+        reset_seconds = max(1, int(hits[0] + window - now)) if hits else 0
+        return RateLimitDecision(
+            allowed=True,
+            limit=effective_limit,
+            remaining=remaining,
+            reset_seconds=reset_seconds,
+            retry_after=0,
+        )
+
+
+def _rate_limit_response(decision: RateLimitDecision) -> JSONResponse:
+    return JSONResponse(
+        {"detail": "rate limit exceeded"},
+        status_code=429,
+        headers={
+            "Retry-After": str(decision.retry_after),
+            "X-RateLimit-Limit": str(decision.limit),
+            "X-RateLimit-Remaining": str(decision.remaining),
+            "X-RateLimit-Reset": str(decision.reset_seconds),
+        },
+    )
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("forwarded")
+    if forwarded:
+        for field in forwarded.split(";"):
+            name, _, value = field.strip().partition("=")
+            if name.lower() == "for" and value:
+                return value.strip('"[]')
+
+    for header in ("cf-connecting-ip", "true-client-ip", "x-real-ip"):
+        value = request.headers.get(header)
+        if value:
+            return value.split(",", 1)[0].strip()
+
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+
+    if request.client is not None:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_key_part(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _request_identity_key_values(
+    *,
+    body: object,
+    extra: Iterable[str | None] = (),
+) -> tuple[str, ...]:
+    keys: list[str | None] = [value for value in extra if value]
+    if isinstance(body, BaseModel):
+        body = body.model_dump(mode="json")
+    if isinstance(body, dict):
+        keys.append(_rate_limit_key_part(body.get("challenge_id")))
+        keys.append(_rate_limit_key_part(body.get("bound_key_id")))
+        public_jwk = body.get("claimant_public_jwk")
+        if isinstance(public_jwk, dict):
+            try:
+                keys.append(
+                    "claimant:"
+                    + jwk_thumbprint(cast(dict[str, str], public_jwk))
+                )
+            except Exception:
+                keys.append(None)
+        for field_name in ("current_public_jwk", "replacement_public_jwk"):
+            rotation_jwk = body.get(field_name)
+            if isinstance(rotation_jwk, dict):
+                try:
+                    keys.append(
+                        f"{field_name}:"
+                        + jwk_thumbprint(cast(dict[str, str], rotation_jwk))
+                    )
+                except Exception:
+                    keys.append(None)
+        request_model = body.get("request")
+        if isinstance(request_model, dict):
+            keys.extend(
+                _request_identity_key_values(body=request_model, extra=())
+            )
+    return tuple(key for key in keys if key)
+
+
+def _request_identity_keys(
+    request: Request,
+    *,
+    body: object,
+    extra: Iterable[str | None] = (),
+) -> tuple[str, ...]:
+    return tuple(
+        f"{request.url.path}:{key}"
+        for key in _request_identity_key_values(body=body, extra=extra)
+    )
 
 
 def _templates() -> Jinja2Templates:
@@ -445,10 +613,12 @@ def create_app(
     enable_workspace: bool = False,
     cors_allowed_origins: tuple[str, ...] = (),
     docs_directory: str | Path | None = None,
+    rate_limit_config: RateLimitConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
     templates = _templates()
+    rate_limit = rate_limit_config or RateLimitConfig()
     parsed_public_url = urlsplit(public_base_url)
     normalized_registry_url = (
         service.registry_url if service is not None else registry_url
@@ -475,6 +645,8 @@ def create_app(
     app.state.registry_url = normalized_registry_url
     app.state.local_mode = local_mode
     app.state.enable_workspace = enable_workspace
+    app.state.rate_limiter = SlidingWindowRateLimiter(rate_limit)
+    app.state.rate_limit_config = rate_limit
     mounted_docs_directory = _docs_directory(docs_directory)
     app.state.docs_enabled = mounted_docs_directory is not None
     if cors_allowed_origins:
@@ -496,6 +668,62 @@ def create_app(
             StaticFiles(directory=str(mounted_docs_directory), html=True),
             name="docs",
         )
+
+    def enforce_identity_rate(
+        request: Request,
+        body: object,
+        *,
+        extra: Iterable[str | None] = (),
+    ) -> None:
+        if not rate_limit.enabled:
+            return
+        limiter = cast(SlidingWindowRateLimiter, app.state.rate_limiter)
+        for key in _request_identity_keys(request, body=body, extra=extra):
+            decision = limiter.check(
+                f"identity:{key}",
+                limit=rate_limit.identity_limit,
+            )
+            if not decision.allowed:
+                raise HTTPException(
+                    status_code=429,
+                    detail="rate limit exceeded",
+                    headers={
+                        "Retry-After": str(decision.retry_after),
+                        "X-RateLimit-Limit": str(decision.limit),
+                        "X-RateLimit-Remaining": str(decision.remaining),
+                        "X-RateLimit-Reset": str(decision.reset_seconds),
+                    },
+                )
+
+    @app.middleware("http")
+    async def rate_limit_requests(request: Request, call_next):
+        if (
+            rate_limit.enabled
+            and request.url.path.startswith("/api/")
+            and request.method != "OPTIONS"
+        ):
+            limiter = cast(SlidingWindowRateLimiter, app.state.rate_limiter)
+            decision = limiter.check(
+                f"ip:{_client_ip(request)}",
+                limit=rate_limit.ip_limit,
+            )
+            if not decision.allowed:
+                return _rate_limit_response(decision)
+            response = await call_next(request)
+            response.headers.setdefault(
+                "X-RateLimit-Limit",
+                str(decision.limit),
+            )
+            response.headers.setdefault(
+                "X-RateLimit-Remaining",
+                str(decision.remaining),
+            )
+            response.headers.setdefault(
+                "X-RateLimit-Reset",
+                str(decision.reset_seconds),
+            )
+            return response
+        return await call_next(request)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -647,11 +875,13 @@ def create_app(
         ),
     )
     async def issue_challenge(
+        request: Request,
         body: Annotated[
             ChallengeRequestModel,
             Body(openapi_examples=_openapi_examples(CHALLENGE_EXAMPLES)),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body, extra=(body.purpose.value,))
         challenge = service.issue_challenge(
             body.purpose,
             bound_key_id=body.bound_key_id,
@@ -669,6 +899,7 @@ def create_app(
         ),
     )
     async def register_profile(
+        request: Request,
         body: Annotated[
             MutationRequestModel,
             Body(
@@ -682,6 +913,7 @@ def create_app(
             ),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             profile = service.register_profile(body.to_domain())
         except Exception as error:
@@ -700,6 +932,42 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(profile)
 
+    @app.post(
+        "/api/v1/profiles/{key_id}/update",
+        tags=["Profiles"],
+        summary="Update claimant profile",
+    )
+    async def update_profile(
+        request: Request,
+        key_id: str,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "profile_update": {
+                            "summary": "Update display name",
+                            "value": MUTATION_EXAMPLES["profile_registration"][
+                                "value"
+                            ],
+                        }
+                    }
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
+        enforce_identity_rate(request, body, extra=(key_id,))
+        if body.to_domain().claimant_key_id != key_id:
+            raise HTTPException(
+                status_code=400,
+                detail="profile update signer must match the path key",
+            )
+        try:
+            profile = service.update_profile(body.to_domain())
+        except Exception as error:
+            _raise_http_error(error)
+        return _json_dict(profile)
+
     @app.get(
         "/api/v1/profiles/{key_id}/evidence",
         tags=["Profiles"],
@@ -712,6 +980,30 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(evidence)
 
+    @app.get(
+        "/api/v1/profiles/{key_id}/claims",
+        tags=["Claims"],
+        summary="List claims by claimant profile",
+    )
+    async def list_profile_claims(key_id: str) -> dict[str, object]:
+        try:
+            claims = service.list_claims(claimant_key_id=key_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return {"claims": jsonable_encoder(claims)}
+
+    @app.get(
+        "/api/v1/profiles/{key_id}/disputes",
+        tags=["Disputes"],
+        summary="List disputes attached to a claimant profile",
+    )
+    async def list_profile_disputes(key_id: str) -> dict[str, object]:
+        try:
+            disputes = service.list_disputes(claimant_key_id=key_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return {"disputes": jsonable_encoder(disputes)}
+
     @app.post(
         "/api/v1/certificates",
         tags=["Certificates"],
@@ -719,11 +1011,13 @@ def create_app(
         description="Issue a short-lived claimant certificate after key-possession proof.",
     )
     async def issue_certificate(
+        request: Request,
         body: Annotated[
             CertificateIssueRequestModel,
             Body(openapi_examples=_openapi_examples(CERTIFICATE_EXAMPLES)),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             certificate_pem, chain_pem = service.issue_claimant_certificate(
                 body.request.to_domain(),
@@ -743,6 +1037,7 @@ def create_app(
         description="Publish a signed manifest as a registry claim.",
     )
     async def register_claim(
+        request: Request,
         body: Annotated[
             MutationRequestModel,
             Body(
@@ -756,6 +1051,7 @@ def create_app(
             ),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             claim = service.register_claim(body.to_domain())
         except Exception as error:
@@ -774,6 +1070,18 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(claim)
 
+    @app.get(
+        "/api/v1/claims/{claim_id}/disputes",
+        tags=["Disputes"],
+        summary="List disputes attached to a claim",
+    )
+    async def list_claim_disputes(claim_id: UUID) -> dict[str, object]:
+        try:
+            disputes = service.list_disputes(claim_id=claim_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return {"disputes": jsonable_encoder(disputes)}
+
     @app.post(
         "/api/v1/claims/{claim_id}/revoke",
         tags=["Claims"],
@@ -781,6 +1089,7 @@ def create_app(
         description="Revoke an existing claim. The claim ID is supplied in the path and added to the signed mutation payload by the server.",
     )
     async def revoke_claim(
+        request: Request,
         claim_id: UUID,
         body: Annotated[
             MutationRequestModel,
@@ -798,6 +1107,7 @@ def create_app(
             payload={**body.payload, "claim_id": str(claim_id)},
             signature=body.signature,
         )
+        enforce_identity_rate(request, body, extra=(str(claim_id),))
         try:
             claim = service.revoke_claim(request_model)
         except Exception as error:
@@ -811,11 +1121,13 @@ def create_app(
         description="Rotate a claimant key using signatures from both the current and replacement keys.",
     )
     async def rotate_key(
+        request: Request,
         body: Annotated[
             RotationRequestModel,
             Body(openapi_examples=_openapi_examples(ROTATION_EXAMPLES)),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             profile = service.rotate_key(body.to_domain())
         except Exception as error:
@@ -828,6 +1140,7 @@ def create_app(
         summary="Verify claimant domain",
     )
     async def verify_domain(
+        request: Request,
         body: Annotated[
             MutationRequestModel,
             Body(
@@ -847,6 +1160,7 @@ def create_app(
             ),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             profile = service.verify_domain(body.to_domain())
         except Exception as error:
@@ -859,6 +1173,7 @@ def create_app(
         summary="Open claim dispute",
     )
     async def open_dispute(
+        request: Request,
         body: Annotated[
             MutationRequestModel,
             Body(
@@ -868,6 +1183,7 @@ def create_app(
             ),
         ],
     ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
         try:
             dispute = service.open_dispute(body.to_domain())
         except Exception as error:
@@ -893,6 +1209,7 @@ def create_app(
         description="Administrative endpoint for resolving an open dispute.",
     )
     async def resolve_dispute(
+        request: Request,
         dispute_id: UUID,
         body: Annotated[
             MutationRequestModel,
@@ -913,6 +1230,7 @@ def create_app(
             },
             signature=body.signature,
         )
+        enforce_identity_rate(request, body, extra=(str(dispute_id),))
         try:
             dispute = service.resolve_dispute(request_model)
         except Exception as error:
