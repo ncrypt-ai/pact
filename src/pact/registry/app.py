@@ -1,11 +1,13 @@
 """Registry trust, replay-challenge, certificate, and state-management logic."""
 
 import hashlib
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Self, cast
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from cryptography import x509
@@ -37,10 +39,27 @@ class RegistryError(ValueError):
     """Raised when registry mutation input or state is invalid."""
 
 
+def _optional_http_url(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise RegistryError(f"{field_name} must be a URL string")
+    stripped = value.strip()
+    if not stripped:
+        return None
+    parsed = urlsplit(stripped)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RegistryError(f"{field_name} must be an HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise RegistryError(f"{field_name} must not contain credentials")
+    return stripped
+
+
 class ChallengePurpose(StrEnum):
     """Replay-challenge purpose labels."""
 
     PROFILE_REGISTRATION = "profile_registration"
+    PROFILE_UPDATE = "profile_update"
     CERTIFICATE_ISSUANCE = "certificate_issuance"
     CLAIM_REGISTRATION = "claim_registration"
     KEY_ROTATION = "key_rotation"
@@ -166,6 +185,53 @@ class MutationChallenge:
             issued_at=issued_at,
             expires_at=issued_at + ttl,
             challenge_nonce=base64url_encode(uuid4().bytes + uuid4().bytes),
+            difficulty=difficulty,
+            bound_key_id=bound_key_id,
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        """Parse a persisted challenge payload."""
+
+        try:
+            registry_url = value["registry_url"]
+            challenge_id = value["challenge_id"]
+            purpose = value["purpose"]
+            challenge_nonce = value["challenge_nonce"]
+            difficulty = value["difficulty"]
+        except KeyError as error:
+            raise RegistryError(
+                "stored challenge is missing required fields"
+            ) from error
+
+        if not isinstance(registry_url, str):
+            raise RegistryError(
+                "stored challenge registry_url must be a string"
+            )
+        if not isinstance(challenge_id, str):
+            raise RegistryError("stored challenge_id must be a string")
+        if not isinstance(purpose, str):
+            raise RegistryError("stored challenge purpose must be a string")
+        if not isinstance(challenge_nonce, str):
+            raise RegistryError("stored challenge_nonce must be a string")
+        if not isinstance(difficulty, int):
+            raise RegistryError(
+                "stored challenge difficulty must be an integer"
+            )
+
+        bound_key_id = value.get("bound_key_id")
+        if bound_key_id is not None and not isinstance(bound_key_id, str):
+            raise RegistryError(
+                "stored challenge bound_key_id must be a string"
+            )
+
+        return cls(
+            registry_url=registry_url,
+            challenge_id=UUID(challenge_id),
+            purpose=ChallengePurpose(purpose),
+            issued_at=_parse_datetime(value.get("issued_at"), "issued_at"),
+            expires_at=_parse_datetime(value.get("expires_at"), "expires_at"),
+            challenge_nonce=challenge_nonce,
             difficulty=difficulty,
             bound_key_id=bound_key_id,
         )
@@ -594,10 +660,23 @@ class DisputeRecord:
     opened_by_key_id: str
     opened_at: datetime
     reason: str
+    misuse_url: str | None = None
     status: DisputeStatus = DisputeStatus.OPEN
     resolved_at: datetime | None = None
     resolution_note: str | None = None
     resolved_by_key_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrySnapshot:
+    """Materialized public registry state derived from the event log."""
+
+    last_sequence: int
+    profiles: dict[str, ClaimantProfile]
+    claims: dict[UUID, RegisteredClaim]
+    disputes: dict[UUID, DisputeRecord]
+    certificate_counts: dict[str, int]
+    rotation_counts: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -713,7 +792,8 @@ class RegistryService:
         self.registry_url = normalize_registry_url(registry_url)
         self.store = store
         self.certificate_authority = certificate_authority
-        self._issued_challenges: dict[UUID, MutationChallenge] = {}
+        self._snapshot_lock = threading.RLock()
+        self._snapshot: RegistrySnapshot | None = None
         self._admin_key_ids = {
             jwk_thumbprint(cast(Mapping[str, str], dict(value)))
             for value in admin_public_jwks
@@ -727,7 +807,9 @@ class RegistryService:
         ttl: timedelta = timedelta(minutes=5),
         difficulty: int = 12,
     ) -> MutationChallenge:
-        """Issue and remember a replay challenge."""
+        """Issue and persist a replay challenge."""
+
+        self.store.purge_expired_challenges(_utc_now())
 
         challenge = MutationChallenge.create(
             self.registry_url,
@@ -736,68 +818,98 @@ class RegistryService:
             difficulty=difficulty,
             bound_key_id=bound_key_id,
         )
-        self._issued_challenges[challenge.challenge_id] = challenge
+
+        self.store.save_challenge(
+            challenge_id=challenge.challenge_id,
+            expires_at=challenge.expires_at,
+            challenge=challenge.to_dict(),
+        )
+
         return challenge
 
     def _event_time(self, event: RegistryEvent) -> datetime:
         return event.occurred_at.astimezone(UTC)
 
-    def _load_profiles(self) -> dict[str, ClaimantProfile]:
+    def _append_event(
+        self,
+        event_type: RegistryEventType,
+        actor_key_id: str | None,
+        data: dict[str, object],
+    ) -> RegistryEvent:
+        event = self.store.append(event_type, actor_key_id, data)
+
+        with self._snapshot_lock:
+            self._snapshot = None
+
+        return event
+
+    def _current_snapshot(self) -> RegistrySnapshot:
+        latest_sequence = self.store.latest_sequence()
+
+        with self._snapshot_lock:
+            snapshot = self._snapshot
+            if (
+                snapshot is not None
+                and snapshot.last_sequence == latest_sequence
+            ):
+                return snapshot
+
+            snapshot = self._build_snapshot()
+            self._snapshot = snapshot
+            return snapshot
+
+    def _build_snapshot(self) -> RegistrySnapshot:
         profiles: dict[str, ClaimantProfile] = {}
+        claims: dict[UUID, RegisteredClaim] = {}
+        disputes: dict[UUID, DisputeRecord] = {}
+        certificate_counts: dict[str, int] = {}
+        rotation_counts: dict[str, int] = {}
+        last_sequence = 0
+
         for event in self.store.list_events():
+            last_sequence = event.sequence
             data = event.data
+
             if event.event_type is RegistryEventType.PROFILE_REGISTERED:
                 key_id = cast(str, data["key_id"])
-                display_name = cast(str | None, data.get("display_name"))
-                hosted_account = bool(data.get("hosted_account", False))
-                device_fingerprint = cast(
-                    str | None, data.get("device_fingerprint")
-                )
                 public_jwk_value = data["public_jwk"]
                 if not isinstance(public_jwk_value, dict):
                     raise RegistryStoreError(
                         "stored public_jwk must be an object"
                     )
+
                 profiles[key_id] = ClaimantProfile(
                     key_id=key_id,
                     public_jwk=cast(dict[str, str], public_jwk_value),
                     created_at=self._event_time(event),
-                    display_name=display_name,
-                    hosted_account=hosted_account,
-                    device_fingerprint=device_fingerprint,
+                    display_name=cast(str | None, data.get("display_name")),
+                    hosted_account=bool(data.get("hosted_account", False)),
+                    device_fingerprint=cast(
+                        str | None,
+                        data.get("device_fingerprint"),
+                    ),
                 )
-            elif event.event_type is RegistryEventType.KEY_ROTATED:
-                current_key_id = cast(str, data["current_key_id"])
-                replacement_key_id = cast(str, data["replacement_key_id"])
-                replacement_public_jwk = data["replacement_public_jwk"]
-                if not isinstance(replacement_public_jwk, dict):
-                    raise RegistryStoreError(
-                        "stored replacement_public_jwk must be an object"
-                    )
-                current = profiles[current_key_id]
-                profiles[current_key_id] = ClaimantProfile(
+
+            elif event.event_type is RegistryEventType.PROFILE_UPDATED:
+                key_id = cast(str, data["key_id"])
+                current = profiles[key_id]
+
+                profiles[key_id] = ClaimantProfile(
                     key_id=current.key_id,
                     public_jwk=current.public_jwk,
                     created_at=current.created_at,
-                    display_name=current.display_name,
-                    replacement_key_id=replacement_key_id,
+                    display_name=cast(str | None, data.get("display_name")),
+                    replacement_key_id=current.replacement_key_id,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
                     device_fingerprint=current.device_fingerprint,
                 )
-                profiles[replacement_key_id] = ClaimantProfile(
-                    key_id=replacement_key_id,
-                    public_jwk=cast(dict[str, str], replacement_public_jwk),
-                    created_at=self._event_time(event),
-                    display_name=current.display_name,
-                    verified_domains=current.verified_domains,
-                    hosted_account=current.hosted_account,
-                    device_fingerprint=current.device_fingerprint,
-                )
+
             elif event.event_type is RegistryEventType.DOMAIN_VERIFIED:
                 key_id = cast(str, data["key_id"])
                 domain = cast(str, data["domain"])
                 current = profiles[key_id]
+
                 profiles[key_id] = ClaimantProfile(
                     key_id=current.key_id,
                     public_jwk=current.public_jwk,
@@ -810,27 +922,70 @@ class RegistryService:
                     hosted_account=current.hosted_account,
                     device_fingerprint=current.device_fingerprint,
                 )
-        return profiles
 
-    def _load_claims(self) -> dict[UUID, RegisteredClaim]:
-        claims: dict[UUID, RegisteredClaim] = {}
-        for event in self.store.list_events():
-            data = event.data
-            if event.event_type is RegistryEventType.CLAIM_REGISTERED:
+            elif event.event_type is RegistryEventType.KEY_ROTATED:
+                current_key_id = cast(str, data["current_key_id"])
+                replacement_key_id = cast(str, data["replacement_key_id"])
+                replacement_public_jwk = data["replacement_public_jwk"]
+
+                if not isinstance(replacement_public_jwk, dict):
+                    raise RegistryStoreError(
+                        "stored replacement_public_jwk must be an object"
+                    )
+
+                current = profiles[current_key_id]
+
+                profiles[current_key_id] = ClaimantProfile(
+                    key_id=current.key_id,
+                    public_jwk=current.public_jwk,
+                    created_at=current.created_at,
+                    display_name=current.display_name,
+                    replacement_key_id=replacement_key_id,
+                    verified_domains=current.verified_domains,
+                    hosted_account=current.hosted_account,
+                    device_fingerprint=current.device_fingerprint,
+                )
+
+                profiles[replacement_key_id] = ClaimantProfile(
+                    key_id=replacement_key_id,
+                    public_jwk=cast(dict[str, str], replacement_public_jwk),
+                    created_at=self._event_time(event),
+                    display_name=current.display_name,
+                    verified_domains=current.verified_domains,
+                    hosted_account=current.hosted_account,
+                    device_fingerprint=current.device_fingerprint,
+                )
+
+                rotation_counts[current_key_id] = (
+                    rotation_counts.get(current_key_id, 0) + 1
+                )
+                rotation_counts[replacement_key_id] = (
+                    rotation_counts.get(replacement_key_id, 0) + 1
+                )
+
+            elif event.event_type is RegistryEventType.CERTIFICATE_ISSUED:
+                if event.actor_key_id is not None:
+                    certificate_counts[event.actor_key_id] = (
+                        certificate_counts.get(event.actor_key_id, 0) + 1
+                    )
+
+            elif event.event_type is RegistryEventType.CLAIM_REGISTERED:
                 claim_id = UUID(cast(str, data["claim_id"]))
                 signed_manifest_json = cast(str, data["signed_manifest_json"])
-                signed_manifest = SignedManifest.from_json(
-                    signed_manifest_json
-                )
+
                 claims[claim_id] = RegisteredClaim(
                     claim_id=claim_id,
                     claimant_key_id=cast(str, data["claimant_key_id"]),
                     registered_at=self._event_time(event),
-                    signed_manifest=signed_manifest,
+                    signed_manifest=SignedManifest.from_json(
+                        signed_manifest_json
+                    ),
                 )
+
             elif event.event_type is RegistryEventType.CLAIM_REVOKED:
                 claim_id = UUID(cast(str, data["claim_id"]))
                 current = claims[claim_id]
+
                 claims[claim_id] = RegisteredClaim(
                     claim_id=current.claim_id,
                     claimant_key_id=current.claimant_key_id,
@@ -839,50 +994,72 @@ class RegistryService:
                     revoked_at=self._event_time(event),
                     revocation_reason=cast(str, data["reason"]),
                 )
-        return claims
 
-    def _load_disputes(self) -> dict[UUID, DisputeRecord]:
-        disputes: dict[UUID, DisputeRecord] = {}
-        for event in self.store.list_events():
-            data = event.data
-            if event.event_type is RegistryEventType.DISPUTE_OPENED:
+            elif event.event_type is RegistryEventType.DISPUTE_OPENED:
                 dispute_id = UUID(cast(str, data["dispute_id"]))
+
                 disputes[dispute_id] = DisputeRecord(
                     dispute_id=dispute_id,
                     claim_id=UUID(cast(str, data["claim_id"])),
                     opened_by_key_id=cast(str, data["opened_by_key_id"]),
                     opened_at=self._event_time(event),
                     reason=cast(str, data["reason"]),
+                    misuse_url=cast(str | None, data.get("misuse_url")),
                 )
+
             elif event.event_type is RegistryEventType.DISPUTE_RESOLVED:
                 dispute_id = UUID(cast(str, data["dispute_id"]))
                 current = disputes[dispute_id]
+
                 disputes[dispute_id] = DisputeRecord(
                     dispute_id=current.dispute_id,
                     claim_id=current.claim_id,
                     opened_by_key_id=current.opened_by_key_id,
                     opened_at=current.opened_at,
                     reason=current.reason,
+                    misuse_url=current.misuse_url,
                     status=DisputeStatus(cast(str, data["status"])),
                     resolved_at=self._event_time(event),
                     resolution_note=cast(str, data["resolution_note"]),
                     resolved_by_key_id=cast(str, data["resolved_by_key_id"]),
                 )
-        return disputes
+
+        return RegistrySnapshot(
+            last_sequence=last_sequence,
+            profiles=profiles,
+            claims=claims,
+            disputes=disputes,
+            certificate_counts=certificate_counts,
+            rotation_counts=rotation_counts,
+        )
+
+    def _load_profiles(self) -> dict[str, ClaimantProfile]:
+        return self._current_snapshot().profiles
+
+    def _load_claims(self) -> dict[UUID, RegisteredClaim]:
+        return self._current_snapshot().claims
+
+    def _load_disputes(self) -> dict[UUID, DisputeRecord]:
+        return self._current_snapshot().disputes
 
     def _consume_challenge(
         self,
         request_challenge_id: UUID,
         purpose: ChallengePurpose,
     ) -> MutationChallenge:
-        challenge = self._issued_challenges.get(request_challenge_id)
-        if challenge is None:
+        stored = self.store.take_challenge(request_challenge_id)
+
+        if stored is None:
             raise RegistryError("challenge is unknown or already consumed")
+
+        challenge = MutationChallenge.from_dict(stored)
+
         if challenge.purpose is not purpose:
             raise RegistryError("challenge purpose does not match request")
+
         if challenge.expires_at < _utc_now():
-            del self._issued_challenges[request_challenge_id]
             raise RegistryError("challenge has expired")
+
         return challenge
 
     def _consume_verified_request(
@@ -908,7 +1085,6 @@ class RegistryService:
             public_key, request.signed_bytes(challenge), request.signature
         ):
             raise RegistryError("mutation request signature is invalid")
-        del self._issued_challenges[request.challenge_id]
         return challenge
 
     def _consume_verified_rotation_request(
@@ -941,7 +1117,6 @@ class RegistryService:
             raise RegistryError(
                 "replacement-key rotation signature is invalid"
             )
-        del self._issued_challenges[request.challenge_id]
         return challenge
 
     def get_profile(self, key_id: str) -> ClaimantProfile:
@@ -961,6 +1136,26 @@ class RegistryService:
             return claims[claim_id]
         except KeyError as error:
             raise RegistryError("registered claim does not exist") from error
+
+    def list_claims(
+        self,
+        *,
+        claimant_key_id: str | None = None,
+    ) -> tuple[RegisteredClaim, ...]:
+        """Return registered claims, optionally filtered by claimant key."""
+
+        claims = sorted(
+            self._load_claims().values(),
+            key=lambda claim: claim.registered_at,
+            reverse=True,
+        )
+        if claimant_key_id is None:
+            return tuple(claims)
+        return tuple(
+            claim
+            for claim in claims
+            if claim.claimant_key_id == claimant_key_id
+        )
 
     def find_claim_by_watermark_locator(
         self,
@@ -991,6 +1186,37 @@ class RegistryService:
         except KeyError as error:
             raise RegistryError("dispute does not exist") from error
 
+    def list_disputes(
+        self,
+        *,
+        claim_id: UUID | None = None,
+        claimant_key_id: str | None = None,
+    ) -> tuple[DisputeRecord, ...]:
+        """Return disputes, optionally filtered by claim or claim owner."""
+
+        snapshot = self._current_snapshot()
+
+        disputes = sorted(
+            snapshot.disputes.values(),
+            key=lambda dispute: dispute.opened_at,
+            reverse=True,
+        )
+
+        if claim_id is not None:
+            disputes = [
+                dispute for dispute in disputes if dispute.claim_id == claim_id
+            ]
+
+        if claimant_key_id is not None:
+            disputes = [
+                dispute
+                for dispute in disputes
+                if snapshot.claims[dispute.claim_id].claimant_key_id
+                == claimant_key_id
+            ]
+
+        return tuple(disputes)
+
     def register_profile(self, request: MutationRequest) -> ClaimantProfile:
         """Register a new pseudonymous claimant profile."""
 
@@ -1017,7 +1243,7 @@ class RegistryService:
         hosted_account = request.payload.get("hosted_account", False)
         if not isinstance(hosted_account, bool):
             raise RegistryError("hosted_account must be a boolean")
-        self.store.append(
+        self._append_event(
             RegistryEventType.PROFILE_REGISTERED,
             request.claimant_key_id,
             {
@@ -1029,6 +1255,29 @@ class RegistryService:
             },
         )
         self._append_claimant_certificate(request.claimant_public_jwk)
+        return self.get_profile(request.claimant_key_id)
+
+    def update_profile(self, request: MutationRequest) -> ClaimantProfile:
+        """Update public claimant profile metadata."""
+
+        self._consume_verified_request(
+            request,
+            ChallengePurpose.PROFILE_UPDATE,
+        )
+        self.get_profile(request.claimant_key_id)
+        display_name = request.payload.get("display_name")
+        if display_name is not None and not isinstance(display_name, str):
+            raise RegistryError("display_name must be a string")
+        if isinstance(display_name, str) and not display_name.strip():
+            display_name = None
+        self._append_event(
+            RegistryEventType.PROFILE_UPDATED,
+            request.claimant_key_id,
+            {
+                "key_id": request.claimant_key_id,
+                "display_name": display_name,
+            },
+        )
         return self.get_profile(request.claimant_key_id)
 
     def _append_claimant_certificate(
@@ -1045,7 +1294,7 @@ class RegistryService:
                 valid_days=valid_days,
             )
         )
-        self.store.append(
+        self._append_event(
             RegistryEventType.CERTIFICATE_ISSUED,
             key_id,
             {
@@ -1107,7 +1356,7 @@ class RegistryService:
         claims = self._load_claims()
         if signed_manifest.manifest.claim_id in claims:
             raise RegistryError("claim is already registered")
-        self.store.append(
+        self._append_event(
             RegistryEventType.CLAIM_REGISTERED,
             request.claimant_key_id,
             {
@@ -1130,7 +1379,7 @@ class RegistryService:
         profiles = self._load_profiles()
         if request.replacement_key_id in profiles:
             raise RegistryError("replacement claimant key already exists")
-        self.store.append(
+        self._append_event(
             RegistryEventType.KEY_ROTATED,
             request.current_key_id,
             {
@@ -1159,7 +1408,7 @@ class RegistryService:
             raise RegistryError("only the claimant may revoke this claim")
         if claim.revoked_at is not None:
             raise RegistryError("claim is already revoked")
-        self.store.append(
+        self._append_event(
             RegistryEventType.CLAIM_REVOKED,
             request.claimant_key_id,
             {
@@ -1183,7 +1432,7 @@ class RegistryService:
         if not isinstance(domain, str) or "." not in domain:
             raise RegistryError("domain must be a plausible hostname")
         self.get_profile(request.claimant_key_id)
-        self.store.append(
+        self._append_event(
             RegistryEventType.DOMAIN_VERIFIED,
             request.claimant_key_id,
             {
@@ -1206,9 +1455,13 @@ class RegistryService:
             raise RegistryError("claim_id must be a string")
         if not isinstance(reason, str) or not reason:
             raise RegistryError("reason must be a nonempty string")
+        misuse_url = _optional_http_url(
+            request.payload.get("misuse_url"),
+            "misuse_url",
+        )
         self.get_claim(UUID(claim_id_value))
         dispute_id = uuid4()
-        self.store.append(
+        self._append_event(
             RegistryEventType.DISPUTE_OPENED,
             request.claimant_key_id,
             {
@@ -1216,6 +1469,7 @@ class RegistryService:
                 "claim_id": claim_id_value,
                 "opened_by_key_id": request.claimant_key_id,
                 "reason": reason,
+                "misuse_url": misuse_url,
             },
         )
         return self.get_dispute(dispute_id)
@@ -1244,7 +1498,7 @@ class RegistryService:
         status = DisputeStatus(status_value)
         if status is DisputeStatus.OPEN:
             raise RegistryError("resolved disputes cannot remain open")
-        self.store.append(
+        self._append_event(
             RegistryEventType.DISPUTE_RESOLVED,
             request.claimant_key_id,
             {
@@ -1259,33 +1513,27 @@ class RegistryService:
     def evidence_profile(self, key_id: str) -> EvidenceProfile:
         """Summarize public evidence attached to one claimant profile."""
 
-        profile = self.get_profile(key_id)
-        claims = self._load_claims().values()
-        disputes = self._load_disputes().values()
+        snapshot = self._current_snapshot()
+
+        try:
+            profile = snapshot.profiles[key_id]
+        except KeyError as error:
+            raise RegistryError("claimant profile does not exist") from error
+
         relevant_claims = [
-            claim for claim in claims if claim.claimant_key_id == key_id
+            claim
+            for claim in snapshot.claims.values()
+            if claim.claimant_key_id == key_id
         ]
+
         claimant_disputes = [
             dispute
-            for dispute in disputes
-            if self.get_claim(dispute.claim_id).claimant_key_id == key_id
+            for dispute in snapshot.disputes.values()
+            if snapshot.claims[dispute.claim_id].claimant_key_id == key_id
         ]
-        certificate_count = sum(
-            1
-            for event in self.store.list_events()
-            if event.event_type is RegistryEventType.CERTIFICATE_ISSUED
-            and event.actor_key_id == key_id
-        )
-        rotation_count = sum(
-            1
-            for event in self.store.list_events()
-            if event.event_type is RegistryEventType.KEY_ROTATED
-            and (
-                cast(str, event.data["current_key_id"]) == key_id
-                or cast(str, event.data["replacement_key_id"]) == key_id
-            )
-        )
+
         now = _utc_now()
+
         return EvidenceProfile(
             key_age_days=max(0, (now - profile.created_at).days),
             active_claim_count=sum(
@@ -1295,8 +1543,8 @@ class RegistryService:
                 claim.revoked_at is not None for claim in relevant_claims
             ),
             verified_domains=profile.verified_domains,
-            certificate_count=certificate_count,
-            rotation_count=rotation_count,
+            certificate_count=snapshot.certificate_counts.get(key_id, 0),
+            rotation_count=snapshot.rotation_counts.get(key_id, 0),
             open_disputes=sum(
                 dispute.status is DisputeStatus.OPEN
                 for dispute in claimant_disputes

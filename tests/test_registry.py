@@ -26,6 +26,7 @@ from pact import (
     merkle_root,
     sign_manifest,
 )
+from pact.registry.store import SqliteRegistryStore
 
 
 def solve_pow(challenge) -> int:
@@ -322,6 +323,46 @@ def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
         service.register_profile(request)
 
 
+def test_registry_consumes_challenge_on_failed_verification(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    challenge = service.issue_challenge(
+        ChallengePurpose.PROFILE_REGISTRATION,
+        difficulty=0,
+    )
+    wrong_identity = ClaimantIdentity.generate(service.registry_url)
+    bad_request = MutationRequest.create(
+        wrong_identity,
+        challenge,
+        payload={"device_fingerprint": "test-device"},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+    bad_request = MutationRequest(
+        challenge_id=bad_request.challenge_id,
+        claimant_public_jwk=bad_request.claimant_public_jwk,
+        proof_of_work_solution=bad_request.proof_of_work_solution,
+        payload=bad_request.payload,
+        signature=(
+            ("A" if bad_request.signature[0] != "A" else "B")
+            + bad_request.signature[1:]
+        ),
+    )
+    good_request = MutationRequest.create(
+        identity,
+        challenge,
+        payload={"device_fingerprint": f"test-device-{identity.key_id}"},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    with pytest.raises(RegistryError):
+        service.register_profile(bad_request)
+
+    with pytest.raises(RegistryError, match="already consumed"):
+        service.register_profile(good_request)
+
+
 def test_registry_rejects_duplicate_device_fingerprint(tmp_path: Path) -> None:
     service, _admin_identity = make_service(tmp_path)
     first = ClaimantIdentity.generate(service.registry_url)
@@ -452,3 +493,103 @@ def test_registry_revocation_and_disputes(tmp_path: Path) -> None:
     verification = service.verify_claim(claim.claim_id)
     assert verification.label is VerificationLabel.REVOKED
     assert verification.revoked is True
+
+
+def test_registry_challenge_survives_service_restart_with_sqlite(
+    tmp_path: Path,
+) -> None:
+    registry_url = "https://registry.example"
+    database = tmp_path / "registry.sqlite"
+    authority = RegistryCertificateAuthority.initialize(registry_url)
+    identity = ClaimantIdentity.generate(registry_url)
+
+    issuing_service = RegistryService(
+        registry_url,
+        store=SqliteRegistryStore(database),
+        certificate_authority=authority,
+    )
+
+    challenge = issuing_service.issue_challenge(
+        ChallengePurpose.PROFILE_REGISTRATION,
+        difficulty=4,
+    )
+
+    consuming_service = RegistryService(
+        registry_url,
+        store=SqliteRegistryStore(database),
+        certificate_authority=authority,
+    )
+
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload={"device_fingerprint": f"test-device-{identity.key_id}"},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    profile = consuming_service.register_profile(request)
+
+    assert profile.key_id == identity.key_id
+
+    with pytest.raises(RegistryError, match="already consumed"):
+        consuming_service.register_profile(request)
+
+
+def test_registry_snapshot_observes_external_sqlite_writes(
+    tmp_path: Path,
+) -> None:
+    registry_url = "https://registry.example"
+    database = tmp_path / "registry.sqlite"
+    authority = RegistryCertificateAuthority.initialize(registry_url)
+
+    service_a = RegistryService(
+        registry_url,
+        store=SqliteRegistryStore(database),
+        certificate_authority=authority,
+    )
+    service_b = RegistryService(
+        registry_url,
+        store=SqliteRegistryStore(database),
+        certificate_authority=authority,
+    )
+
+    first_identity = ClaimantIdentity.generate(registry_url)
+    first_challenge = service_a.issue_challenge(
+        ChallengePurpose.PROFILE_REGISTRATION,
+        difficulty=4,
+    )
+    first_request = MutationRequest.create(
+        first_identity,
+        first_challenge,
+        payload={"device_fingerprint": f"test-device-{first_identity.key_id}"},
+        proof_of_work_solution=solve_pow(first_challenge),
+    )
+    service_a.register_profile(first_request)
+
+    # This warms service_b's snapshot.
+    assert service_b.get_profile(first_identity.key_id).key_id == (
+        first_identity.key_id
+    )
+
+    second_identity = ClaimantIdentity.generate(registry_url)
+    second_challenge = service_a.issue_challenge(
+        ChallengePurpose.PROFILE_REGISTRATION,
+        difficulty=4,
+    )
+    second_request = MutationRequest.create(
+        second_identity,
+        second_challenge,
+        payload={
+            "device_fingerprint": f"test-device-{second_identity.key_id}"
+        },
+        proof_of_work_solution=solve_pow(second_challenge),
+    )
+
+    # Write through service_a, read through service_b.
+    service_a.register_profile(second_request)
+
+    # This only passes if service_b notices latest_sequence changed
+    # and rebuilds its snapshot.
+    assert service_b.get_profile(second_identity.key_id).key_id == (
+        second_identity.key_id
+    )

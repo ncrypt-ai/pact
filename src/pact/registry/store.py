@@ -24,6 +24,7 @@ class RegistryEventType(StrEnum):
     """Event types stored in the append-only registry log."""
 
     PROFILE_REGISTERED = "profile_registered"
+    PROFILE_UPDATED = "profile_updated"
     CERTIFICATE_ISSUED = "certificate_issued"
     CLAIM_REGISTERED = "claim_registered"
     KEY_ROTATED = "key_rotated"
@@ -44,6 +45,10 @@ class RegistryStore(Protocol):
         """Load every persisted batch in order."""
         ...
 
+    def latest_sequence(self) -> int:
+        """Return the highest persisted registry event sequence."""
+        ...
+
     def append(
         self,
         event_type: RegistryEventType,
@@ -51,6 +56,27 @@ class RegistryStore(Protocol):
         data: dict[str, object],
     ) -> "RegistryEvent":
         """Append one event and its disclosure batch."""
+        ...
+
+    def save_challenge(
+        self,
+        *,
+        challenge_id: UUID,
+        expires_at: datetime,
+        challenge: dict[str, object],
+    ) -> None:
+        """Persist a short-lived, one-use mutation challenge."""
+        ...
+
+    def take_challenge(
+        self,
+        challenge_id: UUID,
+    ) -> dict[str, object] | None:
+        """Atomically load and consume a mutation challenge."""
+        ...
+
+    def purge_expired_challenges(self, now: datetime) -> int:
+        """Remove expired unconsumed mutation challenges."""
         ...
 
 
@@ -284,15 +310,22 @@ class FileRegistryStore:
         self.directory = directory
         self.events_path = directory / "events.jsonl"
         self.batches_path = directory / "batches.jsonl"
+        self.challenges_path = directory / "challenges"
 
     def _ensure_directory(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
+
+    def _ensure_challenges_directory(self) -> None:
+        self.challenges_path.mkdir(parents=True, exist_ok=True)
 
     def _append_jsonl(self, path: Path, value: JsonValue) -> None:
         self._ensure_directory()
         with path.open("ab") as handle:
             handle.write(canonical_json(value))
             handle.write(b"\n")
+
+    def _challenge_path(self, challenge_id: UUID) -> Path:
+        return self.challenges_path / f"{challenge_id}.json"
 
     def list_events(self) -> tuple[RegistryEvent, ...]:
         """Load every persisted event in order."""
@@ -320,6 +353,14 @@ class FileRegistryStore:
             result.append(RegistryBatch.from_dict(parsed))
         return tuple(result)
 
+    def latest_sequence(self) -> int:
+        """Return the highest persisted registry event sequence."""
+
+        events = self.list_events()
+        if not events:
+            return 0
+        return events[-1].sequence
+
     def append(
         self,
         event_type: RegistryEventType,
@@ -344,6 +385,69 @@ class FileRegistryStore:
             batch.to_dict(),
         )
         return event
+
+    def save_challenge(
+        self,
+        *,
+        challenge_id: UUID,
+        expires_at: datetime,
+        challenge: dict[str, object],
+    ) -> None:
+        """Persist a short-lived, one-use mutation challenge."""
+
+        self._ensure_challenges_directory()
+        path = self._challenge_path(challenge_id)
+        temporary_path = path.with_name(f"{path.name}.{uuid4()}.tmp")
+        temporary_path.write_bytes(canonical_json(cast(JsonValue, challenge)))
+        temporary_path.replace(path)
+
+    def take_challenge(
+        self,
+        challenge_id: UUID,
+    ) -> dict[str, object] | None:
+        """Atomically load and consume a mutation challenge."""
+
+        path = self._challenge_path(challenge_id)
+        claimed_path = path.with_name(f"{path.name}.{uuid4()}.claimed")
+        try:
+            path.rename(claimed_path)
+        except FileNotFoundError:
+            return None
+
+        try:
+            return _parse_stored_json_object(
+                claimed_path.read_bytes(),
+                "file registry challenge",
+            )
+        finally:
+            claimed_path.unlink(missing_ok=True)
+
+    def purge_expired_challenges(self, now: datetime) -> int:
+        """Remove expired unconsumed mutation challenges."""
+
+        if not self.challenges_path.exists():
+            return 0
+
+        removed = 0
+        for path in self.challenges_path.glob("*.json"):
+            try:
+                challenge = _parse_stored_json_object(
+                    path.read_bytes(),
+                    "file registry challenge",
+                )
+                expires_at = _parse_datetime(
+                    challenge.get("expires_at"),
+                    "expires_at",
+                )
+            except (FileNotFoundError, RegistryStoreError):
+                continue
+            if expires_at < now:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                removed += 1
+        return removed
 
 
 class SqliteRegistryStore:
@@ -374,6 +478,13 @@ class SqliteRegistryStore:
                 last_sequence INTEGER NOT NULL,
                 batch_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS registry_challenges (
+                challenge_id TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                challenge_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_registry_challenges_expires_at
+                ON registry_challenges(expires_at);
             """
         )
         self.connection.commit()
@@ -409,6 +520,14 @@ class SqliteRegistryStore:
                 "SELECT batch_json FROM registry_batches ORDER BY first_sequence"
             )
         )
+
+    def latest_sequence(self) -> int:
+        """Return the highest persisted registry event sequence."""
+
+        row = self.connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) FROM registry_events"
+        ).fetchone()
+        return int(row[0])
 
     def append(
         self,
@@ -460,6 +579,64 @@ class SqliteRegistryStore:
                 )
             return event
 
+    def save_challenge(
+        self,
+        *,
+        challenge_id: UUID,
+        expires_at: datetime,
+        challenge: dict[str, object],
+    ) -> None:
+        """Persist a short-lived, one-use mutation challenge."""
+
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT OR REPLACE INTO registry_challenges(
+                    challenge_id,
+                    expires_at,
+                    challenge_json
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    str(challenge_id),
+                    _isoformat(expires_at),
+                    canonical_json(cast(JsonValue, challenge)).decode("utf-8"),
+                ),
+            )
+
+    def take_challenge(
+        self,
+        challenge_id: UUID,
+    ) -> dict[str, object] | None:
+        """Atomically load and consume a mutation challenge."""
+
+        row = self.connection.execute(
+            """
+            DELETE FROM registry_challenges
+            WHERE challenge_id = ?
+            RETURNING challenge_json
+            """,
+            (str(challenge_id),),
+        ).fetchone()
+        self.connection.commit()
+
+        if row is None:
+            return None
+
+        return _parse_stored_json_object(row[0], "SQLite registry challenge")
+
+    def purge_expired_challenges(self, now: datetime) -> int:
+        """Remove expired unconsumed mutation challenges."""
+
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM registry_challenges WHERE expires_at < ?",
+                (_isoformat(now),),
+            )
+
+        return cursor.rowcount
+
 
 class PostgresRegistryStore:
     """Postgres-backed registry persistence for serverless deployments."""
@@ -496,6 +673,21 @@ class PostgresRegistryStore:
                 last_sequence BIGINT NOT NULL,
                 batch_json TEXT NOT NULL
             )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS registry_challenges (
+                challenge_id TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                challenge_json TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_registry_challenges_expires_at
+                ON registry_challenges(expires_at)
             """
         )
         self.connection.execute(
@@ -541,6 +733,14 @@ class PostgresRegistryStore:
                 "SELECT batch_json FROM registry_batches ORDER BY first_sequence"
             )
         )
+
+    def latest_sequence(self) -> int:
+        """Return the highest persisted registry event sequence."""
+
+        row = self.connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) FROM registry_events"
+        ).fetchone()
+        return int(row[0])
 
     def append(
         self,
@@ -598,3 +798,75 @@ class PostgresRegistryStore:
             raise
         self.connection.commit()
         return event
+
+    def save_challenge(
+        self,
+        *,
+        challenge_id: UUID,
+        expires_at: datetime,
+        challenge: dict[str, object],
+    ) -> None:
+        """Persist a short-lived, one-use mutation challenge."""
+
+        try:
+            self.connection.execute(
+                """
+                INSERT INTO registry_challenges(
+                    challenge_id,
+                    expires_at,
+                    challenge_json
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT (challenge_id) DO UPDATE SET
+                    expires_at = EXCLUDED.expires_at,
+                    challenge_json = EXCLUDED.challenge_json
+                """,
+                (
+                    str(challenge_id),
+                    _isoformat(expires_at),
+                    canonical_json(cast(JsonValue, challenge)).decode("utf-8"),
+                ),
+            )
+        except Exception:
+            self.connection.rollback()
+            raise
+        self.connection.commit()
+
+    def take_challenge(
+        self,
+        challenge_id: UUID,
+    ) -> dict[str, object] | None:
+        """Atomically load and consume a mutation challenge."""
+
+        try:
+            row = self.connection.execute(
+                """
+                DELETE FROM registry_challenges
+                WHERE challenge_id = %s
+                RETURNING challenge_json
+                """,
+                (str(challenge_id),),
+            ).fetchone()
+        except Exception:
+            self.connection.rollback()
+            raise
+        self.connection.commit()
+
+        if row is None:
+            return None
+
+        return _parse_stored_json_object(row[0], "Postgres registry challenge")
+
+    def purge_expired_challenges(self, now: datetime) -> int:
+        """Remove expired unconsumed mutation challenges."""
+
+        try:
+            cursor = self.connection.execute(
+                "DELETE FROM registry_challenges WHERE expires_at < %s",
+                (_isoformat(now),),
+            )
+        except Exception:
+            self.connection.rollback()
+            raise
+        self.connection.commit()
+        return int(cursor.rowcount)
