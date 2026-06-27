@@ -76,6 +76,67 @@
         </p>
         <div id="browser-profile-summary" class="result" hidden></div>
         <div id="public-profile-summary" class="result" hidden></div>
+        <fieldset>
+          <legend>Trust upgrades</legend>
+          <label>
+            Domain to verify
+            <input id="verify-domain-name" placeholder="example.com">
+          </label>
+          <div class="actions">
+            <button type="button" id="show-domain-record">Show DNS TXT record</button>
+            <button type="button" id="verify-domain">Verify DNS record</button>
+          </div>
+          <div id="domain-verification-result" class="result" hidden></div>
+          <details>
+            <summary>Hosted account</summary>
+            <label>
+              Hosted login token
+              <input id="hosted-login-token" placeholder="Token from registry host login">
+            </label>
+            <div class="actions">
+              <button type="button" id="complete-hosted-login">Complete hosted login</button>
+            </div>
+            <label>
+              Admin approval key ID
+              <input id="authorize-hosted-key-id" placeholder="Profile key to approve">
+            </label>
+            <label>
+              Provider
+              <input id="authorize-hosted-provider" placeholder="Hosted provider name">
+            </label>
+            <label>
+              Note
+              <input id="authorize-hosted-note" placeholder="Optional admin note">
+            </label>
+            <div class="actions">
+              <button type="button" id="authorize-hosted-account">Admin approve hosted account</button>
+            </div>
+            <div id="hosted-account-result" class="result" hidden></div>
+          </details>
+          <details>
+            <summary>Third-party attestation</summary>
+            <label>
+              Claimant key ID
+              <input id="third-party-key-id" placeholder="Profile key to attest">
+            </label>
+            <label class="inline-choice">
+              <input id="third-party-documented-rights" type="checkbox">
+              <span>Documented rights reviewed</span>
+            </label>
+            <label>
+              Provider
+              <input id="third-party-provider" placeholder="Attester or organization">
+            </label>
+            <label>
+              Note
+              <input id="third-party-note" placeholder="Optional attestation note">
+            </label>
+            <div class="actions">
+              <button type="button" id="attest-third-party">Submit third-party attestation</button>
+            </div>
+            <div id="third-party-result" class="result" hidden></div>
+          </details>
+        </fieldset>
         <details>
           <summary>Recovery and account options</summary>
           <p class="small">

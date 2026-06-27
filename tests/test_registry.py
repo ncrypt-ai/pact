@@ -23,6 +23,8 @@ from pact import (
     TrustLabel,
     TrustTier,
     VerificationLabel,
+    domain_verification_txt_name,
+    domain_verification_txt_value,
     merkle_root,
     sign_manifest,
 )
@@ -65,6 +67,7 @@ def make_service(tmp_path: Path) -> tuple[RegistryService, ClaimantIdentity]:
         store=FileRegistryStore(tmp_path),
         certificate_authority=authority,
         admin_public_jwks=(admin_identity.public_jwk,),
+        dns_txt_resolver=lambda _name: (),
     )
     return service, admin_identity
 
@@ -181,10 +184,19 @@ def test_registry_profile_claim_certificate_and_domain_flow(
         difficulty=4,
         bound_key_id=identity.key_id,
     )
+    txt_name = domain_verification_txt_name("example.com")
+    txt_value = domain_verification_txt_value(
+        service.registry_url,
+        identity.key_id,
+        "example.com",
+    )
+    service._dns_txt_resolver = lambda name: (  # noqa: SLF001
+        (txt_value,) if name == txt_name else ()
+    )
     domain_request = MutationRequest.create(
         identity,
         domain_challenge,
-        payload={"domain": "example.com"},
+        payload={"domain": "example.com", "txt_value": txt_value},
         proof_of_work_solution=solve_pow(domain_challenge),
     )
     updated_profile = service.verify_domain(domain_request)
@@ -195,6 +207,31 @@ def test_registry_profile_claim_certificate_and_domain_flow(
     assert evidence.certificate_count == 2
     assert evidence.trust_tier is TrustTier.DOMAIN_VERIFIED
     assert TrustLabel.DOMAIN_VERIFIED in evidence.trust_labels
+
+
+def test_domain_verification_requires_dns_txt_proof(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+
+    domain_challenge = service.issue_challenge(
+        ChallengePurpose.DOMAIN_VERIFICATION,
+        difficulty=4,
+        bound_key_id=identity.key_id,
+    )
+    domain_request = MutationRequest.create(
+        identity,
+        domain_challenge,
+        payload={"domain": "example.com"},
+        proof_of_work_solution=solve_pow(domain_challenge),
+    )
+
+    with pytest.raises(RegistryError, match="DNS TXT record"):
+        service.verify_domain(domain_request)
+
+    evidence = service.evidence_profile(identity.key_id)
+    assert evidence.trust_tier is TrustTier.UNAUTHENTICATED_DEVICE
+    assert TrustLabel.DOMAIN_VERIFIED not in evidence.trust_labels
 
 
 def test_profile_certificate_does_not_raise_trust_tier(tmp_path: Path) -> None:
@@ -209,7 +246,9 @@ def test_profile_certificate_does_not_raise_trust_tier(tmp_path: Path) -> None:
     assert evidence.trust_labels == (TrustLabel.UNAUTHENTICATED_DEVICE,)
 
 
-def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:
+def test_profile_registration_cannot_self_assert_hosted_account(
+    tmp_path: Path,
+) -> None:
     service, _admin_identity = make_service(tmp_path)
     identity = ClaimantIdentity.generate(service.registry_url)
     challenge = service.issue_challenge(
@@ -227,12 +266,129 @@ def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:
         proof_of_work_solution=solve_pow(challenge),
     )
 
-    profile = service.register_profile(request)
+    with pytest.raises(RegistryError, match="administrator authorization"):
+        service.register_profile(request)
+
+
+def test_admin_account_authorization_raises_trust_tier(tmp_path: Path) -> None:
+    service, admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+
+    challenge = service.issue_challenge(
+        ChallengePurpose.ACCOUNT_AUTHORIZATION,
+        difficulty=4,
+        bound_key_id=admin_identity.key_id,
+    )
+    request = MutationRequest.create(
+        admin_identity,
+        challenge,
+        payload={
+            "target_key_id": identity.key_id,
+            "provider": "registry.example",
+            "note": "Test account authorization.",
+        },
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    profile = service.authorize_hosted_account(request)
+    evidence = service.evidence_profile(identity.key_id)
+
+    assert profile.hosted_account is True
+    assert profile.third_party_attested is False
+    assert profile.documented_rights is False
+    assert evidence.trust_tier is TrustTier.HOSTED_ACCOUNT
+    assert TrustLabel.HOSTED_ACCOUNT in evidence.trust_labels
+    assert TrustLabel.THIRD_PARTY_ATTESTED not in evidence.trust_labels
+
+
+def test_non_admin_cannot_authorize_account_trust(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    other_identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    register_profile(service, other_identity)
+
+    challenge = service.issue_challenge(
+        ChallengePurpose.ACCOUNT_AUTHORIZATION,
+        difficulty=4,
+        bound_key_id=other_identity.key_id,
+    )
+    request = MutationRequest.create(
+        other_identity,
+        challenge,
+        payload={"target_key_id": identity.key_id, "hosted_account": True},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    with pytest.raises(RegistryError, match="only a registry admin"):
+        service.authorize_hosted_account(request)
+
+
+def test_hosted_login_raises_hosted_account_trust_tier(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    service._hosted_account_verifier = (  # noqa: SLF001
+        lambda _key_id, payload: payload.get("login_token") == "ok"
+    )
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+
+    challenge = service.issue_challenge(
+        ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION,
+        difficulty=4,
+        bound_key_id=identity.key_id,
+    )
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload={"login_token": "ok"},
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    profile = service.complete_hosted_account_login(request)
     evidence = service.evidence_profile(identity.key_id)
 
     assert profile.hosted_account is True
     assert evidence.trust_tier is TrustTier.HOSTED_ACCOUNT
     assert TrustLabel.HOSTED_ACCOUNT in evidence.trust_labels
+
+
+def test_third_party_attestation_is_independent_trust_tier(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    attester_identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    register_profile(service, attester_identity)
+
+    challenge = service.issue_challenge(
+        ChallengePurpose.THIRD_PARTY_ATTESTATION,
+        difficulty=4,
+        bound_key_id=attester_identity.key_id,
+    )
+    request = MutationRequest.create(
+        attester_identity,
+        challenge,
+        payload={
+            "target_key_id": identity.key_id,
+            "documented_rights": True,
+            "provider": "Example Attester",
+        },
+        proof_of_work_solution=solve_pow(challenge),
+    )
+
+    profile = service.attest_third_party_account(request)
+    evidence = service.evidence_profile(identity.key_id)
+
+    assert profile.hosted_account is False
+    assert profile.third_party_attested is True
+    assert profile.documented_rights is True
+    assert evidence.trust_tier is TrustTier.THIRD_PARTY_ATTESTED
+    assert TrustLabel.THIRD_PARTY_ATTESTED in evidence.trust_labels
+    assert TrustLabel.DOCUMENTED_RIGHTS in evidence.trust_labels
 
 
 def test_registry_claim_verification_report_for_current_claim(

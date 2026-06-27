@@ -46,6 +46,8 @@ from pact.registry.app import (
     MutationRequest,
     RegistryCertificateAuthority,
     RegistryService,
+    domain_verification_txt_name,
+    domain_verification_txt_value,
 )
 from pact.registry.store import SqliteRegistryStore
 from pact.watermarks import (
@@ -703,7 +705,6 @@ def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
     display_name = cast(str | None, args.display_name)
     if display_name:
         payload["display_name"] = display_name
-    payload["hosted_account"] = bool(args.hosted_account)
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
@@ -760,6 +761,137 @@ def _cmd_registry_register_claim(args: argparse.Namespace) -> int:
         ),
     )
     print(_serialize_json(claim))
+    return 0
+
+
+def _cmd_registry_verify_domain(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    domain = cast(str, args.domain).strip().rstrip(".").lower()
+    txt_name = domain_verification_txt_name(domain)
+    txt_value = domain_verification_txt_value(
+        identity.registry_url,
+        identity.key_id,
+        domain,
+    )
+    record = {
+        "domain": domain,
+        "txt_name": txt_name,
+        "txt_value": txt_value,
+        "next_step": (
+            "Publish this DNS TXT record, wait for it to resolve publicly, "
+            "then rerun this command without --show-record-only."
+        ),
+    }
+    if args.show_record_only:
+        print(_serialize_json(record))
+        return 0
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.DOMAIN_VERIFICATION.value,
+                "difficulty": args.difficulty,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    profile = _request_json(
+        identity.registry_url,
+        "/api/v1/domains/verify",
+        payload=_signed_mutation_body(
+            identity,
+            challenge,
+            {
+                "domain": domain,
+                "txt_value": txt_value,
+            },
+        ),
+    )
+    print(_serialize_json({"dns_record": record, "profile": profile}))
+    return 0
+
+
+def _cmd_registry_authorize_hosted_account(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    target_key_id = cast(str, args.key_id)
+    payload = {
+        "target_key_id": target_key_id,
+        **({"provider": args.provider} if args.provider else {}),
+        **({"note": args.note} if args.note else {}),
+    }
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.ACCOUNT_AUTHORIZATION.value,
+                "difficulty": args.difficulty,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    profile = _request_json(
+        identity.registry_url,
+        f"/api/v1/profiles/{target_key_id}/hosted-authorize",
+        payload=_signed_mutation_body(identity, challenge, payload),
+    )
+    print(_serialize_json(profile))
+    return 0
+
+
+def _cmd_registry_complete_hosted_login(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    payload = {
+        **({"provider": args.provider} if args.provider else {}),
+        **({"login_token": args.login_token} if args.login_token else {}),
+    }
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION.value,
+                "difficulty": args.difficulty,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    profile = _request_json(
+        identity.registry_url,
+        "/api/v1/profiles/me/hosted-login",
+        payload=_signed_mutation_body(identity, challenge, payload),
+    )
+    print(_serialize_json(profile))
+    return 0
+
+
+def _cmd_registry_attest_third_party(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    target_key_id = cast(str, args.key_id)
+    payload = {
+        "target_key_id": target_key_id,
+        "documented_rights": bool(args.documented_rights),
+        **({"provider": args.provider} if args.provider else {}),
+        **({"note": args.note} if args.note else {}),
+    }
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.THIRD_PARTY_ATTESTATION.value,
+                "difficulty": args.difficulty,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    profile = _request_json(
+        identity.registry_url,
+        f"/api/v1/profiles/{target_key_id}/third-party-attest",
+        payload=_signed_mutation_body(identity, challenge, payload),
+    )
+    print(_serialize_json(profile))
     return 0
 
 
@@ -1640,11 +1772,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional public display name for this claimant profile.",
     )
     register_profile.add_argument(
-        "--hosted-account",
-        action="store_true",
-        help="Mark this profile as authenticated by the hosting registry.",
-    )
-    register_profile.add_argument(
         "--difficulty",
         type=int,
         default=4,
@@ -1683,6 +1810,142 @@ def build_parser() -> argparse.ArgumentParser:
         help="Proof-of-work difficulty for the local mutation request.",
     )
     register_claim.set_defaults(handler=_cmd_registry_register_claim)
+    verify_domain = registry_subparsers.add_parser(
+        "verify-domain",
+        formatter_class=HelpFormatter,
+        help="Upgrade trust by proving DNS control of a domain.",
+        description=(
+            "Print or submit the DNS TXT challenge that links this identity "
+            "to a domain. Verification only succeeds after public DNS returns "
+            "the required TXT value."
+        ),
+    )
+    verify_domain.add_argument("domain", help="Domain name to verify.")
+    verify_domain.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    verify_domain.add_argument(
+        "--identity-file",
+        help="Encrypted local identity store. Omit to use the OS keyring.",
+    )
+    verify_domain.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
+    verify_domain.add_argument(
+        "--show-record-only",
+        action="store_true",
+        help="Only print the DNS TXT record to create; do not submit.",
+    )
+    verify_domain.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    verify_domain.set_defaults(handler=_cmd_registry_verify_domain)
+    authorize_hosted = registry_subparsers.add_parser(
+        "authorize-hosted-account",
+        formatter_class=HelpFormatter,
+        help="Admin-authorize hosted-account trust.",
+        description=(
+            "Submit an administrator-signed hosted-account authorization "
+            "event for a claimant profile. This records the same hosted trust "
+            "tier as a registry-host login flow."
+        ),
+    )
+    authorize_hosted.add_argument(
+        "key_id",
+        help="Claimant profile key ID to authorize.",
+    )
+    authorize_hosted.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    authorize_hosted.add_argument(
+        "--identity-file",
+        help="Encrypted local admin identity store. Omit to use the OS keyring.",
+    )
+    authorize_hosted.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
+    authorize_hosted.add_argument(
+        "--provider",
+        help="Optional hosted-service provider name recorded with the event.",
+    )
+    authorize_hosted.add_argument(
+        "--note",
+        help="Optional administrative note recorded with the event.",
+    )
+    authorize_hosted.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    authorize_hosted.set_defaults(
+        handler=_cmd_registry_authorize_hosted_account
+    )
+    hosted_login = registry_subparsers.add_parser(
+        "complete-hosted-login",
+        formatter_class=HelpFormatter,
+        help="Complete a registry-host login trust upgrade.",
+        description=(
+            "Submit a hosted-login assertion from the registry host. The "
+            "server must configure a verifier for this flow."
+        ),
+    )
+    hosted_login.add_argument("--registry", help="Registry URL.")
+    hosted_login.add_argument(
+        "--identity-file", help="Encrypted identity store."
+    )
+    hosted_login.add_argument(
+        "--identity-password", help="Password for --identity-file."
+    )
+    hosted_login.add_argument("--provider", help="Hosted identity provider.")
+    hosted_login.add_argument(
+        "--login-token", help="Opaque login token or code."
+    )
+    hosted_login.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    hosted_login.set_defaults(handler=_cmd_registry_complete_hosted_login)
+    third_party = registry_subparsers.add_parser(
+        "attest-third-party",
+        formatter_class=HelpFormatter,
+        help="Attest another claimant as an independent third party.",
+    )
+    third_party.add_argument(
+        "key_id", help="Claimant profile key ID to attest."
+    )
+    third_party.add_argument("--registry", help="Registry URL.")
+    third_party.add_argument(
+        "--identity-file", help="Encrypted attester identity store."
+    )
+    third_party.add_argument(
+        "--identity-password", help="Password for --identity-file."
+    )
+    third_party.add_argument(
+        "--documented-rights",
+        action="store_true",
+        help="Also attest that rights documentation was reviewed.",
+    )
+    third_party.add_argument(
+        "--provider", help="Attester or organization name."
+    )
+    third_party.add_argument("--note", help="Optional attestation note.")
+    third_party.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    third_party.set_defaults(handler=_cmd_registry_attest_third_party)
 
     web = subparsers.add_parser(
         "web",

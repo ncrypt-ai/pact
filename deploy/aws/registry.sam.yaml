@@ -183,6 +183,36 @@ Resources:
               Authorizer: CognitoAuthorizer
               AuthorizationScopes:
                 - pact/domains:write
+        AuthorizeHostedAccount:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/profiles/{key_id}/hosted-authorize
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/profiles:hosted_authorize
+        CompleteHostedLogin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/profiles/me/hosted-login
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/profiles:hosted_login
+        ThirdPartyAttest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref RegistryHttpApi
+            Method: POST
+            Path: /api/v1/profiles/{key_id}/third-party-attest
+            Auth:
+              Authorizer: CognitoAuthorizer
+              AuthorizationScopes:
+                - pact/profiles:third_party_attest
         OpenDispute:
           Type: HttpApi
           Properties:

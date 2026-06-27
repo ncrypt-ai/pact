@@ -1,5 +1,7 @@
 """Public package exports for PACT."""
 
+# ruff: noqa: F401
+
 from importlib import import_module
 from typing import TYPE_CHECKING
 
@@ -139,6 +141,8 @@ if TYPE_CHECKING:
         TrustLabel,
         TrustTier,
         VerificationLabel,
+        domain_verification_txt_name,
+        domain_verification_txt_value,
         merkle_root,
     )
     from pact.server import (
@@ -313,6 +317,8 @@ _EXPORTS = {
     "TrustLabel": "pact.registry",
     "TrustTier": "pact.registry",
     "VerificationLabel": "pact.registry",
+    "domain_verification_txt_name": "pact.registry",
+    "domain_verification_txt_value": "pact.registry",
     "merkle_root": "pact.registry",
     "AuthProvider": "pact.server",
     "AwsLambdaRoute": "pact.server",

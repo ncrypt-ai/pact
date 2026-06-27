@@ -1,8 +1,12 @@
 """Registry trust, replay-challenge, certificate, and state-management logic."""
 
 import hashlib
+import ipaddress
+import random
+import socket
+import struct
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -65,6 +69,9 @@ class ChallengePurpose(StrEnum):
     KEY_ROTATION = "key_rotation"
     CLAIM_REVOCATION = "claim_revocation"
     DOMAIN_VERIFICATION = "domain_verification"
+    ACCOUNT_AUTHORIZATION = "account_authorization"
+    HOSTED_ACCOUNT_AUTHORIZATION = "hosted_account_authorization"
+    THIRD_PARTY_ATTESTATION = "third_party_attestation"
     DISPUTE_OPEN = "dispute_open"
     DISPUTE_RESOLUTION = "dispute_resolution"
 
@@ -131,6 +138,169 @@ def _parse_datetime(value: object, label: str) -> datetime:
     if parsed.tzinfo is None:
         raise RegistryError(f"{label} must include a timezone")
     return parsed.astimezone(UTC)
+
+
+def _normalize_domain(value: object) -> str:
+    if not isinstance(value, str):
+        raise RegistryError("domain must be a hostname string")
+    domain = value.strip().rstrip(".").lower()
+    if not domain or len(domain) > 253 or "." not in domain:
+        raise RegistryError("domain must be a plausible hostname")
+    try:
+        ipaddress.ip_address(domain)
+    except ValueError:
+        pass
+    else:
+        raise RegistryError("domain must be a hostname, not an IP address")
+    labels = domain.split(".")
+    for label in labels:
+        if (
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+        ):
+            raise RegistryError("domain must be a plausible hostname")
+        try:
+            label.encode("idna").decode("ascii")
+        except UnicodeError as error:
+            raise RegistryError(
+                "domain must be a plausible hostname"
+            ) from error
+    return domain
+
+
+def domain_verification_txt_name(domain: str) -> str:
+    """Return the DNS TXT owner name used for domain verification."""
+
+    return f"_pact-challenge.{_normalize_domain(domain)}"
+
+
+def domain_verification_txt_value(
+    registry_url: str,
+    claimant_key_id: str,
+    domain: str,
+) -> str:
+    """Return the TXT value that proves domain control for one claimant."""
+
+    normalized_registry_url = normalize_registry_url(registry_url)
+    normalized_domain = _normalize_domain(domain)
+    digest = hashlib.sha256(
+        canonical_json(
+            cast(
+                JsonValue,
+                {
+                    "domain": normalized_domain,
+                    "claimant_key_id": claimant_key_id,
+                    "registry_url": normalized_registry_url,
+                },
+            )
+        )
+    ).digest()
+    return f"pact-domain-verification={base64url_encode(digest)}"
+
+
+def _system_resolvers() -> tuple[str, ...]:
+    resolvers: list[str] = []
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "nameserver":
+                    resolvers.append(parts[1])
+    except OSError:
+        pass
+    return tuple(resolvers or ["1.1.1.1", "8.8.8.8"])
+
+
+def _dns_name_wire(name: str) -> bytes:
+    output = bytearray()
+    for label in name.rstrip(".").split("."):
+        encoded = label.encode("idna")
+        if len(encoded) > 63:
+            raise RegistryError("domain label is too long")
+        output.append(len(encoded))
+        output.extend(encoded)
+    output.append(0)
+    return bytes(output)
+
+
+def _skip_dns_name(packet: bytes, offset: int) -> int:
+    while True:
+        if offset >= len(packet):
+            raise RegistryError("DNS response was truncated")
+        length = packet[offset]
+        if length & 0xC0 == 0xC0:
+            return offset + 2
+        if length == 0:
+            return offset + 1
+        offset += 1 + length
+
+
+def resolve_dns_txt(name: str, *, timeout: float = 3.0) -> tuple[str, ...]:
+    """Resolve TXT records using the system recursive DNS resolvers."""
+
+    query_id = random.randrange(0, 65536)
+    query = (
+        struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
+        + _dns_name_wire(name)
+        + struct.pack("!HH", 16, 1)
+    )
+    errors: list[Exception] = []
+    for resolver in _system_resolvers():
+        family = socket.AF_INET6 if ":" in resolver else socket.AF_INET
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(timeout)
+                sock.sendto(query, (resolver, 53))
+                packet, _address = sock.recvfrom(4096)
+        except OSError as error:
+            errors.append(error)
+            continue
+        if len(packet) < 12:
+            continue
+        (
+            response_id,
+            flags,
+            question_count,
+            answer_count,
+            _authority_count,
+            _additional_count,
+        ) = struct.unpack("!HHHHHH", packet[:12])
+        if response_id != query_id or flags & 0x000F:
+            continue
+        offset = 12
+        for _index in range(question_count):
+            offset = _skip_dns_name(packet, offset) + 4
+        records: list[str] = []
+        for _index in range(answer_count):
+            offset = _skip_dns_name(packet, offset)
+            if offset + 10 > len(packet):
+                raise RegistryError("DNS response was truncated")
+            record_type, _class, _ttl, data_length = struct.unpack(
+                "!HHIH", packet[offset : offset + 10]
+            )
+            offset += 10
+            data = packet[offset : offset + data_length]
+            offset += data_length
+            if record_type != 16:
+                continue
+            parts: list[str] = []
+            data_offset = 0
+            while data_offset < len(data):
+                text_length = data[data_offset]
+                data_offset += 1
+                parts.append(
+                    data[data_offset : data_offset + text_length].decode(
+                        "utf-8", errors="replace"
+                    )
+                )
+                data_offset += text_length
+            records.append("".join(parts))
+        return tuple(records)
+    if errors:
+        raise RegistryError(f"DNS TXT lookup failed for {name}: {errors[-1]}")
+    return ()
 
 
 def _leading_zero_bits(digest: bytes) -> int:
@@ -636,7 +806,12 @@ class ClaimantProfile:
     replacement_key_id: str | None = None
     verified_domains: tuple[str, ...] = ()
     hosted_account: bool = False
+    third_party_attested: bool = False
+    documented_rights: bool = False
     device_fingerprint: str | None = None
+
+
+HostedAccountVerifier = Callable[[str, Mapping[str, object]], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -788,6 +963,8 @@ class RegistryService:
         store: RegistryStore,
         certificate_authority: RegistryCertificateAuthority,
         admin_public_jwks: tuple[Mapping[str, object], ...] = (),
+        dns_txt_resolver: Callable[[str], tuple[str, ...]] = resolve_dns_txt,
+        hosted_account_verifier: HostedAccountVerifier | None = None,
     ) -> None:
         self.registry_url = normalize_registry_url(registry_url)
         self.store = store
@@ -798,6 +975,8 @@ class RegistryService:
             jwk_thumbprint(cast(Mapping[str, str], dict(value)))
             for value in admin_public_jwks
         }
+        self._dns_txt_resolver = dns_txt_resolver
+        self._hosted_account_verifier = hosted_account_verifier
 
     def issue_challenge(
         self,
@@ -884,6 +1063,12 @@ class RegistryService:
                     created_at=self._event_time(event),
                     display_name=cast(str | None, data.get("display_name")),
                     hosted_account=bool(data.get("hosted_account", False)),
+                    third_party_attested=bool(
+                        data.get("third_party_attested", False)
+                    ),
+                    documented_rights=bool(
+                        data.get("documented_rights", False)
+                    ),
                     device_fingerprint=cast(
                         str | None,
                         data.get("device_fingerprint"),
@@ -902,6 +1087,8 @@ class RegistryService:
                     replacement_key_id=current.replacement_key_id,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
+                    third_party_attested=current.third_party_attested,
+                    documented_rights=current.documented_rights,
                     device_fingerprint=current.device_fingerprint,
                 )
 
@@ -920,6 +1107,28 @@ class RegistryService:
                         sorted({*current.verified_domains, domain})
                     ),
                     hosted_account=current.hosted_account,
+                    third_party_attested=current.third_party_attested,
+                    documented_rights=current.documented_rights,
+                    device_fingerprint=current.device_fingerprint,
+                )
+
+            elif event.event_type is RegistryEventType.ACCOUNT_AUTHORIZED:
+                key_id = cast(str, data["key_id"])
+                current = profiles[key_id]
+
+                profiles[key_id] = ClaimantProfile(
+                    key_id=current.key_id,
+                    public_jwk=current.public_jwk,
+                    created_at=current.created_at,
+                    display_name=current.display_name,
+                    replacement_key_id=current.replacement_key_id,
+                    verified_domains=current.verified_domains,
+                    hosted_account=current.hosted_account
+                    or bool(data.get("hosted_account", False)),
+                    third_party_attested=current.third_party_attested
+                    or bool(data.get("third_party_attested", False)),
+                    documented_rights=current.documented_rights
+                    or bool(data.get("documented_rights", False)),
                     device_fingerprint=current.device_fingerprint,
                 )
 
@@ -943,6 +1152,8 @@ class RegistryService:
                     replacement_key_id=replacement_key_id,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
+                    third_party_attested=current.third_party_attested,
+                    documented_rights=current.documented_rights,
                     device_fingerprint=current.device_fingerprint,
                 )
 
@@ -953,6 +1164,8 @@ class RegistryService:
                     display_name=current.display_name,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
+                    third_party_attested=current.third_party_attested,
+                    documented_rights=current.documented_rights,
                     device_fingerprint=current.device_fingerprint,
                 )
 
@@ -1243,6 +1456,10 @@ class RegistryService:
         hosted_account = request.payload.get("hosted_account", False)
         if not isinstance(hosted_account, bool):
             raise RegistryError("hosted_account must be a boolean")
+        if hosted_account:
+            raise RegistryError(
+                "hosted_account requires registry administrator authorization"
+            )
         self._append_event(
             RegistryEventType.PROFILE_REGISTERED,
             request.claimant_key_id,
@@ -1250,7 +1467,7 @@ class RegistryService:
                 "key_id": request.claimant_key_id,
                 "public_jwk": request.claimant_public_jwk,
                 "display_name": display_name,
-                "hosted_account": hosted_account,
+                "hosted_account": False,
                 "device_fingerprint": device_fingerprint,
             },
         )
@@ -1422,25 +1639,161 @@ class RegistryService:
         self,
         request: MutationRequest,
     ) -> ClaimantProfile:
-        """Record a verified domain for a claimant profile."""
+        """Record a verified domain after live DNS TXT proof."""
 
         self._consume_verified_request(
             request,
             ChallengePurpose.DOMAIN_VERIFICATION,
         )
-        domain = request.payload.get("domain")
-        if not isinstance(domain, str) or "." not in domain:
-            raise RegistryError("domain must be a plausible hostname")
+        domain = _normalize_domain(request.payload.get("domain"))
         self.get_profile(request.claimant_key_id)
+        expected = domain_verification_txt_value(
+            self.registry_url,
+            request.claimant_key_id,
+            domain,
+        )
+        supplied = request.payload.get("txt_value")
+        if supplied is not None and supplied != expected:
+            raise RegistryError("domain verification TXT value is invalid")
+        txt_name = domain_verification_txt_name(domain)
+        records = self._dns_txt_resolver(txt_name)
+        if expected not in records:
+            raise RegistryError(
+                f"DNS TXT record {txt_name} must contain {expected}"
+            )
         self._append_event(
             RegistryEventType.DOMAIN_VERIFIED,
             request.claimant_key_id,
             {
                 "key_id": request.claimant_key_id,
-                "domain": domain.lower(),
+                "domain": domain,
+                "txt_name": txt_name,
+                "txt_value": expected,
             },
         )
         return self.get_profile(request.claimant_key_id)
+
+    def authorize_hosted_account(
+        self,
+        request: MutationRequest,
+    ) -> ClaimantProfile:
+        """Record registry-admin hosted-account authorization evidence."""
+
+        self._consume_verified_request(
+            request,
+            ChallengePurpose.ACCOUNT_AUTHORIZATION,
+        )
+        if request.claimant_key_id not in self._admin_key_ids:
+            raise RegistryError(
+                "only a registry admin may authorize hosted account trust"
+            )
+        target_key_id = request.payload.get("target_key_id")
+        if not isinstance(target_key_id, str) or not target_key_id:
+            raise RegistryError("target_key_id must be a nonempty string")
+        self.get_profile(target_key_id)
+        provider = request.payload.get("provider")
+        if provider is not None and not isinstance(provider, str):
+            raise RegistryError("provider must be a string")
+        note = request.payload.get("note")
+        if note is not None and not isinstance(note, str):
+            raise RegistryError("note must be a string")
+        self._append_event(
+            RegistryEventType.ACCOUNT_AUTHORIZED,
+            request.claimant_key_id,
+            {
+                "key_id": target_key_id,
+                "authorized_by_key_id": request.claimant_key_id,
+                "hosted_account": True,
+                "third_party_attested": False,
+                "documented_rights": False,
+                "provider": provider or self.registry_url,
+                "method": "admin_approval",
+                "note": note,
+            },
+        )
+        return self.get_profile(target_key_id)
+
+    def complete_hosted_account_login(
+        self,
+        request: MutationRequest,
+    ) -> ClaimantProfile:
+        """Record hosted-account evidence from a registry-host login flow."""
+
+        self._consume_verified_request(
+            request,
+            ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION,
+        )
+        self.get_profile(request.claimant_key_id)
+        if self._hosted_account_verifier is None:
+            raise RegistryError(
+                "hosted account login verification is not configured"
+            )
+        if not self._hosted_account_verifier(
+            request.claimant_key_id,
+            request.payload,
+        ):
+            raise RegistryError("hosted account login verification failed")
+        provider = request.payload.get("provider")
+        if provider is not None and not isinstance(provider, str):
+            raise RegistryError("provider must be a string")
+        self._append_event(
+            RegistryEventType.ACCOUNT_AUTHORIZED,
+            request.claimant_key_id,
+            {
+                "key_id": request.claimant_key_id,
+                "authorized_by_key_id": request.claimant_key_id,
+                "hosted_account": True,
+                "third_party_attested": False,
+                "documented_rights": False,
+                "provider": provider or self.registry_url,
+                "method": "hosted_login",
+            },
+        )
+        return self.get_profile(request.claimant_key_id)
+
+    def attest_third_party_account(
+        self,
+        request: MutationRequest,
+    ) -> ClaimantProfile:
+        """Record independent third-party attestation evidence."""
+
+        self._consume_verified_request(
+            request,
+            ChallengePurpose.THIRD_PARTY_ATTESTATION,
+        )
+        target_key_id = request.payload.get("target_key_id")
+        if not isinstance(target_key_id, str) or not target_key_id:
+            raise RegistryError("target_key_id must be a nonempty string")
+        if target_key_id == request.claimant_key_id:
+            raise RegistryError(
+                "third-party attestation requires an independent signer"
+            )
+        self.get_profile(target_key_id)
+        self.get_profile(request.claimant_key_id)
+        documented_rights = request.payload.get("documented_rights", False)
+        if not isinstance(documented_rights, bool):
+            raise RegistryError("documented_rights must be a boolean")
+        provider = request.payload.get("provider")
+        if provider is not None and not isinstance(provider, str):
+            raise RegistryError("provider must be a string")
+        note = request.payload.get("note")
+        if note is not None and not isinstance(note, str):
+            raise RegistryError("note must be a string")
+        self._append_event(
+            RegistryEventType.ACCOUNT_AUTHORIZED,
+            request.claimant_key_id,
+            {
+                "key_id": target_key_id,
+                "authorized_by_key_id": request.claimant_key_id,
+                "hosted_account": False,
+                "third_party_attested": True,
+                "documented_rights": documented_rights,
+                "provider": provider,
+                "method": "third_party_attestation",
+                "note": note,
+            },
+        )
+        return self.get_profile(target_key_id)
 
     def open_dispute(self, request: MutationRequest) -> DisputeRecord:
         """Open a dispute on a registered claim."""
@@ -1558,6 +1911,8 @@ class RegistryService:
                 for dispute in claimant_disputes
             ),
             hosted_account=profile.hosted_account,
+            third_party_attested=profile.third_party_attested,
+            documented_rights=profile.documented_rights,
         )
 
     def verify_claim(
@@ -1628,6 +1983,8 @@ class RegistryService:
                 "profile_display_name": profile.display_name,
                 "verified_domains": list(profile.verified_domains),
                 "hosted_account": profile.hosted_account,
+                "third_party_attested": profile.third_party_attested,
+                "documented_rights": profile.documented_rights,
                 "active_claim_count": evidence_profile.active_claim_count,
                 "revoked_claim_count": evidence_profile.revoked_claim_count,
                 "certificate_count": evidence_profile.certificate_count,

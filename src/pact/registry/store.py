@@ -30,6 +30,7 @@ class RegistryEventType(StrEnum):
     KEY_ROTATED = "key_rotated"
     CLAIM_REVOKED = "claim_revoked"
     DOMAIN_VERIFIED = "domain_verified"
+    ACCOUNT_AUTHORIZED = "account_authorized"
     DISPUTE_OPENED = "dispute_opened"
     DISPUTE_RESOLVED = "dispute_resolved"
 

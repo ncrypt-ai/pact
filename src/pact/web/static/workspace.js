@@ -363,8 +363,15 @@ function renderProfile(target, profile, evidence = null) {
     ["Profile key", profile.key_id],
     ["Created", profile.created_at],
     ["Verified domains", (profile.verified_domains || []).join(", ") || "None"],
+    ["Hosted account", profile.hosted_account ? "Yes" : "No"],
+    ["Third-party attested", profile.third_party_attested ? "Yes" : "No"],
+    ["Documented rights", profile.documented_rights ? "Yes" : "No"],
     ["Replacement key", profile.replacement_key_id || "None"],
     ["Trust tier", evidence ? evidence.trust_tier : "Not loaded"],
+    [
+      "Trust labels",
+      evidence && evidence.trust_labels ? evidence.trust_labels.join(", ") : "Not loaded"
+    ],
     ["Active claims", evidence ? evidence.active_claim_count : "Not loaded"],
     ["Open disputes", evidence ? evidence.open_disputes : "Not loaded"]
   ]);
@@ -712,6 +719,41 @@ function textToBase64(value) {
     binary += String.fromCharCode(byte);
   }
   return btoa(binary);
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function canonicalDomainPayload(domain) {
+  return JSON.stringify({
+    claimant_key_id: requireIdentity().key_id,
+    domain,
+    registry_url: registryUrl().replace(/\/+$/g, "")
+  });
+}
+
+async function domainVerificationRecord(domainValue) {
+  const domain = domainValue.trim().replace(/\.$/, "").toLowerCase();
+  if (!domain || !domain.includes(".")) {
+    throw new Error("Enter a domain name to verify.");
+  }
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalDomainPayload(domain))
+  );
+  return {
+    domain,
+    txt_name: `_pact-challenge.${domain}`,
+    txt_value: `pact-domain-verification=${base64Url(new Uint8Array(digest))}`
+  };
 }
 
 async function readImportFile(file) {
@@ -1117,6 +1159,131 @@ document.querySelector("#show-identity").onclick = () =>
     showSavedBrowserProfile();
     await loadOwnProfile();
     message("Public registry profile shown below.");
+  });
+
+document.querySelector("#show-domain-record").onclick = () =>
+  run(async () => {
+    requireIdentity();
+    const record = await domainVerificationRecord(
+      document.querySelector("#verify-domain-name").value
+    );
+    renderObject("#domain-verification-result", "DNS TXT record", [
+      ["Name", record.txt_name],
+      ["Type", "TXT"],
+      ["Value", record.txt_value],
+      ["Next step", "Create this record in public DNS, then press Verify DNS record."]
+    ]);
+    message("DNS TXT record ready.");
+  });
+
+document.querySelector("#verify-domain").onclick = () =>
+  run(async () => {
+    requireIdentity();
+    const record = await domainVerificationRecord(
+      document.querySelector("#verify-domain-name").value
+    );
+    const request = await signedMutation(
+      "domain_verification",
+      {
+        domain: record.domain,
+        txt_value: record.txt_value
+      },
+      requireIdentity().key_id
+    );
+    const profile = await registryJson("/api/v1/domains/verify", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    const evidence = await registryJson(`/api/v1/profiles/${profile.key_id}/evidence`);
+    renderProfile("#domain-verification-result", profile, evidence);
+    await loadOwnProfile();
+    message("Domain verified and trust profile updated.");
+  });
+
+document.querySelector("#complete-hosted-login").onclick = () =>
+  run(async () => {
+    requireIdentity();
+    const payload = {
+      ...(document.querySelector("#hosted-login-token").value.trim()
+        ? { login_token: document.querySelector("#hosted-login-token").value.trim() }
+        : {})
+    };
+    const request = await signedMutation(
+      "hosted_account_authorization",
+      payload,
+      requireIdentity().key_id
+    );
+    const profile = await registryJson("/api/v1/profiles/me/hosted-login", {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    const evidence = await registryJson(`/api/v1/profiles/${profile.key_id}/evidence`);
+    renderProfile("#hosted-account-result", profile, evidence);
+    await loadOwnProfile();
+    message("Hosted account login submitted.");
+  });
+
+document.querySelector("#authorize-hosted-account").onclick = () =>
+  run(async () => {
+    requireIdentity();
+    const keyId =
+      document.querySelector("#authorize-hosted-key-id").value.trim() ||
+      requireIdentity().key_id;
+    const payload = {
+      target_key_id: keyId,
+      ...(document.querySelector("#authorize-hosted-provider").value.trim()
+        ? { provider: document.querySelector("#authorize-hosted-provider").value.trim() }
+        : {}),
+      ...(document.querySelector("#authorize-hosted-note").value.trim()
+        ? { note: document.querySelector("#authorize-hosted-note").value.trim() }
+        : {})
+    };
+    const request = await signedMutation(
+      "account_authorization",
+      payload,
+      requireIdentity().key_id
+    );
+    const profile = await registryJson(`/api/v1/profiles/${keyId}/hosted-authorize`, {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    const evidence = await registryJson(`/api/v1/profiles/${profile.key_id}/evidence`);
+    renderProfile("#hosted-account-result", profile, evidence);
+    if (profile.key_id === requireIdentity().key_id) {
+      await loadOwnProfile();
+    }
+    message("Hosted account approved.");
+  });
+
+document.querySelector("#attest-third-party").onclick = () =>
+  run(async () => {
+    requireIdentity();
+    const keyId = document.querySelector("#third-party-key-id").value.trim();
+    if (!keyId) {
+      throw new Error("Enter the claimant key ID to attest.");
+    }
+    const payload = {
+      target_key_id: keyId,
+      documented_rights: document.querySelector("#third-party-documented-rights").checked,
+      ...(document.querySelector("#third-party-provider").value.trim()
+        ? { provider: document.querySelector("#third-party-provider").value.trim() }
+        : {}),
+      ...(document.querySelector("#third-party-note").value.trim()
+        ? { note: document.querySelector("#third-party-note").value.trim() }
+        : {})
+    };
+    const request = await signedMutation(
+      "third_party_attestation",
+      payload,
+      requireIdentity().key_id
+    );
+    const profile = await registryJson(`/api/v1/profiles/${keyId}/third-party-attest`, {
+      method: "POST",
+      body: JSON.stringify(request)
+    });
+    const evidence = await registryJson(`/api/v1/profiles/${profile.key_id}/evidence`);
+    renderProfile("#third-party-result", profile, evidence);
+    message("Third-party attestation submitted.");
   });
 
 document.querySelector("#export-identity").onclick = () =>

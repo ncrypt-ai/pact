@@ -1,5 +1,7 @@
 """Public registry exports."""
 
+# ruff: noqa: F401
+
 from importlib import import_module
 from typing import TYPE_CHECKING
 
@@ -21,6 +23,9 @@ if TYPE_CHECKING:
         TrustLabel,
         TrustTier,
         VerificationLabel,
+        domain_verification_txt_name,
+        domain_verification_txt_value,
+        resolve_dns_txt,
     )
     from pact.registry.store import (
         FileRegistryStore,
@@ -51,6 +56,9 @@ _EXPORTS = {
     "TrustLabel": "pact.registry.app",
     "TrustTier": "pact.registry.app",
     "VerificationLabel": "pact.registry.app",
+    "domain_verification_txt_name": "pact.registry.app",
+    "domain_verification_txt_value": "pact.registry.app",
+    "resolve_dns_txt": "pact.registry.app",
     "FileRegistryStore": "pact.registry.store",
     "PostgresRegistryStore": "pact.registry.store",
     "RegistryBatch": "pact.registry.store",

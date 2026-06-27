@@ -318,6 +318,48 @@ MUTATION_EXAMPLES: dict[str, Any] = {
             "signature": EXAMPLE_SIGNATURE,
         },
     },
+    "domain_verification": {
+        "summary": "Verify domain control with a DNS TXT record",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 271828,
+            "payload": {
+                "domain": "example.com",
+                "txt_value": "pact-domain-verification=example-token",
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
+    "hosted_account_authorization": {
+        "summary": "Authorize hosted-account trust as a registry administrator",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 271828,
+            "payload": {
+                "target_key_id": "claimant-key-thumbprint",
+                "provider": "registry.example",
+                "note": "Account passed hosted registry authorization.",
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
+    "third_party_attestation": {
+        "summary": "Attest a claimant as an independent third party",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 271828,
+            "payload": {
+                "target_key_id": "claimant-key-thumbprint",
+                "documented_rights": False,
+                "provider": "Example Attester",
+                "note": "Independent account attestation.",
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
 }
 
 CERTIFICATE_EXAMPLES: dict[str, Any] = {
@@ -1147,13 +1189,10 @@ def create_app(
                 openapi_examples=_openapi_examples(
                     {
                         "domain_verification": {
-                            "summary": "Attach a verified domain to a claimant profile",
-                            "value": {
-                                **MUTATION_EXAMPLES["profile_registration"][
-                                    "value"
-                                ],
-                                "payload": {"domain": "example.com"},
-                            },
+                            "summary": "Attach a DNS-verified domain to a claimant profile",
+                            "value": MUTATION_EXAMPLES["domain_verification"][
+                                "value"
+                            ],
                         }
                     }
                 )
@@ -1163,6 +1202,96 @@ def create_app(
         enforce_identity_rate(request, body)
         try:
             profile = service.verify_domain(body.to_domain())
+        except Exception as error:
+            _raise_http_error(error)
+        return _json_dict(profile)
+
+    @app.post(
+        "/api/v1/profiles/{key_id}/hosted-authorize",
+        tags=["Profiles"],
+        summary="Authorize hosted-account trust",
+        description=(
+            "Administrative endpoint for recording hosted-account evidence. "
+            "This produces the same trust tier as a registry-host login flow."
+        ),
+    )
+    async def authorize_hosted_account(
+        request: Request,
+        key_id: str,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "hosted_account_authorization": MUTATION_EXAMPLES[
+                            "hosted_account_authorization"
+                        ]
+                    }
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
+        request_model = MutationRequest(
+            challenge_id=body.challenge_id,
+            claimant_public_jwk=body.claimant_public_jwk,
+            proof_of_work_solution=body.proof_of_work_solution,
+            payload={**body.payload, "target_key_id": key_id},
+            signature=body.signature,
+        )
+        enforce_identity_rate(request, body, extra=(key_id,))
+        try:
+            profile = service.authorize_hosted_account(request_model)
+        except Exception as error:
+            _raise_http_error(error)
+        return _json_dict(profile)
+
+    @app.post(
+        "/api/v1/profiles/me/hosted-login",
+        tags=["Profiles"],
+        summary="Complete hosted-account login",
+    )
+    async def complete_hosted_account_login(
+        request: Request,
+        body: MutationRequestModel,
+    ) -> dict[str, object]:
+        enforce_identity_rate(request, body)
+        try:
+            profile = service.complete_hosted_account_login(body.to_domain())
+        except Exception as error:
+            _raise_http_error(error)
+        return _json_dict(profile)
+
+    @app.post(
+        "/api/v1/profiles/{key_id}/third-party-attest",
+        tags=["Profiles"],
+        summary="Record third-party account attestation",
+    )
+    async def attest_third_party_account(
+        request: Request,
+        key_id: str,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "third_party_attestation": MUTATION_EXAMPLES[
+                            "third_party_attestation"
+                        ]
+                    }
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
+        request_model = MutationRequest(
+            challenge_id=body.challenge_id,
+            claimant_public_jwk=body.claimant_public_jwk,
+            proof_of_work_solution=body.proof_of_work_solution,
+            payload={**body.payload, "target_key_id": key_id},
+            signature=body.signature,
+        )
+        enforce_identity_rate(request, body, extra=(key_id,))
+        try:
+            profile = service.attest_third_party_account(request_model)
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(profile)

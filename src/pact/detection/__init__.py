@@ -1,5 +1,7 @@
 """Local probe generation and statistical evidence exports."""
 
+# ruff: noqa: F401
+
 from importlib import import_module
 from typing import TYPE_CHECKING
 
