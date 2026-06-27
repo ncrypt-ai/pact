@@ -15,13 +15,13 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile
-from pact.detection import (
-    ProbeEvidencePackage,
+from pact.detection.evidence import ProbeEvidencePackage
+from pact.detection.probes import (
     ProbeSet,
-    analyze_probe_responses,
     create_probe_set,
     responses_from_jsonl,
 )
+from pact.detection.statistics import analyze_probe_responses
 from pact.identity import (
     ClaimantIdentity,
     DeviceBindingError,
@@ -31,6 +31,7 @@ from pact.identity import (
     LocalDeviceBindingStore,
     normalize_registry_url,
 )
+from pact.inspection import inspect_content
 from pact.manifest import (
     Manifest,
     SignedManifest,
@@ -39,12 +40,14 @@ from pact.manifest import (
 )
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
-from pact.registry import (
+from pact.registry.app import (
     ChallengePurpose,
     MutationChallenge,
     MutationRequest,
     RegistryCertificateAuthority,
     RegistryService,
+)
+from pact.registry.store import (
     SqliteRegistryStore,
 )
 from pact.watermarks import (
@@ -56,7 +59,6 @@ from pact.watermarks import (
     SyntacticVariationPlugin,
     TextWatermarkParameters,
     apply_text_watermark_plugins,
-    decode_image_soft_binding,
     embed_image_soft_binding,
 )
 
@@ -766,28 +768,8 @@ def _cmd_registry_register_claim(args: argparse.Namespace) -> int:
 def _cmd_inspect(args: argparse.Namespace) -> int:
     target = Path(args.input)
     payload = target.read_bytes()
-    try:
-        signed = SignedManifest.from_json(payload)
-        print(_serialize_json(signed.to_dict()))
-        return 0
-    except Exception:
-        pass
     mime_type = args.mime_type or _infer_mime_type(target)
-    if mime_type.startswith("image/"):
-        try:
-            decoded = decode_image_soft_binding(payload, mime_type)
-        except Exception:
-            pass
-        else:
-            print(_serialize_json(decoded.to_dict()))
-            return 0
-    try:
-        from pact.carriers.c2pa import C2paError, read_c2pa_asset
-
-        result = read_c2pa_asset(payload, mime_type=mime_type)
-    except C2paError as error:
-        raise SystemExit(str(error)) from error
-    print(_serialize_json(result.manifest_store_json))
+    print(_serialize_json(inspect_content(payload, mime_type=mime_type)))
     return 0
 
 

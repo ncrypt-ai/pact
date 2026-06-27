@@ -1,6 +1,7 @@
 """FastAPI application for the registry API and proof pages."""
 
 import io
+import mimetypes
 import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -9,7 +10,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,7 +19,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from pact.registry import (
+from pact.inspection import inspect_content
+from pact.registry.app import (
     ChallengePurpose,
     KeyRotationRequest,
     MutationRequest,
@@ -127,6 +129,18 @@ def _registry_info(service: RegistryService) -> dict[str, object]:
             "ascii"
         ),
     }
+
+
+def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
+    if mime_type:
+        return mime_type
+    if file.content_type:
+        return file.content_type
+    if file.filename:
+        guessed, _encoding = mimetypes.guess_type(file.filename)
+        if guessed is not None:
+            return guessed
+    return "application/octet-stream"
 
 
 def _raise_http_error(error: Exception) -> None:
@@ -307,6 +321,27 @@ def create_app(
         return {
             "routes": [route.to_dict() for route in default_routes()],
         }
+
+    @app.post("/api/v1/inspect")
+    async def inspect_upload(
+        file: UploadFile = File(
+            description="Manifest JSON or raw media carrier to inspect."
+        ),
+        mime_type: str | None = Form(
+            default=None,
+            description="Optional MIME type override for carrier parsing.",
+        ),
+    ) -> dict[str, object]:
+        payload = await file.read()
+        try:
+            return inspect_content(
+                payload,
+                mime_type=_infer_upload_mime_type(file, mime_type),
+                registry_service=service,
+            )
+        except Exception as error:
+            _raise_http_error(error)
+            raise AssertionError("unreachable")
 
     @app.post("/api/v1/challenges")
     async def issue_challenge(

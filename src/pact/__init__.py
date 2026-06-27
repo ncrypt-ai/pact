@@ -72,6 +72,7 @@ _EXPORTS = {
     "KeyringIdentityStore": "pact.identity",
     "LocalDeviceBindingStore": "pact.identity",
     "normalize_registry_url": "pact.identity",
+    "inspect_content": "pact.inspection",
     "ClaimMeaning": "pact.manifest",
     "ContentBinding": "pact.manifest",
     "Manifest": "pact.manifest",

@@ -299,6 +299,7 @@ custom request scripts:
 This serves:
 
 - ``/api/v1/registry``
+- ``/api/v1/inspect``
 - ``/api/v1/challenges``
 - ``/api/v1/profiles/{key_id}``
 - ``/api/v1/profiles/{key_id}/evidence``
@@ -403,6 +404,11 @@ produce a combined evidence summary.
 
 Use the CLI for manifest workflows
 ----------------------------------
+
+``pact inspect`` accepts signed manifest JSON or raw carrier files. For raw
+media, it tries supported text, HTML, XML, image watermark, C2PA image/PDF, and
+ZIP-based document carriers, then resolves registered claims when the active
+registry has the referenced claim.
 
 The CLI currently exposes:
 

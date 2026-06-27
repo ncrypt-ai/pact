@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pact.registry import (
+from pact.registry.store import (
     FileRegistryStore,
     PostgresRegistryStore,
     RegistryStore,

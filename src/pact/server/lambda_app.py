@@ -7,7 +7,7 @@ import os
 from functools import lru_cache
 from typing import Any, cast
 
-from pact.registry import RegistryCertificateAuthority, RegistryService
+from pact.registry.app import RegistryCertificateAuthority, RegistryService
 from pact.server.config import RuntimeConfig
 from pact.server.runtime import create_registry_store
 from pact.web import create_app

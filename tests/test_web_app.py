@@ -19,6 +19,7 @@ from pact import (
     PolicyEntry,
     RegistryCertificateAuthority,
     RegistryService,
+    embed_text_carrier,
     sign_manifest,
 )
 from pact.registry import MutationChallenge
@@ -109,13 +110,11 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
     ).raise_for_status()
 
 
-def test_web_app_serves_registry_profile_claim_and_verify_pages(
-    tmp_path: Path,
-) -> None:
-    client, identity = make_client(tmp_path)
-    register_profile(client, identity)
-
-    signed = make_signed_manifest(identity)
+def register_claim(
+    client: TestClient,
+    identity: ClaimantIdentity,
+    signed,
+) -> dict[str, object]:
     challenge = client.post(
         "/api/v1/challenges",
         json={
@@ -140,7 +139,7 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
         payload={"signed_manifest_json": signed.to_json().decode("utf-8")},
         proof_of_work_solution=solve_pow(challenge_object),
     )
-    claim = client.post(
+    response = client.post(
         "/api/v1/claims",
         json={
             "challenge_id": str(request.challenge_id),
@@ -149,7 +148,19 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
             "payload": request.payload,
             "signature": request.signature,
         },
-    ).json()
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def test_web_app_serves_registry_profile_claim_and_verify_pages(
+    tmp_path: Path,
+) -> None:
+    client, identity = make_client(tmp_path)
+    register_profile(client, identity)
+
+    signed = make_signed_manifest(identity)
+    claim = register_claim(client, identity, signed)
 
     assert client.get("/api/v1/registry").status_code == 200
     routes = client.get("/api/v1/server/routes")
@@ -177,6 +188,35 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
+
+
+def test_web_inspect_accepts_raw_text_carrier(tmp_path: Path) -> None:
+    client, identity = make_client(tmp_path)
+    register_profile(client, identity)
+    signed = make_signed_manifest(identity)
+    claim = register_claim(client, identity, signed)
+    carrier = embed_text_carrier(b"hello", signed, nonce=b"\x01" * 32)
+
+    response = client.post(
+        "/api/v1/inspect",
+        files={
+            "file": (
+                "work.txt",
+                carrier,
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    inspected = response.json()
+    assert inspected["recognized"] is True
+    assert inspected["reference"]["carrier"] == "text:both"
+    assert inspected["reference"]["claim_id"] == claim["claim_id"]
+    assert inspected["registry_claim"]["claim_id"] == claim["claim_id"]
+    assert inspected["registry_verification"]["label"] == "verified_claim"
+    assert inspected["source_material"]["content_binding_checked"] is True
+    assert inspected["source_material"]["verification"]["valid"] is True
 
 
 def test_web_workspace_is_optional_and_serves_pyodide_assets(

@@ -7,7 +7,7 @@ from enum import StrEnum
 
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.statistics import ProbeAnalysisReport, ProbeConclusion
-from pact.registry import ClaimVerificationReport, VerificationLabel
+from pact.registry.app import ClaimVerificationReport, VerificationLabel
 from pact.watermarks import (
     ImagePerceptualMatch,
     ImageSoftBindingVerification,

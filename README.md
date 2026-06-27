@@ -140,6 +140,17 @@ pact verify ./work.manifest.json \
   --nonce ./work.nonce
 ```
 
+Inspect a manifest or raw carrier file:
+
+```bash
+pact inspect ./work.txt
+```
+
+Inspection accepts signed manifest JSON or raw media. For supported carriers it
+looks for embedded PACT manifests, zero-width claim locators, image watermark
+locators, and C2PA references, then resolves registered claims when a registry
+is available.
+
 Run the local registry/web app:
 
 ```bash

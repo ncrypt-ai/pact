@@ -5,6 +5,17 @@ from pathlib import Path
 
 import pytest
 
+from pact import (
+    CanonicalizationProfile,
+    ClaimantIdentity,
+    Manifest,
+    Permission,
+    PermissionValue,
+    Policy,
+    PolicyEntry,
+    embed_text_carrier,
+    sign_manifest,
+)
 from pact.cli import build_parser, main
 
 
@@ -139,6 +150,42 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert main(["inspect", str(manifest_path)]) == 0
     inspect_output = json.loads(capsys.readouterr().out)
     assert inspect_output["manifest"]["registry_url"] == registry
+
+    identity = ClaimantIdentity.generate(registry)
+    nonce = b"\x02" * 32
+    carrier_content = b"carrier text\n"
+    carrier_manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint="A" * 43,
+        content=carrier_content,
+        mime_type="text/plain",
+        canonicalization=CanonicalizationProfile.TEXT_V1,
+        policy=Policy(
+            (
+                PolicyEntry(
+                    Permission.GENERATIVE_TRAINING,
+                    PermissionValue.NOT_ALLOWED,
+                ),
+            )
+        ),
+        nonce=nonce,
+    )
+    carrier_path = tmp_path / "carrier.txt"
+    carrier_path.write_bytes(
+        embed_text_carrier(
+            carrier_content,
+            sign_manifest(carrier_manifest, identity),
+            nonce=nonce,
+        )
+    )
+    assert main(["inspect", str(carrier_path)]) == 0
+    carrier_output = json.loads(capsys.readouterr().out)
+    assert carrier_output["recognized"] is True
+    assert carrier_output["reference"]["carrier"] == "text:both"
+    assert carrier_output["manifest"]["claim_id"] == str(
+        carrier_manifest.claim_id
+    )
+    assert carrier_output["source_material"]["content_binding_checked"] is True
 
     assert (
         main(
