@@ -79,3 +79,7 @@ pre {
 [data-page][hidden] {
   display: none;
 }
+
+#identity-username {
+  display: none;
+}

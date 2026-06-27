@@ -1,13 +1,22 @@
 """FastAPI application for the registry API and proof pages."""
 
+import json
 from pathlib import Path
-from typing import cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    Body,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -36,6 +45,201 @@ def _templates() -> Jinja2Templates:
 
 def _static_directory() -> Path:
     return Path(__file__).with_name("static")
+
+
+def _default_docs_directory() -> Path | None:
+    docs_directory = (
+        Path(__file__).resolve().parents[3] / "docs" / "_build" / "html"
+    )
+    if (docs_directory / "index.html").is_file():
+        return docs_directory
+    return None
+
+
+def _docs_directory(value: str | Path | None) -> Path | None:
+    if value is None:
+        return _default_docs_directory()
+    docs_directory = Path(value)
+    if not (docs_directory / "index.html").is_file():
+        return None
+    return docs_directory
+
+
+class PrettyJSONResponse(JSONResponse):
+    """JSON response formatted for direct browser inspection."""
+
+    def render(self, content: object) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+        ).encode("utf-8")
+
+
+EXAMPLE_PUBLIC_JWK = {
+    "crv": "P-256",
+    "kty": "EC",
+    "x": "pseudonymous-public-key-x-coordinate",
+    "y": "pseudonymous-public-key-y-coordinate",
+}
+EXAMPLE_CHALLENGE_ID = "018f7f79-7b42-7c00-8000-000000000001"
+EXAMPLE_CLAIM_ID = "018f7f79-7b42-7c00-8000-000000000002"
+EXAMPLE_DISPUTE_ID = "018f7f79-7b42-7c00-8000-000000000003"
+EXAMPLE_SIGNATURE = "base64url-es256-signature"
+EXAMPLE_SIGNED_MANIFEST_JSON = (
+    '{"manifest":{"version":"1","claim_id":"'
+    + EXAMPLE_CLAIM_ID
+    + '","registry_url":"https://registry.example"},"signature":{}}'
+)
+
+CHALLENGE_EXAMPLES: dict[str, Any] = {
+    "profile_registration": {
+        "summary": "Challenge for first-time identity registration",
+        "value": {
+            "purpose": "profile_registration",
+            "difficulty": 12,
+        },
+    },
+    "claim_registration": {
+        "summary": "Challenge bound to a registered claimant key",
+        "value": {
+            "purpose": "claim_registration",
+            "bound_key_id": "claimant-key-thumbprint",
+            "difficulty": 12,
+        },
+    },
+}
+
+MUTATION_EXAMPLES: dict[str, Any] = {
+    "profile_registration": {
+        "summary": "Register a public claimant profile",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 271828,
+            "payload": {
+                "display_name": "Alice Example",
+                "device_fingerprint": "registry-scoped-device-fingerprint",
+                "hosted_account": False,
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
+    "claim_registration": {
+        "summary": "Register a signed manifest as a public claim",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 314159,
+            "payload": {
+                "signed_manifest_json": EXAMPLE_SIGNED_MANIFEST_JSON,
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
+    "claim_revocation": {
+        "summary": "Revoke one of the claimant's registered claims",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "claimant_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "proof_of_work_solution": 161803,
+            "payload": {
+                "reason": "Published in error.",
+            },
+            "signature": EXAMPLE_SIGNATURE,
+        },
+    },
+}
+
+CERTIFICATE_EXAMPLES: dict[str, Any] = {
+    "claimant_certificate": {
+        "summary": "Issue a claimant certificate after key-possession proof",
+        "value": {
+            "request": MUTATION_EXAMPLES["profile_registration"]["value"],
+            "valid_days": 30,
+        },
+    }
+}
+
+ROTATION_EXAMPLES: dict[str, Any] = {
+    "key_rotation": {
+        "summary": "Rotate from an old claimant key to a replacement key",
+        "value": {
+            "challenge_id": EXAMPLE_CHALLENGE_ID,
+            "current_public_jwk": EXAMPLE_PUBLIC_JWK,
+            "replacement_public_jwk": {
+                **EXAMPLE_PUBLIC_JWK,
+                "x": "replacement-public-key-x-coordinate",
+                "y": "replacement-public-key-y-coordinate",
+            },
+            "proof_of_work_solution": 424242,
+            "payload": {
+                "reason": "Routine key rotation.",
+            },
+            "current_signature": EXAMPLE_SIGNATURE,
+            "replacement_signature": EXAMPLE_SIGNATURE,
+        },
+    }
+}
+
+DISPUTE_EXAMPLES: dict[str, Any] = {
+    "open_dispute": {
+        "summary": "Open a dispute against a registered claim",
+        "value": {
+            **MUTATION_EXAMPLES["profile_registration"]["value"],
+            "payload": {
+                "claim_id": EXAMPLE_CLAIM_ID,
+                "reason": "The claim appears to reference the wrong source.",
+            },
+        },
+    },
+    "resolve_dispute": {
+        "summary": "Resolve a dispute as a registry administrator",
+        "value": {
+            **MUTATION_EXAMPLES["profile_registration"]["value"],
+            "payload": {
+                "status": "rejected",
+                "resolution_note": "Submitted evidence did not match the claim.",
+            },
+        },
+    },
+}
+
+OPENAPI_TAGS = [
+    {
+        "name": "Discovery",
+        "description": "Registry metadata, deployment information, and route discovery.",
+    },
+    {
+        "name": "Inspection",
+        "description": "Inspect signed manifests, raw carrier files, and embedded claim references.",
+    },
+    {
+        "name": "Challenges",
+        "description": "Replay and proof-of-work challenges used before signed mutations.",
+    },
+    {
+        "name": "Profiles",
+        "description": "Claimant profiles, evidence summaries, domains, and key rotation.",
+    },
+    {
+        "name": "Certificates",
+        "description": "Registry-issued claimant certificates.",
+    },
+    {
+        "name": "Claims",
+        "description": "Registered content claims and claim revocation.",
+    },
+    {
+        "name": "Disputes",
+        "description": "Public dispute records attached to claims.",
+    },
+]
+
+
+def _openapi_examples(value: dict[str, Any]) -> Any:
+    return value
 
 
 def _registry_info(service: RegistryService) -> dict[str, object]:
@@ -73,18 +277,80 @@ def _raise_http_error(error: Exception) -> None:
     ) from error
 
 
+def _content_security_policy(path: str) -> str:
+    docs_paths = ("/api/docs", "/api/redoc", "/docs", "/redoc")
+    if path.rstrip("/") in docs_paths:
+        return (
+            "default-src 'self'; base-uri 'self'; form-action 'self'; "
+            "frame-ancestors 'none'; img-src 'self' data: "
+            "https://fastapi.tiangolo.com; style-src 'self' 'unsafe-inline' "
+            "https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' "
+            "'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
+            "worker-src 'self'; connect-src 'self' https: http://localhost:* "
+            "http://127.0.0.1:*"
+        )
+    return (
+        "default-src 'self'; base-uri 'self'; form-action 'self'; "
+        "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
+        "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self' "
+        "https: http://localhost:* http://127.0.0.1:*"
+    )
+
+
 class ChallengeRequestModel(BaseModel):
-    purpose: ChallengePurpose
-    bound_key_id: str | None = None
-    difficulty: int = Field(default=12, ge=0, le=255)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [item["value"] for item in CHALLENGE_EXAMPLES.values()]
+        }
+    }
+
+    purpose: ChallengePurpose = Field(
+        description="Mutation this replay/proof-of-work challenge will authorize.",
+        examples=["profile_registration"],
+    )
+    bound_key_id: str | None = Field(
+        default=None,
+        description="Optional claimant key ID that must sign the later mutation.",
+        examples=["claimant-key-thumbprint"],
+    )
+    difficulty: int = Field(
+        default=12,
+        ge=0,
+        le=255,
+        description="Required leading zero bits for the proof-of-work solution.",
+        examples=[12],
+    )
 
 
 class MutationRequestModel(BaseModel):
-    challenge_id: UUID
-    claimant_public_jwk: dict[str, str]
-    proof_of_work_solution: int = Field(ge=0)
-    payload: dict[str, object]
-    signature: str
+    model_config = {
+        "json_schema_extra": {
+            "examples": [item["value"] for item in MUTATION_EXAMPLES.values()]
+        }
+    }
+
+    challenge_id: UUID = Field(
+        description="Challenge ID returned by /api/v1/challenges.",
+        examples=[EXAMPLE_CHALLENGE_ID],
+    )
+    claimant_public_jwk: dict[str, str] = Field(
+        description="P-256 public JWK for the claimant signing this mutation.",
+        examples=[EXAMPLE_PUBLIC_JWK],
+    )
+    proof_of_work_solution: int = Field(
+        ge=0,
+        description="Integer solution satisfying the challenge difficulty.",
+        examples=[314159],
+    )
+    payload: dict[str, object] = Field(
+        description="Mutation-specific data covered by the claimant signature.",
+        examples=[{"signed_manifest_json": EXAMPLE_SIGNED_MANIFEST_JSON}],
+    )
+    signature: str = Field(
+        description="ES256 signature over the challenge, public JWK, proof, and payload.",
+        examples=[EXAMPLE_SIGNATURE],
+    )
 
     def to_domain(self) -> MutationRequest:
         return MutationRequest(
@@ -97,18 +363,66 @@ class MutationRequestModel(BaseModel):
 
 
 class CertificateIssueRequestModel(BaseModel):
-    request: MutationRequestModel
-    valid_days: int = Field(default=30, ge=1, le=365)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                item["value"] for item in CERTIFICATE_EXAMPLES.values()
+            ]
+        }
+    }
+
+    request: MutationRequestModel = Field(
+        description="Claimant-signed certificate issuance request."
+    )
+    valid_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Certificate validity period requested from the registry.",
+        examples=[30],
+    )
 
 
 class RotationRequestModel(BaseModel):
-    challenge_id: UUID
-    current_public_jwk: dict[str, str]
-    replacement_public_jwk: dict[str, str]
-    proof_of_work_solution: int = Field(ge=0)
-    payload: dict[str, object]
-    current_signature: str
-    replacement_signature: str
+    model_config = {
+        "json_schema_extra": {
+            "examples": [item["value"] for item in ROTATION_EXAMPLES.values()]
+        }
+    }
+
+    challenge_id: UUID = Field(
+        description="Key-rotation challenge ID returned by /api/v1/challenges.",
+        examples=[EXAMPLE_CHALLENGE_ID],
+    )
+    current_public_jwk: dict[str, str] = Field(
+        description="Current claimant public JWK.",
+        examples=[EXAMPLE_PUBLIC_JWK],
+    )
+    replacement_public_jwk: dict[str, str] = Field(
+        description="Replacement claimant public JWK.",
+        examples=[
+            ROTATION_EXAMPLES["key_rotation"]["value"][
+                "replacement_public_jwk"
+            ]
+        ],
+    )
+    proof_of_work_solution: int = Field(
+        ge=0,
+        description="Integer solution satisfying the rotation challenge.",
+        examples=[424242],
+    )
+    payload: dict[str, object] = Field(
+        description="Rotation metadata covered by both signatures.",
+        examples=[{"reason": "Routine key rotation."}],
+    )
+    current_signature: str = Field(
+        description="ES256 signature from the current key.",
+        examples=[EXAMPLE_SIGNATURE],
+    )
+    replacement_signature: str = Field(
+        description="ES256 signature from the replacement key.",
+        examples=[EXAMPLE_SIGNATURE],
+    )
 
     def to_domain(self) -> KeyRotationRequest:
         return KeyRotationRequest(
@@ -130,6 +444,7 @@ def create_app(
     local_mode: bool = False,
     enable_workspace: bool = False,
     cors_allowed_origins: tuple[str, ...] = (),
+    docs_directory: str | Path | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
@@ -147,6 +462,10 @@ def create_app(
         title="PACT Registry",
         version=PACKAGE_VERSION,
         summary="Registry API and proof pages for PACT",
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+        openapi_tags=OPENAPI_TAGS,
         middleware=[
             Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
         ],
@@ -156,6 +475,8 @@ def create_app(
     app.state.registry_url = normalized_registry_url
     app.state.local_mode = local_mode
     app.state.enable_workspace = enable_workspace
+    mounted_docs_directory = _docs_directory(docs_directory)
+    app.state.docs_enabled = mounted_docs_directory is not None
     if cors_allowed_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -169,6 +490,12 @@ def create_app(
             StaticFiles(directory=str(_static_directory())),
             name="static",
         )
+    if mounted_docs_directory is not None:
+        app.mount(
+            "/docs",
+            StaticFiles(directory=str(mounted_docs_directory), html=True),
+            name="docs",
+        )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -177,11 +504,7 @@ def create_app(
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; base-uri 'self'; form-action 'self'; "
-            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
-            "worker-src 'self'; connect-src 'self' https: http://localhost:* "
-            "http://127.0.0.1:*",
+            _content_security_policy(request.url.path),
         )
         if local_mode:
             response.headers.setdefault("Cache-Control", "no-store")
@@ -202,6 +525,7 @@ def create_app(
                 "workspace_enabled": enable_workspace,
                 "public_base_url": app.state.public_base_url,
                 "local_mode": local_mode,
+                "docs_enabled": app.state.docs_enabled,
             },
         )
 
@@ -234,28 +558,68 @@ def create_app(
     if service is None:
         return app
 
-    @app.get("/api/v1/registry")
-    async def registry_info() -> dict[str, object]:
-        return _registry_info(service)
+    @app.get(
+        "/api/v1/registry",
+        tags=["Discovery"],
+        summary="Registry metadata",
+        description="Return registry certificates, root fingerprint, package version, and deployment metadata.",
+    )
+    async def registry_info() -> PrettyJSONResponse:
+        return PrettyJSONResponse(_registry_info(service))
 
-    @app.get("/api/v1/server/routes")
-    async def server_routes() -> dict[str, object]:
-        return {
-            "routes": [route.to_dict() for route in default_routes()],
-        }
+    @app.get(
+        "/api/v1/server/routes",
+        tags=["Discovery"],
+        summary="Route map",
+        description="List public, claimant-signed, and administrator routes exposed by this deployment.",
+    )
+    async def server_routes() -> PrettyJSONResponse:
+        routes = [route.to_dict() for route in default_routes()]
+        if app.state.docs_enabled:
+            routes.append(
+                {
+                    "name": "documentation",
+                    "method": "GET",
+                    "path": "/docs/",
+                    "auth": "public",
+                    "lambda_name": None,
+                    "permission": None,
+                }
+            )
+        return PrettyJSONResponse({"routes": routes})
 
-    @app.get("/api/v1/server/info")
-    async def server_info() -> dict[str, object]:
-        return {
-            "registry_url": app.state.registry_url,
-            "public_base_url": app.state.public_base_url,
-            "server": server_metadata(),
-        }
+    @app.get(
+        "/api/v1/server/info",
+        tags=["Discovery"],
+        summary="Server information",
+        description="Return public base URL, optional documentation URL, package version, and deployed commit hash.",
+    )
+    async def server_info() -> PrettyJSONResponse:
+        return PrettyJSONResponse(
+            {
+                "registry_url": app.state.registry_url,
+                "public_base_url": app.state.public_base_url,
+                "documentation_url": f"{app.state.public_base_url}/docs/"
+                if app.state.docs_enabled
+                else None,
+                "server": server_metadata(),
+            }
+        )
 
-    @app.post("/api/v1/inspect")
+    @app.post(
+        "/api/v1/inspect",
+        tags=["Inspection"],
+        summary="Inspect a manifest or raw carrier file",
+        description=(
+            "Upload signed manifest JSON or raw media. The server attempts to "
+            "recover embedded PACT manifests, claim locators, watermarks, or "
+            "C2PA references, then resolves matching registry claims when possible."
+        ),
+    )
     async def inspect_upload(
         file: UploadFile = File(
-            description="Manifest JSON or raw media carrier to inspect."
+            description="Manifest JSON or raw media carrier to inspect.",
+            examples=["signed-manifest.json", "work.txt", "image.png"],
         ),
         mime_type: str | None = Form(
             default=None,
@@ -273,9 +637,20 @@ def create_app(
             _raise_http_error(error)
             raise AssertionError("unreachable")
 
-    @app.post("/api/v1/challenges")
+    @app.post(
+        "/api/v1/challenges",
+        tags=["Challenges"],
+        summary="Issue a replay and proof-of-work challenge",
+        description=(
+            "Create a short-lived challenge that must be included in a later "
+            "claimant-signed mutation request."
+        ),
+    )
     async def issue_challenge(
-        body: ChallengeRequestModel,
+        body: Annotated[
+            ChallengeRequestModel,
+            Body(openapi_examples=_openapi_examples(CHALLENGE_EXAMPLES)),
+        ],
     ) -> dict[str, object]:
         challenge = service.issue_challenge(
             body.purpose,
@@ -284,9 +659,28 @@ def create_app(
         )
         return _json_dict(challenge.to_dict())
 
-    @app.post("/api/v1/profiles")
+    @app.post(
+        "/api/v1/profiles",
+        tags=["Profiles"],
+        summary="Register a claimant profile",
+        description=(
+            "Register a claimant public key and device binding. The body must "
+            "be signed by the claimant key and paired with a profile-registration challenge."
+        ),
+    )
     async def register_profile(
-        body: MutationRequestModel,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "profile_registration": MUTATION_EXAMPLES[
+                            "profile_registration"
+                        ]
+                    }
+                )
+            ),
+        ],
     ) -> dict[str, object]:
         try:
             profile = service.register_profile(body.to_domain())
@@ -294,7 +688,11 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(profile)
 
-    @app.get("/api/v1/profiles/{key_id}")
+    @app.get(
+        "/api/v1/profiles/{key_id}",
+        tags=["Profiles"],
+        summary="Get claimant profile",
+    )
     async def get_profile(key_id: str) -> dict[str, object]:
         try:
             profile = service.get_profile(key_id)
@@ -302,7 +700,11 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(profile)
 
-    @app.get("/api/v1/profiles/{key_id}/evidence")
+    @app.get(
+        "/api/v1/profiles/{key_id}/evidence",
+        tags=["Profiles"],
+        summary="Get claimant evidence summary",
+    )
     async def get_profile_evidence(key_id: str) -> dict[str, object]:
         try:
             evidence = service.evidence_profile(key_id)
@@ -310,9 +712,17 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(evidence)
 
-    @app.post("/api/v1/certificates")
+    @app.post(
+        "/api/v1/certificates",
+        tags=["Certificates"],
+        summary="Issue claimant certificate",
+        description="Issue a short-lived claimant certificate after key-possession proof.",
+    )
     async def issue_certificate(
-        body: CertificateIssueRequestModel,
+        body: Annotated[
+            CertificateIssueRequestModel,
+            Body(openapi_examples=_openapi_examples(CERTIFICATE_EXAMPLES)),
+        ],
     ) -> dict[str, object]:
         try:
             certificate_pem, chain_pem = service.issue_claimant_certificate(
@@ -326,15 +736,37 @@ def create_app(
             "chain_pem": chain_pem.decode("ascii"),
         }
 
-    @app.post("/api/v1/claims")
-    async def register_claim(body: MutationRequestModel) -> dict[str, object]:
+    @app.post(
+        "/api/v1/claims",
+        tags=["Claims"],
+        summary="Register signed claim",
+        description="Publish a signed manifest as a registry claim.",
+    )
+    async def register_claim(
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "claim_registration": MUTATION_EXAMPLES[
+                            "claim_registration"
+                        ]
+                    }
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
         try:
             claim = service.register_claim(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(claim)
 
-    @app.get("/api/v1/claims/{claim_id}")
+    @app.get(
+        "/api/v1/claims/{claim_id}",
+        tags=["Claims"],
+        summary="Get registered claim",
+    )
     async def get_claim(claim_id: UUID) -> dict[str, object]:
         try:
             claim = service.get_claim(claim_id)
@@ -342,10 +774,22 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(claim)
 
-    @app.post("/api/v1/claims/{claim_id}/revoke")
+    @app.post(
+        "/api/v1/claims/{claim_id}/revoke",
+        tags=["Claims"],
+        summary="Revoke registered claim",
+        description="Revoke an existing claim. The claim ID is supplied in the path and added to the signed mutation payload by the server.",
+    )
     async def revoke_claim(
         claim_id: UUID,
-        body: MutationRequestModel,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {"claim_revocation": MUTATION_EXAMPLES["claim_revocation"]}
+                )
+            ),
+        ],
     ) -> dict[str, object]:
         request_model = MutationRequest(
             challenge_id=body.challenge_id,
@@ -360,31 +804,81 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(claim)
 
-    @app.post("/api/v1/rotations")
-    async def rotate_key(body: RotationRequestModel) -> dict[str, object]:
+    @app.post(
+        "/api/v1/rotations",
+        tags=["Profiles"],
+        summary="Rotate claimant key",
+        description="Rotate a claimant key using signatures from both the current and replacement keys.",
+    )
+    async def rotate_key(
+        body: Annotated[
+            RotationRequestModel,
+            Body(openapi_examples=_openapi_examples(ROTATION_EXAMPLES)),
+        ],
+    ) -> dict[str, object]:
         try:
             profile = service.rotate_key(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(profile)
 
-    @app.post("/api/v1/domains/verify")
-    async def verify_domain(body: MutationRequestModel) -> dict[str, object]:
+    @app.post(
+        "/api/v1/domains/verify",
+        tags=["Profiles"],
+        summary="Verify claimant domain",
+    )
+    async def verify_domain(
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {
+                        "domain_verification": {
+                            "summary": "Attach a verified domain to a claimant profile",
+                            "value": {
+                                **MUTATION_EXAMPLES["profile_registration"][
+                                    "value"
+                                ],
+                                "payload": {"domain": "example.com"},
+                            },
+                        }
+                    }
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
         try:
             profile = service.verify_domain(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(profile)
 
-    @app.post("/api/v1/disputes")
-    async def open_dispute(body: MutationRequestModel) -> dict[str, object]:
+    @app.post(
+        "/api/v1/disputes",
+        tags=["Disputes"],
+        summary="Open claim dispute",
+    )
+    async def open_dispute(
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {"open_dispute": DISPUTE_EXAMPLES["open_dispute"]}
+                )
+            ),
+        ],
+    ) -> dict[str, object]:
         try:
             dispute = service.open_dispute(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(dispute)
 
-    @app.get("/api/v1/disputes/{dispute_id}")
+    @app.get(
+        "/api/v1/disputes/{dispute_id}",
+        tags=["Disputes"],
+        summary="Get dispute record",
+    )
     async def get_dispute(dispute_id: UUID) -> dict[str, object]:
         try:
             dispute = service.get_dispute(dispute_id)
@@ -392,10 +886,22 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(dispute)
 
-    @app.post("/api/v1/disputes/{dispute_id}/resolve")
+    @app.post(
+        "/api/v1/disputes/{dispute_id}/resolve",
+        tags=["Disputes"],
+        summary="Resolve claim dispute",
+        description="Administrative endpoint for resolving an open dispute.",
+    )
     async def resolve_dispute(
         dispute_id: UUID,
-        body: MutationRequestModel,
+        body: Annotated[
+            MutationRequestModel,
+            Body(
+                openapi_examples=_openapi_examples(
+                    {"resolve_dispute": DISPUTE_EXAMPLES["resolve_dispute"]}
+                )
+            ),
+        ],
     ) -> dict[str, object]:
         request_model = MutationRequest(
             challenge_id=body.challenge_id,

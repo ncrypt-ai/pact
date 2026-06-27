@@ -84,6 +84,20 @@ interactive workspace. C2PA and PDF/document carrier functionality remain in
 ``pact[c2pa]`` and are loaded by the browser workspace as feature packs where
 the runtime supports them.
 
+Self-hosted documentation
+-------------------------
+
+The web app can also serve prebuilt Sphinx documentation at ``/docs/`` when
+``docs/_build/html/index.html`` is present in the checkout:
+
+.. code-block:: bash
+
+   uv run sphinx-build -b html docs docs/_build/html
+
+The registry homepage links to the documentation only when the built HTML is
+available. ``/api/v1/server/info`` also reports ``documentation_url`` for
+deployments that mount the docs.
+
 AWS serverless runtime
 ----------------------
 

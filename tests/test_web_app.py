@@ -164,9 +164,12 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     signed = make_signed_manifest(identity)
     claim = register_claim(client, identity, signed)
 
-    assert client.get("/api/v1/registry").status_code == 200
+    registry_response = client.get("/api/v1/registry")
+    assert registry_response.status_code == 200
+    assert '{\n  "registry_url":' in registry_response.text
     routes = client.get("/api/v1/server/routes")
     assert routes.status_code == 200
+    assert '{\n  "routes": [' in routes.text
     route_names = {route["name"] for route in routes.json()["routes"]}
     assert {
         "registry_info",
@@ -174,11 +177,12 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
         "server_info",
         "verify_claim_page",
     }.issubset(route_names)
-    registry_info = client.get("/api/v1/registry").json()
+    registry_info = registry_response.json()
     assert registry_info["server"]["version"] == PACKAGE_VERSION
     assert registry_info["server"]["commit"] == "abc123def456"
     server_info = client.get("/api/v1/server/info")
     assert server_info.status_code == 200
+    assert '{\n  "registry_url":' in server_info.text
     assert server_info.json()["server"] == registry_info["server"]
     assert client.get(f"/api/v1/profiles/{identity.key_id}").status_code == 200
     assert (
@@ -199,6 +203,93 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
+
+
+def test_web_app_can_self_host_built_documentation(tmp_path: Path) -> None:
+    docs_directory = tmp_path / "docs"
+    docs_directory.mkdir()
+    (docs_directory / "index.html").write_text(
+        "<!doctype html><title>PACT Documentation</title>",
+        encoding="utf-8",
+    )
+    client, _identity = make_client(tmp_path / "registry")
+
+    app = create_app(
+        client.app.state.registry_service,
+        public_base_url="http://testserver",
+        docs_directory=docs_directory,
+    )
+    docs_client = TestClient(app)
+
+    home = docs_client.get("/")
+    assert '<a href="/docs/">Documentation</a>' in home.text
+    docs = docs_client.get("/docs/")
+    assert docs.status_code == 200
+    assert "PACT Documentation" in docs.text
+    assert docs_client.get("/api/docs").status_code == 200
+    route_names = {
+        route["name"]
+        for route in docs_client.get("/api/v1/server/routes").json()["routes"]
+    }
+    assert "documentation" in route_names
+    assert (
+        docs_client.get("/api/v1/server/info").json()["documentation_url"]
+        == "http://testserver/docs/"
+    )
+
+
+def test_api_docs_have_scoped_content_security_policy(tmp_path: Path) -> None:
+    client, _identity = make_client(tmp_path)
+
+    home_csp = client.get("/").headers["Content-Security-Policy"]
+    docs_csp = client.get("/api/docs").headers["Content-Security-Policy"]
+    docs_slash_csp = client.get("/api/docs/").headers[
+        "Content-Security-Policy"
+    ]
+    default_docs_csp = client.get("/docs").headers["Content-Security-Policy"]
+
+    assert (
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" in docs_csp
+    )
+    assert "img-src 'self' data: https://fastapi.tiangolo.com" in docs_csp
+    assert "'unsafe-inline'" in docs_csp
+    assert "https://cdn.jsdelivr.net" in docs_slash_csp
+    assert "https://cdn.jsdelivr.net" in default_docs_csp
+    assert "https://fastapi.tiangolo.com" not in home_csp
+
+
+def test_openapi_schema_includes_actionable_examples(tmp_path: Path) -> None:
+    client, _identity = make_client(tmp_path)
+
+    schema = client.get("/api/openapi.json").json()
+
+    challenge_examples = schema["paths"]["/api/v1/challenges"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["examples"]
+    assert "profile_registration" in challenge_examples
+    assert "claim_registration" in challenge_examples
+    assert (
+        challenge_examples["claim_registration"]["value"]["purpose"]
+        == "claim_registration"
+    )
+
+    profile_examples = schema["paths"]["/api/v1/profiles"]["post"][
+        "requestBody"
+    ]["content"]["application/json"]["examples"]
+    assert profile_examples["profile_registration"]["value"]["payload"][
+        "device_fingerprint"
+    ]
+
+    claim_examples = schema["paths"]["/api/v1/claims"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["examples"]
+    assert (
+        "signed_manifest_json"
+        in claim_examples["claim_registration"]["value"]["payload"]
+    )
+
+    tags = {tag["name"] for tag in schema["tags"]}
+    assert {"Discovery", "Challenges", "Claims", "Profiles"}.issubset(tags)
 
 
 def test_web_inspect_accepts_raw_text_carrier(tmp_path: Path) -> None:

@@ -8,18 +8,33 @@
     <h1>PACT Registry</h1>
     <p>Registry: {{ registry_url }}</p>
     <p>Base URL: {{ public_base_url }}</p>
-    <p>Mode: {{ "local preview" if local_mode else "public service" }}</p>
-    {% if workspace_enabled %}
-    <p><a href="/app">Open the browser workspace</a></p>
-    {% endif %}
+    <p>Mode: {{ "local" if local_mode else "hosted" }}</p>
 
-    <h2>Public entry points</h2>
-    <p>This host publishes the API and the human-readable proof pages side by side.</p>
+    <h2>Public pages</h2>
+    <p>This host publishes human-readable proof pages for profiles, claims, and verification checks.</p>
     <ul>
-      <li><a href="/api/v1/registry">Registry metadata</a></li>
+        {% if workspace_enabled %}
+        <li><a href="/app">Web interface</a></li>
+        {% endif %}
       <li>Profiles: <code>/profiles/&lt;key_id&gt;</code></li>
       <li>Claims: <code>/claims/&lt;claim_id&gt;</code></li>
       <li>Claim checks: <code>/verify/claim/&lt;claim_id&gt;</code></li>
     </ul>
+
+    <h2>Service Discovery</h2>
+    <p>These JSON endpoints describe the registry and its deployed API surface.</p>
+    <ul>
+      <li><a href="/api/v1/registry">Registry metadata</a></li>
+      <li><a href="/api/v1/server/info">Server info</a></li>
+      <li><a href="/api/v1/server/routes">Route map</a></li>
+    </ul>
+
+    {% if docs_enabled %}
+    <h2>Documentation</h2>
+    <ul>
+        <li><a href="/docs">PACT library</a></li>
+        <li><a href="/api/docs">API Surface</a></li>
+    </ul>
+    {% endif %}
   </body>
 </html>
