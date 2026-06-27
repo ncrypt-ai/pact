@@ -1,9 +1,9 @@
-const output = document.querySelector("#output");
+const workspaceMessage = document.querySelector("#workspace-message");
 const sessionStatus = document.querySelector("#session-status");
 const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
 const identityStorageKey = "pact.identity";
-const vaultSecretStorageKey = "pact.vaultSecret";
+const passcodeStorageKey = "pact.passcode";
 let identity = JSON.parse(localStorage.getItem(identityStorageKey) || "null");
 let identityPassword = null;
 let signedManifest = null;
@@ -88,11 +88,12 @@ function requireIdentity() {
 function password() {
   const value =
     identityPassword ||
-    localStorage.getItem(vaultSecretStorageKey) ||
-    document.querySelector("#identity-password").value;
+    localStorage.getItem(passcodeStorageKey) ||
+    document.querySelector("#identity-passcode").value ||
+    document.querySelector("#identity-import-password").value;
   if (!value) {
     setPage("identity");
-    throw new Error("Enter the password for this imported identity.");
+    throw new Error("Enter your identity passcode.");
   }
   return value;
 }
@@ -102,9 +103,14 @@ function rememberPassword() {
   updateSession();
 }
 
-function show(value) {
-  output.textContent =
-    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+function show(value, fallback = "Done.") {
+  if (typeof value === "string") {
+    workspaceMessage.textContent = value;
+    console.log(value);
+    return;
+  }
+  workspaceMessage.textContent = fallback;
+  console.log(value);
 }
 
 async function readBase64(input) {
@@ -144,25 +150,6 @@ async function readImportFile(file) {
     registry_url: registryUrl(),
     encrypted_pkcs8_b64: btoa(text)
   };
-}
-
-function randomSecret() {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-function vaultSecret() {
-  let secret = localStorage.getItem(vaultSecretStorageKey);
-  if (!secret) {
-    secret = randomSecret();
-    localStorage.setItem(vaultSecretStorageKey, secret);
-  }
-  return secret;
 }
 
 function selectedFileStem(input) {
@@ -278,10 +265,14 @@ async function unlockIdentity() {
 }
 
 async function createIdentity() {
-  identityPassword = vaultSecret();
+  identityPassword = document.querySelector("#identity-passcode").value;
+  if (!identityPassword) {
+    throw new Error("Choose a passcode before creating an identity.");
+  }
   identity = JSON.parse(
     await callPython("create_identity", [registryUrl(), identityPassword])
   );
+  localStorage.setItem(passcodeStorageKey, identityPassword);
   localStorage.setItem(identityStorageKey, JSON.stringify(identity));
   updateSession();
 }
@@ -311,10 +302,11 @@ async function ensureProfile() {
 
 async function run(handler) {
   try {
-    show("Working...");
+    workspaceMessage.textContent = "Working...";
     await handler();
   } catch (error) {
-    show(`Error: ${error.message}`);
+    console.error(error);
+    workspaceMessage.textContent = `Error: ${error.message}`;
   }
 }
 
@@ -327,10 +319,7 @@ async function continueIdentity() {
   const profile = await ensureProfile();
   updateSession();
   setPage("claims");
-  show({
-    status: "ready",
-    profile
-  });
+  show(profile, "Identity ready.");
 }
 
 document.querySelector("#continue-identity").onclick = () =>
@@ -345,11 +334,14 @@ document.querySelector("#show-identity").onclick = () =>
     if (!identity) {
       throw new Error("No browser identity is stored.");
     }
-    show({
-      registry_url: identity.registry_url,
-      key_id: identity.key_id,
-      public_jwk: identity.public_jwk
-    });
+    show(
+      {
+        registry_url: identity.registry_url,
+        key_id: identity.key_id,
+        public_jwk: identity.public_jwk
+      },
+      "Public identity written to the console."
+    );
   });
 
 document.querySelector("#export-identity").onclick = () =>
@@ -362,7 +354,7 @@ document.querySelector("#export-identity").onclick = () =>
       JSON.stringify(
         {
           ...identity,
-          vault_secret: localStorage.getItem(vaultSecretStorageKey)
+          passcode: localStorage.getItem(passcodeStorageKey)
         },
         null,
         2
@@ -374,9 +366,9 @@ document.querySelector("#export-identity").onclick = () =>
 document.querySelector("#identity-import").onchange = (event) =>
   run(async () => {
     const imported = await readImportFile(event.target.files[0]);
-    if (imported.vault_secret) {
-      localStorage.setItem(vaultSecretStorageKey, imported.vault_secret);
-      identityPassword = imported.vault_secret;
+    if (imported.passcode) {
+      localStorage.setItem(passcodeStorageKey, imported.passcode);
+      identityPassword = imported.passcode;
     }
     const publicIdentity = JSON.parse(await callPython("import_identity", [
       registryUrl(),
@@ -401,7 +393,7 @@ document.querySelector("#logout-identity").onclick = () =>
     identity = null;
     identityPassword = null;
     localStorage.removeItem(identityStorageKey);
-    localStorage.removeItem(vaultSecretStorageKey);
+    localStorage.removeItem(passcodeStorageKey);
     updateSession();
     setPage("identity");
     show("This browser is logged out for this registry.");
@@ -641,7 +633,7 @@ document.querySelector("#analyze-probes").onclick = () =>
 
 updateSession();
 setPage(identity ? "claims" : "identity");
-if (identity && localStorage.getItem(vaultSecretStorageKey)) {
+if (identity && localStorage.getItem(passcodeStorageKey)) {
   run(async () => {
     await unlockIdentity();
     await ensureProfile();

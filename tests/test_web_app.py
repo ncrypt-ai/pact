@@ -335,11 +335,13 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     workspace = enabled_client.get("/app")
     assert workspace.status_code == 200
     assert "PACT Workspace" in workspace.text
-    assert "Pyodide worker" in workspace.text
+    assert "Output" not in workspace.text
     assert "<script>" not in workspace.text
     assert 'data-page="identity"' in workspace.text
     assert 'data-page="sign"' in workspace.text
     assert "Display name (optional)" in workspace.text
+    assert "Passcode" in workspace.text
+    assert "PACT will not create one for you" in workspace.text
     assert "Continue" in workspace.text
     assert "Recovery and advanced options" in workspace.text
     assert "Log out" in workspace.text

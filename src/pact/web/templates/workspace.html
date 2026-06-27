@@ -22,6 +22,7 @@
         actions are signed locally before they are submitted.
       </p>
       <p id="session-status" class="session-status">No identity loaded.</p>
+      <p id="workspace-message" role="status"></p>
       <nav class="workspace-nav" aria-label="Workspace actions">
         <button type="button" data-page-button="identity">Identity</button>
         <button type="button" data-page-button="claims">Claims</button>
@@ -52,10 +53,15 @@
             Display name (optional)
             <input id="identity-display-name" autocomplete="name" placeholder="Leave blank to stay pseudonymous">
           </label>
+          <label>
+            Passcode
+            <input id="identity-passcode" type="password" autocomplete="current-password" required>
+          </label>
           <p class="small">
             Your public profile can be anonymous. The registry receives your
             public key and a browser fingerprint used to limit duplicate
-            signups; your private key stays in this browser.
+            signups; your private key stays in this browser. Choose your own
+            passcode. PACT will not create one for you.
           </p>
         </form>
         <div class="actions">
@@ -75,7 +81,7 @@
           </label>
           <label>
             Import password, if needed
-            <input id="identity-password" type="password" autocomplete="current-password">
+            <input id="identity-import-password" type="password" autocomplete="current-password">
           </label>
           <div class="actions">
             <button type="button" id="show-identity">Show public identity</button>
@@ -198,11 +204,6 @@
           <button type="button" id="create-probes">Create probes</button>
           <button type="button" id="analyze-probes">Analyze responses</button>
         </div>
-      </section>
-
-      <section>
-        <h2>Output</h2>
-        <pre id="output">Loading Pyodide worker...</pre>
       </section>
     </main>
 
