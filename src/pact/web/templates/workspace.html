@@ -35,13 +35,11 @@
 
     <main>
       <section data-page="identity">
-        <h2>Identity</h2>
+        <h2>Get started</h2>
         <p>
-          Create or import the key that signs your claims. Save the encrypted
-          export; losing it means losing the signing identity. Once an identity
-          is loaded, the rest of the workspace stays available for additional
-          files and claims. The password unlocks the encrypted browser vault
-          for the current session.
+          This browser keeps the signing key for this registry. If you already
+          used this site here, PACT will unlock it automatically. If not, it
+          creates a new private identity and registers a public profile for you.
         </p>
         <form id="identity-form">
           <input
@@ -51,20 +49,39 @@
             value="pact-browser-vault"
           >
           <label>
-            Vault password
-            <input id="identity-password" type="password" autocomplete="current-password">
+            Display name (optional)
+            <input id="identity-display-name" autocomplete="name" placeholder="Leave blank to stay pseudonymous">
           </label>
+          <p class="small">
+            Your public profile can be anonymous. The registry receives your
+            public key and a browser fingerprint used to limit duplicate
+            signups; your private key stays in this browser.
+          </p>
         </form>
         <div class="actions">
-          <button type="button" id="create-identity">Create identity</button>
-          <button type="button" id="unlock-identity">Unlock saved identity</button>
-          <button type="button" id="show-identity">Show identity</button>
-          <button type="button" id="export-identity">Download encrypted identity</button>
+          <button type="button" id="continue-identity">Continue</button>
+          <button type="button" id="logout-identity" hidden>Log out</button>
         </div>
-        <label>
-          Import browser JSON or CLI PKCS#8 identity export
-          <input id="identity-import" type="file">
-        </label>
+        <details>
+          <summary>Recovery and advanced options</summary>
+          <p>
+            Import an identity made by the CLI, or download a recovery file for
+            this browser identity. A CLI import may ask for the password used
+            when the CLI identity was exported.
+          </p>
+          <label>
+            Import browser recovery JSON or CLI PKCS#8 identity export
+            <input id="identity-import" type="file">
+          </label>
+          <label>
+            Import password, if needed
+            <input id="identity-password" type="password" autocomplete="current-password">
+          </label>
+          <div class="actions">
+            <button type="button" id="show-identity">Show public identity</button>
+            <button type="button" id="export-identity">Download recovery file</button>
+          </div>
+        </details>
       </section>
 
       <section data-page="claims">

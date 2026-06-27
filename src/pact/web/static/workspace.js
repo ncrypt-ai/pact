@@ -2,7 +2,9 @@ const output = document.querySelector("#output");
 const sessionStatus = document.querySelector("#session-status");
 const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
-let identity = JSON.parse(localStorage.getItem("pact.identity") || "null");
+const identityStorageKey = "pact.identity";
+const vaultSecretStorageKey = "pact.vaultSecret";
+let identity = JSON.parse(localStorage.getItem(identityStorageKey) || "null");
 let identityPassword = null;
 let signedManifest = null;
 let nonceBase64 = null;
@@ -33,9 +35,10 @@ function updateSession() {
   const authenticated = Boolean(identity);
   sessionStatus.textContent = authenticated
     ? identityPassword
-      ? `Identity unlocked: ${identity.key_id}`
-      : `Identity locked: ${identity.key_id}`
+      ? `Ready: ${identity.key_id}`
+      : `Saved identity found: ${identity.key_id}`
     : "No identity loaded.";
+  document.querySelector("#logout-identity").hidden = !authenticated;
   for (const button of pageButtons()) {
     if (button.dataset.pageButton !== "identity") {
       button.disabled = !authenticated;
@@ -77,17 +80,19 @@ function registryUrl() {
 function requireIdentity() {
   if (!identity) {
     setPage("identity");
-    throw new Error("Create or import an identity first.");
+    throw new Error("Use Continue to create or load your identity first.");
   }
   return identity;
 }
 
 function password() {
   const value =
-    identityPassword || document.querySelector("#identity-password").value;
+    identityPassword ||
+    localStorage.getItem(vaultSecretStorageKey) ||
+    document.querySelector("#identity-password").value;
   if (!value) {
     setPage("identity");
-    throw new Error("Unlock the identity with its password first.");
+    throw new Error("Enter the password for this imported identity.");
   }
   return value;
 }
@@ -139,6 +144,25 @@ async function readImportFile(file) {
     registry_url: registryUrl(),
     encrypted_pkcs8_b64: btoa(text)
   };
+}
+
+function randomSecret() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function vaultSecret() {
+  let secret = localStorage.getItem(vaultSecretStorageKey);
+  if (!secret) {
+    secret = randomSecret();
+    localStorage.setItem(vaultSecretStorageKey, secret);
+  }
+  return secret;
 }
 
 function selectedFileStem(input) {
@@ -236,6 +260,55 @@ async function signedMutation(purpose, payload, boundKeyId = null) {
   );
 }
 
+async function unlockIdentity() {
+  const currentIdentity = requireIdentity();
+  const publicIdentity = JSON.parse(await callPython("import_identity", [
+    registryUrl(),
+    currentIdentity.encrypted_pkcs8_b64,
+    password()
+  ]));
+  identity = {
+    ...currentIdentity,
+    registry_url: publicIdentity.registry_url,
+    key_id: publicIdentity.key_id,
+    public_jwk: publicIdentity.public_jwk
+  };
+  localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+  rememberPassword();
+}
+
+async function createIdentity() {
+  identityPassword = vaultSecret();
+  identity = JSON.parse(
+    await callPython("create_identity", [registryUrl(), identityPassword])
+  );
+  localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+  updateSession();
+}
+
+async function ensureProfile() {
+  const displayName = document
+    .querySelector("#identity-display-name")
+    .value.trim();
+  const response = await fetch(`${registryUrl()}/api/v1/profiles/${identity.key_id}`);
+  if (response.ok) {
+    return await response.json();
+  }
+  if (response.status !== 404 && response.status !== 400) {
+    const body = await response.json();
+    throw new Error(body.detail || response.statusText);
+  }
+  const request = await signedMutation("profile_registration", {
+    ...(displayName ? { display_name: displayName } : {}),
+    hosted_account: false,
+    device_fingerprint: await browserFingerprint()
+  });
+  return await registryJson("/api/v1/profiles", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
 async function run(handler) {
   try {
     show("Working...");
@@ -245,34 +318,30 @@ async function run(handler) {
   }
 }
 
-document.querySelector("#create-identity").onclick = () =>
-  run(async () => {
-    identity = JSON.parse(
-      await callPython("create_identity", [registryUrl(), password()])
-    );
-    rememberPassword();
-    localStorage.setItem("pact.identity", JSON.stringify(identity));
-    updateSession();
-    setPage("claims");
-    show(identity);
+async function continueIdentity() {
+  if (identity) {
+    await unlockIdentity();
+  } else {
+    await createIdentity();
+  }
+  const profile = await ensureProfile();
+  updateSession();
+  setPage("claims");
+  show({
+    status: "ready",
+    profile
   });
+}
 
-document.querySelector("#unlock-identity").onclick = () =>
+document.querySelector("#continue-identity").onclick = () =>
   run(async () => {
-    const currentIdentity = requireIdentity();
-    await callPython("import_identity", [
-      registryUrl(),
-      currentIdentity.encrypted_pkcs8_b64,
-      password()
-    ]);
-    rememberPassword();
-    show("Identity unlocked for this browser session.");
+    await continueIdentity();
   });
 
 document.querySelector("#show-identity").onclick = () =>
   run(async () => {
     identity =
-      identity || JSON.parse(localStorage.getItem("pact.identity") || "null");
+      identity || JSON.parse(localStorage.getItem(identityStorageKey) || "null");
     if (!identity) {
       throw new Error("No browser identity is stored.");
     }
@@ -288,13 +357,27 @@ document.querySelector("#export-identity").onclick = () =>
     if (!identity) {
       throw new Error("No browser identity is stored.");
     }
-    download("pact-identity.json", JSON.stringify(identity, null, 2));
-    show("Encrypted identity downloaded.");
+    download(
+      "pact-identity-recovery.json",
+      JSON.stringify(
+        {
+          ...identity,
+          vault_secret: localStorage.getItem(vaultSecretStorageKey)
+        },
+        null,
+        2
+      )
+    );
+    show("Recovery file downloaded. Keep it private.");
   });
 
 document.querySelector("#identity-import").onchange = (event) =>
   run(async () => {
     const imported = await readImportFile(event.target.files[0]);
+    if (imported.vault_secret) {
+      localStorage.setItem(vaultSecretStorageKey, imported.vault_secret);
+      identityPassword = imported.vault_secret;
+    }
     const publicIdentity = JSON.parse(await callPython("import_identity", [
       registryUrl(),
       imported.encrypted_pkcs8_b64,
@@ -307,10 +390,21 @@ document.querySelector("#identity-import").onchange = (event) =>
       public_jwk: publicIdentity.public_jwk
     };
     rememberPassword();
-    localStorage.setItem("pact.identity", JSON.stringify(identity));
+    localStorage.setItem(identityStorageKey, JSON.stringify(identity));
     updateSession();
     setPage("claims");
     show("Identity imported and verified.");
+  });
+
+document.querySelector("#logout-identity").onclick = () =>
+  run(async () => {
+    identity = null;
+    identityPassword = null;
+    localStorage.removeItem(identityStorageKey);
+    localStorage.removeItem(vaultSecretStorageKey);
+    updateSession();
+    setPage("identity");
+    show("This browser is logged out for this registry.");
   });
 
 document.querySelector("#register-profile").onclick = () =>
@@ -547,8 +641,17 @@ document.querySelector("#analyze-probes").onclick = () =>
 
 updateSession();
 setPage(identity ? "claims" : "identity");
-show(
-  identity
-    ? "Identity loaded. Choose an action page."
-    : "Pyodide worker ready. Create or import an identity to begin."
-);
+if (identity && localStorage.getItem(vaultSecretStorageKey)) {
+  run(async () => {
+    await unlockIdentity();
+    await ensureProfile();
+    setPage("claims");
+    show("Identity restored. Choose an action page.");
+  });
+} else {
+  show(
+    identity
+      ? "Saved identity found. Use Continue to finish loading it."
+      : "Use Continue to create your browser identity and profile."
+  );
+}

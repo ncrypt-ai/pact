@@ -222,7 +222,8 @@ def test_web_app_can_self_host_built_documentation(tmp_path: Path) -> None:
     docs_client = TestClient(app)
 
     home = docs_client.get("/")
-    assert '<a href="/docs/">Documentation</a>' in home.text
+    assert '<a href="/docs">PACT library</a>' in home.text
+    assert '<a href="/api/docs">API Surface</a>' in home.text
     docs = docs_client.get("/docs/")
     assert docs.status_code == 200
     assert "PACT Documentation" in docs.text
@@ -339,8 +340,9 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert 'data-page="identity"' in workspace.text
     assert 'data-page="sign"' in workspace.text
     assert "Display name (optional)" in workspace.text
-    assert "Unlock saved identity" in workspace.text
-    assert "Vault password" in workspace.text
+    assert "Continue" in workspace.text
+    assert "Recovery and advanced options" in workspace.text
+    assert "Log out" in workspace.text
     assert "CLI PKCS#8 identity export" in workspace.text
     assert 'autocomplete="username"' in workspace.text
     csp = workspace.headers["Content-Security-Policy"]
