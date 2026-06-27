@@ -3,6 +3,7 @@ const sessionStatus = document.querySelector("#session-status");
 const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
 let identity = JSON.parse(localStorage.getItem("pact.identity") || "null");
+let identityPassword = null;
 let signedManifest = null;
 let nonceBase64 = null;
 let probeSet = null;
@@ -31,7 +32,9 @@ function setPage(name) {
 function updateSession() {
   const authenticated = Boolean(identity);
   sessionStatus.textContent = authenticated
-    ? `Identity loaded: ${identity.key_id}`
+    ? identityPassword
+      ? `Identity unlocked: ${identity.key_id}`
+      : `Identity locked: ${identity.key_id}`
     : "No identity loaded.";
   for (const button of pageButtons()) {
     if (button.dataset.pageButton !== "identity") {
@@ -80,11 +83,18 @@ function requireIdentity() {
 }
 
 function password() {
-  const value = document.querySelector("#identity-password").value;
+  const value =
+    identityPassword || document.querySelector("#identity-password").value;
   if (!value) {
-    throw new Error("Enter the identity password first.");
+    setPage("identity");
+    throw new Error("Unlock the identity with its password first.");
   }
   return value;
+}
+
+function rememberPassword() {
+  identityPassword = password();
+  updateSession();
 }
 
 function show(value) {
@@ -114,8 +124,29 @@ async function readText(input) {
   return await file.text();
 }
 
+function selectedFileStem(input) {
+  const file = input.files[0];
+  if (!file) {
+    return "pact";
+  }
+  return file.name.replace(/\.[^.]+$/, "");
+}
+
 function download(name, content, type = "application/json") {
   const blob = new Blob([content], { type });
+  downloadBlob(name, blob);
+}
+
+function downloadBase64(name, content, type = "application/octet-stream") {
+  const binary = atob(content);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  downloadBlob(name, new Blob([bytes], { type }));
+}
+
+function downloadBlob(name, blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -202,10 +233,23 @@ document.querySelector("#create-identity").onclick = () =>
     identity = JSON.parse(
       await callPython("create_identity", [registryUrl(), password()])
     );
+    rememberPassword();
     localStorage.setItem("pact.identity", JSON.stringify(identity));
     updateSession();
     setPage("claims");
     show(identity);
+  });
+
+document.querySelector("#unlock-identity").onclick = () =>
+  run(async () => {
+    const currentIdentity = requireIdentity();
+    await callPython("import_identity", [
+      registryUrl(),
+      currentIdentity.encrypted_pkcs8_b64,
+      password()
+    ]);
+    rememberPassword();
+    show("Identity unlocked for this browser session.");
   });
 
 document.querySelector("#show-identity").onclick = () =>
@@ -239,6 +283,7 @@ document.querySelector("#identity-import").onchange = (event) =>
       identity.encrypted_pkcs8_b64,
       password()
     ]);
+    rememberPassword();
     localStorage.setItem("pact.identity", JSON.stringify(identity));
     updateSession();
     setPage("claims");
@@ -278,8 +323,9 @@ document.querySelector("#sign-content").onclick = () =>
     );
     signedManifest = result.manifest_json;
     nonceBase64 = result.nonce_b64;
-    download("pact-manifest.json", signedManifest);
-    download("pact.nonce.b64", nonceBase64, "text/plain");
+    const stem = selectedFileStem(document.querySelector("#content-file"));
+    download(`${stem}.manifest.json`, signedManifest);
+    downloadBase64(`${stem}.nonce`, nonceBase64);
     show(result);
   });
 

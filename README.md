@@ -126,7 +126,7 @@ pact registry register-profile \
   --identity-file ./.pact/identity.pem \
   --identity-password 'change-this'
 
-pact registry register-claim ./work.txt.manifest.json \
+pact registry register-claim ./work.manifest.json \
   --registry https://registry.example \
   --identity-file ./.pact/identity.pem \
   --identity-password 'change-this'
@@ -135,9 +135,9 @@ pact registry register-claim ./work.txt.manifest.json \
 Verify the manifest:
 
 ```bash
-pact verify ./work.txt.manifest.json \
+pact verify ./work.manifest.json \
   --content ./work.txt \
-  --nonce ./work.txt.nonce
+  --nonce ./work.nonce
 ```
 
 Run the local registry/web app:

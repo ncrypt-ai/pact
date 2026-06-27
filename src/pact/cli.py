@@ -125,6 +125,14 @@ def _resolve_secret(
     return _prompt_secret(label)
 
 
+def _default_manifest_path(input_path: Path) -> Path:
+    return input_path.with_suffix(".manifest.json")
+
+
+def _default_nonce_path(input_path: Path) -> Path:
+    return input_path.with_suffix(".nonce")
+
+
 def _resolve_prompted_arg(
     args: argparse.Namespace,
     name: str,
@@ -598,10 +606,10 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     )
     nonce = secrets.token_bytes(32)
     output_path = Path(
-        cast(str | None, args.output) or f"{input_path}.manifest.json"
+        cast(str | None, args.output) or _default_manifest_path(input_path)
     )
     nonce_path = Path(
-        cast(str | None, args.nonce_out) or f"{input_path}.nonce"
+        cast(str | None, args.nonce_out) or _default_nonce_path(input_path)
     )
     manifest = Manifest.create(
         identity=identity,
@@ -1234,11 +1242,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sign.add_argument(
         "--output",
-        help="Manifest output path. Defaults to INPUT.manifest.json.",
+        help="Manifest output path. Defaults to INPUT_STEM.manifest.json.",
     )
     sign.add_argument(
         "--nonce-out",
-        help="Nonce output path needed for later content verification.",
+        help="Nonce output path. Defaults to INPUT_STEM.nonce.",
     )
     sign.add_argument(
         "--policy",

@@ -293,7 +293,7 @@ custom request scripts:
    pact sign ./work.txt \
      --registry https://registry.example
 
-   pact registry register-claim ./work.txt.manifest.json \
+   pact registry register-claim ./work.manifest.json \
      --registry https://registry.example
 
 This serves:

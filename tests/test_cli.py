@@ -91,6 +91,33 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     sign_output = json.loads(capsys.readouterr().out)
     assert sign_output["manifest"] == str(manifest_path)
 
+    default_content_path = tmp_path / "default-name.txt"
+    default_content_path.write_text("hello again\n", encoding="utf-8")
+    assert (
+        main(
+            [
+                "sign",
+                str(default_content_path),
+                "--registry",
+                registry,
+                "--registry-root-fingerprint",
+                "A" * 43,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    default_output = json.loads(capsys.readouterr().out)
+    assert default_output["manifest"] == str(
+        tmp_path / "default-name.manifest.json"
+    )
+    assert default_output["nonce"] == str(tmp_path / "default-name.nonce")
+    assert (tmp_path / "default-name.manifest.json").exists()
+    assert (tmp_path / "default-name.nonce").exists()
+
     assert (
         main(
             [

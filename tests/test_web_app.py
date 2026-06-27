@@ -197,6 +197,8 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert 'data-page="identity"' in workspace.text
     assert 'data-page="sign"' in workspace.text
     assert "Display name (optional)" in workspace.text
+    assert "Unlock saved identity" in workspace.text
+    assert "Vault password" in workspace.text
     csp = workspace.headers["Content-Security-Policy"]
     assert "'wasm-unsafe-eval'" in csp
     assert "script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net" in csp

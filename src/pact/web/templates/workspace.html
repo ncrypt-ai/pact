@@ -40,16 +40,18 @@
           Create or import the key that signs your claims. Save the encrypted
           export; losing it means losing the signing identity. Once an identity
           is loaded, the rest of the workspace stays available for additional
-          files and claims.
+          files and claims. The password unlocks the encrypted browser vault
+          for the current session.
         </p>
         <form id="identity-form">
           <label>
-            Password
+            Vault password
             <input id="identity-password" type="password" autocomplete="current-password">
           </label>
         </form>
         <div class="actions">
           <button type="button" id="create-identity">Create identity</button>
+          <button type="button" id="unlock-identity">Unlock saved identity</button>
           <button type="button" id="show-identity">Show identity</button>
           <button type="button" id="export-identity">Download encrypted identity</button>
         </div>
