@@ -112,9 +112,20 @@ Sign a file:
 ```bash
 pact sign ./work.txt \
   --registry https://registry.example \
-  --registry-root-fingerprint AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
-  --output ./work.manifest.json \
-  --nonce-out ./work.nonce \
+  --identity-file ./.pact/identity.pem \
+  --identity-password 'change-this'
+```
+
+Register the identity and claim:
+
+```bash
+pact registry register-profile \
+  --registry https://registry.example \
+  --identity-file ./.pact/identity.pem \
+  --identity-password 'change-this'
+
+pact registry register-claim ./work.txt.manifest.json \
+  --registry https://registry.example \
   --identity-file ./.pact/identity.pem \
   --identity-password 'change-this'
 ```
@@ -122,16 +133,15 @@ pact sign ./work.txt \
 Verify the manifest:
 
 ```bash
-pact verify ./work.manifest.json \
-  --public-jwk ./public_jwk.json \
+pact verify ./work.txt.manifest.json \
   --content ./work.txt \
-  --nonce ./work.nonce
+  --nonce ./work.txt.nonce
 ```
 
 Run the local registry/web app:
 
 ```bash
-pact web --data-dir ./.pact-dev --port 8000
+pact web --data-dir ./.pact-dev --port 8000 --database ./.pact-dev/registry.sqlite3
 ```
 
 ## Library example

@@ -9,16 +9,20 @@ PACT exposes the same registry API and proof pages in two deployment shapes:
 Monolith runtime
 ----------------
 
-The monolith can use the file-backed event log or SQLite. SQLite may be
-in-memory for ephemeral testing or a file path for a lightweight persistent
-registry.
+The monolith uses SQLite. The database can be ``:memory`` for ephemeral testing
+or a file path for a lightweight persistent registry.
+
+For local setup, ``pact registry init`` reads ``PACT_DATA_DIR``,
+``PACT_REGISTRY_URL``, and ``PACT_ROOT_KEY_PASSWORD`` when they are set. If
+the data directory, registry URL, or root key password is still missing, the CLI
+prompts for it. File-backed identity commands also read
+``PACT_IDENTITY_PASSWORD`` before prompting.
 
 .. code-block:: bash
 
    pact registry init \
      --registry http://127.0.0.1:8000 \
-     --data-dir .pact-registry \
-     --root-key-password change-me
+     --data-dir .pact-registry
 
    pact registry serve \
      --registry http://127.0.0.1:8000 \
@@ -26,11 +30,10 @@ registry.
      --public-base-url http://127.0.0.1:8000 \
      --host 127.0.0.1 \
      --port 8000 \
-     --store-backend sqlite \
-     --sqlite-database :memory:
+     --database :memory
 
-Use ``--sqlite-database .pact-registry/registry.sqlite3`` for a local
-persistent SQLite database.
+Use ``--database .pact-registry/registry.sqlite3`` for a local persistent
+SQLite database.
 
 AWS serverless runtime
 ----------------------

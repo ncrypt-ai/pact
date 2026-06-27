@@ -275,7 +275,22 @@ pages:
    pact registry serve \
      --registry https://registry.example \
      --data-dir ./registry-data \
-     --public-base-url https://registry.example
+     --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3
+
+Once the server is running, the CLI can publish identities and claims without
+custom request scripts:
+
+.. code-block:: bash
+
+   pact registry register-profile \
+     --registry https://registry.example
+
+   pact sign ./work.txt \
+     --registry https://registry.example
+
+   pact registry register-claim ./work.txt.manifest.json \
+     --registry https://registry.example
 
 This serves:
 
@@ -295,7 +310,10 @@ For a local-only browser workflow, bind to loopback:
 
 .. code-block:: bash
 
-   pact web --data-dir ./local-registry --port 8000
+   pact web \
+     --data-dir ./local-registry \
+     --port 8000 \
+     --database ./local-registry/registry.sqlite3
 
 That starts the same API and proof-page app on ``127.0.0.1`` with a local
 base URL.
@@ -367,4 +385,6 @@ The CLI currently exposes:
 - ``pact probe create|analyze|export``
 - ``pact registry init``
 - ``pact registry serve``
+- ``pact registry register-profile``
+- ``pact registry register-claim``
 - ``pact web``

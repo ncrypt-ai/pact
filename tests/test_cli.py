@@ -76,6 +76,8 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     )
     assert manifest_path.exists()
     assert nonce_path.exists()
+    sign_output = json.loads(capsys.readouterr().out)
+    assert sign_output["manifest"] == str(manifest_path)
 
     assert (
         main(
@@ -130,6 +132,7 @@ def test_cli_web_command_bootstraps_local_app(
         calls["app_title"] = app.title
 
     monkeypatch.setattr("pact.cli.uvicorn.run", fake_run)
+    monkeypatch.setenv("PACT_REGISTRY_URL", "http://127.0.0.1:8123")
 
     assert (
         main(
@@ -182,6 +185,69 @@ def test_cli_registry_init_writes_online_and_offline_ca_material(
     assert (data_dir / "ca" / "intermediate_private_key.pem").exists()
 
 
+def test_cli_registry_init_uses_local_environment_defaults(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "registry-data"
+    monkeypatch.setenv("PACT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("PACT_REGISTRY_URL", "http://127.0.0.1:8123")
+    monkeypatch.setenv("PACT_ROOT_KEY_PASSWORD", "offline-secret")
+
+    assert main(["registry", "init"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry_url"] == "http://127.0.0.1:8123"
+    assert (data_dir / "ca" / "root_certificate.pem").exists()
+
+
+def test_cli_registry_init_prompts_for_missing_local_values(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    data_dir = tmp_path / "prompted-registry-data"
+    answers = iter(("http://127.0.0.1:8124", str(data_dir)))
+
+    monkeypatch.delenv("PACT_DATA_DIR", raising=False)
+    monkeypatch.delenv("PACT_REGISTRY_URL", raising=False)
+    monkeypatch.delenv("PACT_ROOT_KEY_PASSWORD", raising=False)
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "offline-secret")
+
+    assert main(["registry", "init"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry_url"] == "http://127.0.0.1:8124"
+    assert (data_dir / "ca" / "root_certificate.pem").exists()
+
+
+def test_cli_file_identity_uses_registry_and_password_environment(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    identity_file = tmp_path / "identities"
+    monkeypatch.setenv("PACT_REGISTRY_URL", "https://registry.example")
+    monkeypatch.setenv("PACT_IDENTITY_PASSWORD", "secret")
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--identity-file",
+                str(identity_file),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry_url"] == "https://registry.example"
+
+
 def test_cli_parser_exposes_registry_serve_command() -> None:
     parser = build_parser()
     args = parser.parse_args(
@@ -198,6 +264,9 @@ def test_cli_parser_exposes_registry_serve_command() -> None:
     )
     assert args.command == "registry"
     assert args.registry_command == "serve"
+    assert args.database == ":memory:"
+    assert not hasattr(args, "store_backend")
+    assert not hasattr(args, "sqlite_database")
 
 
 def test_cli_parser_exposes_watermark_image_command() -> None:

@@ -1,13 +1,17 @@
 """Command-line entry point for signing, inspection, and registry hosting."""
 
 import argparse
+import getpass
 import json
 import mimetypes
 import os
 import secrets
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from uuid import UUID
 
 import uvicorn
@@ -36,11 +40,13 @@ from pact.manifest import (
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
 from pact.registry import (
+    ChallengePurpose,
+    MutationChallenge,
+    MutationRequest,
     RegistryCertificateAuthority,
     RegistryService,
     SqliteRegistryStore,
 )
-from pact.registry.store import FileRegistryStore
 from pact.watermarks import (
     CanaryPhrasePlugin,
     InvisibleFramePlugin,
@@ -59,6 +65,234 @@ if TYPE_CHECKING:
     from pact.watermarks.base import TextWatermarkPlugin
 
 
+DEFAULT_LOCAL_DATA_DIR = "/tmp/pact-local-registry"
+DEFAULT_LOCAL_REGISTRY_URL = "http://127.0.0.1:8000"
+DEFAULT_LOCAL_DATABASE = ":memory:"
+
+
+class HelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawDescriptionHelpFormatter,
+):
+    """Argparse formatter that keeps examples readable and shows defaults."""
+
+
+def _prompt_text(label: str, default: str | None = None) -> str:
+    prompt = f"{label}"
+    if default is not None:
+        prompt += f" [{default}]"
+    prompt += ": "
+    value = input(prompt).strip()
+    if value:
+        return value
+    if default is not None:
+        return default
+    raise SystemExit(f"{label} is required")
+
+
+def _prompt_secret(label: str) -> str:
+    value = getpass.getpass(f"{label}: ")
+    if not value:
+        raise SystemExit(f"{label} is required")
+    return value
+
+
+def _resolve_value(
+    value: str | None,
+    *,
+    env_name: str,
+    label: str,
+    default: str | None = None,
+) -> str:
+    if value:
+        return value
+    env_value = os.getenv(env_name)
+    if env_value:
+        return env_value
+    return _prompt_text(label, default)
+
+
+def _resolve_secret(
+    value: str | None,
+    *,
+    env_name: str,
+    label: str,
+) -> str:
+    if value:
+        return value
+    env_value = os.getenv(env_name)
+    if env_value:
+        return env_value
+    return _prompt_secret(label)
+
+
+def _resolve_prompted_arg(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+    default: str | None = None,
+) -> str:
+    return _resolve_value(
+        cast(str | None, getattr(args, name, None)),
+        env_name=f"PACT_{name.upper()}",
+        label=label,
+        default=default,
+    )
+
+
+def _resolve_prompted_list(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> list[str]:
+    values = cast(list[str] | None, getattr(args, name, None))
+    if values:
+        return values
+    return [_prompt_text(label)]
+
+
+def _resolve_registry_url(args: argparse.Namespace) -> str:
+    return normalize_registry_url(
+        _resolve_value(
+            cast(str | None, getattr(args, "registry", None)),
+            env_name="PACT_REGISTRY_URL",
+            label="Registry URL",
+            default=DEFAULT_LOCAL_REGISTRY_URL,
+        )
+    )
+
+
+def _resolve_data_dir(args: argparse.Namespace) -> Path:
+    return Path(
+        _resolve_value(
+            cast(str | None, getattr(args, "data_dir", None)),
+            env_name="PACT_DATA_DIR",
+            label="Registry data directory",
+            default=DEFAULT_LOCAL_DATA_DIR,
+        )
+    ).expanduser()
+
+
+def _resolve_database(args: argparse.Namespace) -> str:
+    value = cast(str | None, getattr(args, "database", None))
+    database = value or os.getenv("PACT_DATABASE") or DEFAULT_LOCAL_DATABASE
+    return ":memory:" if database == ":memory" else database
+
+
+def _request_json(
+    registry_url: str,
+    path: str,
+    *,
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    url = f"{registry_url}{path}"
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="GET" if payload is None else "POST",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            parsed = json.loads(response.read())
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(
+            f"{url} returned HTTP {error.code}: {detail}"
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise SystemExit(
+            f"could not reach registry at {url}: {error}"
+        ) from error
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{url} did not return valid JSON") from error
+    if not isinstance(parsed, dict):
+        raise SystemExit(f"{url} must return a JSON object")
+    return cast(dict[str, object], parsed)
+
+
+def _registry_info(registry_url: str) -> dict[str, object]:
+    return _request_json(registry_url, "/api/v1/registry")
+
+
+def _registry_root_fingerprint(args: argparse.Namespace) -> str:
+    explicit = cast(
+        str | None, getattr(args, "registry_root_fingerprint", None)
+    )
+    if explicit:
+        return explicit
+    registry_url = _resolve_registry_url(args)
+    try:
+        value = _registry_info(registry_url).get("root_fingerprint")
+    except SystemExit:
+        return _prompt_text(
+            "Registry root fingerprint",
+            None,
+        )
+    if not isinstance(value, str):
+        raise SystemExit(
+            f"{registry_url}/api/v1/registry did not include root_fingerprint"
+        )
+    return value
+
+
+def _profile_public_jwk(
+    registry_url: str,
+    key_id: str,
+) -> dict[str, object]:
+    profile = _request_json(registry_url, f"/api/v1/profiles/{key_id}")
+    public_jwk = profile.get("public_jwk")
+    if not isinstance(public_jwk, dict):
+        raise SystemExit("registry profile did not include public_jwk")
+    return cast(dict[str, object], public_jwk)
+
+
+def _challenge_from_response(value: dict[str, object]) -> MutationChallenge:
+    try:
+        return MutationChallenge(
+            registry_url=cast(str, value["registry_url"]),
+            challenge_id=UUID(cast(str, value["challenge_id"])),
+            purpose=ChallengePurpose(cast(str, value["purpose"])),
+            issued_at=datetime.fromisoformat(cast(str, value["issued_at"])),
+            expires_at=datetime.fromisoformat(cast(str, value["expires_at"])),
+            challenge_nonce=cast(str, value["challenge_nonce"]),
+            difficulty=cast(int, value["difficulty"]),
+            bound_key_id=cast(str | None, value.get("bound_key_id")),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise SystemExit("registry returned an invalid challenge") from error
+
+
+def _solve_pow(challenge: MutationChallenge) -> int:
+    solution = 0
+    while not challenge.verify_solution(solution):
+        solution += 1
+    return solution
+
+
+def _signed_mutation_body(
+    identity: ClaimantIdentity,
+    challenge: MutationChallenge,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload=payload,
+        proof_of_work_solution=_solve_pow(challenge),
+    )
+    return {
+        "challenge_id": str(request.challenge_id),
+        "claimant_public_jwk": request.claimant_public_jwk,
+        "proof_of_work_solution": request.proof_of_work_solution,
+        "payload": request.payload,
+        "signature": request.signature,
+    }
+
+
 def _identity_store(
     args: argparse.Namespace,
 ) -> KeyringIdentityStore | EncryptedFileIdentityStore:
@@ -69,17 +303,22 @@ def _identity_store(
 
 
 def _require_password(args: argparse.Namespace, field: str) -> str:
-    value = cast(str | None, getattr(args, field, None))
-    if not value:
-        raise SystemExit(
-            f"{field.replace('_', '-')} is required for file-backed identities"
+    if field == "identity_password":
+        return _resolve_secret(
+            cast(str | None, getattr(args, field, None)),
+            env_name="PACT_IDENTITY_PASSWORD",
+            label="Identity password",
         )
-    return value
+    return _resolve_secret(
+        cast(str | None, getattr(args, field, None)),
+        env_name=field.upper(),
+        label=field.replace("_", " ").title(),
+    )
 
 
 def _load_identity(args: argparse.Namespace) -> ClaimantIdentity:
     store = _identity_store(args)
-    registry_url = normalize_registry_url(cast(str, args.registry))
+    registry_url = _resolve_registry_url(args)
     if isinstance(store, KeyringIdentityStore):
         return store.load(registry_url)
     return store.load(
@@ -193,16 +432,10 @@ def _bootstrap_service(
     registry_url: str,
     *,
     admin_jwk_files: list[str] | None = None,
-    store_backend: str = "file",
-    sqlite_database: str = ":memory:",
+    database: str = DEFAULT_LOCAL_DATABASE,
 ) -> RegistryService:
     authority = _load_authority(data_dir, registry_url).online_material()
-    if store_backend == "file":
-        store = FileRegistryStore(data_dir / "store")
-    elif store_backend == "sqlite":
-        store = SqliteRegistryStore(sqlite_database)
-    else:
-        raise SystemExit("store backend must be file or sqlite")
+    store = SqliteRegistryStore(database)
     admin_public_jwks = _load_admin_jwks(admin_jwk_files or [])
     return RegistryService(
         registry_url,
@@ -213,7 +446,7 @@ def _bootstrap_service(
 
 
 def _cmd_identity_init(args: argparse.Namespace) -> int:
-    identity = ClaimantIdentity.generate(args.registry)
+    identity = ClaimantIdentity.generate(_resolve_registry_url(args))
     _save_identity(args, identity)
     print(
         _serialize_json(
@@ -239,16 +472,39 @@ def _cmd_identity_show(args: argparse.Namespace) -> int:
 
 def _cmd_identity_export(args: argparse.Namespace) -> int:
     identity = _load_identity(args)
-    export_password = cast(str, args.export_password)
-    Path(args.out).write_bytes(identity.export_pkcs8(export_password))
+    export_password = _resolve_secret(
+        cast(str | None, args.export_password),
+        env_name="PACT_EXPORT_PASSWORD",
+        label="Export password",
+    )
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "out",
+            label="Export output path",
+            default="pact-identity.pkcs8.pem",
+        )
+    )
+    output_path.write_bytes(identity.export_pkcs8(export_password))
+    print(_serialize_json({"output": str(output_path)}))
     return 0
 
 
 def _cmd_identity_import(args: argparse.Namespace) -> int:
+    source = _resolve_prompted_arg(
+        args,
+        "source",
+        label="Encrypted identity import path",
+    )
+    import_password = _resolve_secret(
+        cast(str | None, args.import_password),
+        env_name="PACT_IMPORT_PASSWORD",
+        label="Import password",
+    )
     identity = ClaimantIdentity.import_pkcs8(
-        args.registry,
-        Path(args.source).read_bytes(),
-        cast(str, args.import_password),
+        _resolve_registry_url(args),
+        Path(source).read_bytes(),
+        import_password,
     )
     _save_identity(args, identity)
     print(
@@ -284,9 +540,15 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         input_path
     )
     nonce = secrets.token_bytes(32)
+    output_path = Path(
+        cast(str | None, args.output) or f"{input_path}.manifest.json"
+    )
+    nonce_path = Path(
+        cast(str | None, args.nonce_out) or f"{input_path}.nonce"
+    )
     manifest = Manifest.create(
         identity=identity,
-        registry_root_fingerprint=cast(str, args.registry_root_fingerprint),
+        registry_root_fingerprint=_registry_root_fingerprint(args),
         content=content,
         mime_type=mime_type,
         canonicalization=CanonicalizationProfile(args.canonicalization),
@@ -295,16 +557,33 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         nonce=nonce,
     )
     signed = sign_manifest(manifest, identity)
-    Path(args.output).write_bytes(signed.to_json())
-    Path(args.nonce_out).write_bytes(nonce)
+    output_path.write_bytes(signed.to_json())
+    nonce_path.write_bytes(nonce)
+    print(
+        _serialize_json(
+            {
+                "manifest": str(output_path),
+                "nonce": str(nonce_path),
+                "claim_id": str(signed.manifest.claim_id),
+                "registry_url": signed.manifest.registry_url,
+                "claimant_key_id": signed.manifest.claimant_key_id,
+            }
+        )
+    )
     return 0
 
 
 def _cmd_registry_init(args: argparse.Namespace) -> int:
-    data_dir = Path(args.data_dir).expanduser()
+    registry_url = _resolve_registry_url(args)
+    data_dir = _resolve_data_dir(args)
+    root_key_password = _resolve_secret(
+        cast(str | None, args.root_key_password),
+        env_name="PACT_ROOT_KEY_PASSWORD",
+        label="Offline root key password",
+    )
     authority = RegistryCertificateAuthority.initialize(
-        normalize_registry_url(args.registry),
-        root_private_key_password=cast(str, args.root_key_password),
+        registry_url,
+        root_private_key_password=root_key_password,
     )
     _write_authority(data_dir, authority)
     print(
@@ -323,9 +602,18 @@ def _cmd_registry_init(args: argparse.Namespace) -> int:
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     signed = SignedManifest.from_json(Path(args.manifest).read_bytes())
-    public_jwk = json.loads(Path(args.public_jwk).read_text(encoding="utf-8"))
-    if not isinstance(public_jwk, dict):
-        raise SystemExit("public JWK input must be a JSON object")
+    public_jwk_path = cast(str | None, args.public_jwk)
+    if public_jwk_path:
+        public_jwk = json.loads(
+            Path(public_jwk_path).read_text(encoding="utf-8")
+        )
+        if not isinstance(public_jwk, dict):
+            raise SystemExit("public JWK input must be a JSON object")
+    else:
+        public_jwk = _profile_public_jwk(
+            signed.manifest.registry_url,
+            signed.manifest.claimant_key_id,
+        )
     content = Path(args.content).read_bytes() if args.content else None
     nonce = Path(args.nonce).read_bytes() if args.nonce else None
     report = verify_manifest(
@@ -335,6 +623,72 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         nonce=nonce,
     )
     print(_serialize_json(asdict(report)))
+    return 0
+
+
+def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    payload: dict[str, object] = {}
+    display_name = cast(str | None, args.display_name)
+    if display_name:
+        payload["display_name"] = display_name
+    payload["hosted_account"] = bool(args.hosted_account)
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.PROFILE_REGISTRATION.value,
+                "difficulty": args.difficulty,
+            },
+        )
+    )
+    profile = _request_json(
+        identity.registry_url,
+        "/api/v1/profiles",
+        payload=_signed_mutation_body(identity, challenge, payload),
+    )
+    print(_serialize_json(profile))
+    return 0
+
+
+def _cmd_registry_register_claim(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    manifest_path = Path(args.manifest)
+    signed = SignedManifest.from_json(manifest_path.read_bytes())
+    if signed.manifest.registry_url != identity.registry_url:
+        raise SystemExit(
+            "manifest registry does not match the selected identity registry"
+        )
+    if signed.manifest.claimant_key_id != identity.key_id:
+        raise SystemExit(
+            "manifest claimant does not match the selected identity"
+        )
+    challenge = _challenge_from_response(
+        _request_json(
+            identity.registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.CLAIM_REGISTRATION.value,
+                "difficulty": args.difficulty,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    claim = _request_json(
+        identity.registry_url,
+        "/api/v1/claims",
+        payload=_signed_mutation_body(
+            identity,
+            challenge,
+            {
+                "signed_manifest_json": manifest_path.read_text(
+                    encoding="utf-8"
+                )
+            },
+        ),
+    )
+    print(_serialize_json(claim))
     return 0
 
 
@@ -369,14 +723,29 @@ def _cmd_watermark_image(args: argparse.Namespace) -> int:
     mime_type = cast(str | None, args.mime_type) or _infer_mime_type(
         input_path
     )
+    claim_id = UUID(
+        _resolve_prompted_arg(
+            args,
+            "claim_id",
+            label="Registry claim ID for this watermark",
+        )
+    )
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "output",
+            label="Watermarked image output path",
+            default=f"{input_path}.watermarked",
+        )
+    )
     result = embed_image_soft_binding(
         input_path.read_bytes(),
         mime_type,
-        claim_id=UUID(cast(str, args.claim_id)),
-        registry_root_fingerprint=cast(str, args.registry_root_fingerprint),
+        claim_id=claim_id,
+        registry_root_fingerprint=_registry_root_fingerprint(args),
         strength=cast(float, args.strength),
     )
-    Path(args.output).write_bytes(result.image_bytes)
+    output_path.write_bytes(result.image_bytes)
     print(_serialize_json(result.to_dict()))
     return 0
 
@@ -404,6 +773,25 @@ def _text_watermark_plugins(methods: str) -> tuple["TextWatermarkPlugin", ...]:
 def _cmd_watermark_text(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     content = input_path.read_text(encoding="utf-8")
+    methods = _resolve_prompted_arg(
+        args,
+        "methods",
+        label="Watermark methods",
+        default="invisible",
+    )
+    secret = _resolve_secret(
+        cast(str | None, args.secret),
+        env_name="PACT_WATERMARK_SECRET",
+        label="Watermark secret",
+    )
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "output",
+            label="Watermarked text output path",
+            default=f"{input_path}.watermarked",
+        )
+    )
     parameters = TextWatermarkParameters(
         user_confirmation=bool(args.confirm),
         allow_semantic_methods=bool(args.allow_semantic),
@@ -413,13 +801,11 @@ def _cmd_watermark_text(args: argparse.Namespace) -> int:
     )
     pipeline = apply_text_watermark_plugins(
         content,
-        cast(str, args.secret),
-        _text_watermark_plugins(args.methods),
+        secret,
+        _text_watermark_plugins(methods),
         parameters,
     )
-    Path(args.output).write_text(
-        pipeline.transformed_content, encoding="utf-8"
-    )
+    output_path.write_text(pipeline.transformed_content, encoding="utf-8")
     print(_serialize_json(pipeline.to_dict()))
     return 0
 
@@ -427,21 +813,42 @@ def _cmd_watermark_text(args: argparse.Namespace) -> int:
 def _cmd_probe_create(args: argparse.Namespace) -> int:
     protected_texts = tuple(
         Path(path).read_text(encoding="utf-8")
-        for path in cast(list[str], args.protected)
+        for path in _resolve_prompted_list(
+            args,
+            "protected",
+            label="Protected text path",
+        )
     )
     control_texts = tuple(
         Path(path).read_text(encoding="utf-8")
-        for path in cast(list[str], args.control)
+        for path in _resolve_prompted_list(
+            args,
+            "control",
+            label="Control text path",
+        )
+    )
+    target_model = _resolve_prompted_arg(
+        args,
+        "target_model",
+        label="Target model name",
+    )
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "output",
+            label="Probe set output path",
+            default="pact-probes.json",
+        )
     )
     probe_set = create_probe_set(
         protected_texts=protected_texts,
         control_texts=control_texts,
-        target_model=cast(str, args.target_model),
+        target_model=target_model,
         claim_id=cast(str | None, args.claim_id),
         prefix_chars=cast(int, args.prefix_chars),
         withheld_chars=cast(int, args.withheld_chars),
     )
-    Path(args.output).write_text(
+    output_path.write_text(
         _serialize_json(probe_set.to_dict()), encoding="utf-8"
     )
     print(
@@ -449,7 +856,7 @@ def _cmd_probe_create(args: argparse.Namespace) -> int:
             {
                 "commitment": probe_set.commitment,
                 "probe_count": len(probe_set.probes),
-                "output": args.output,
+                "output": str(output_path),
             }
         )
     )
@@ -463,8 +870,21 @@ def _cmd_probe_analyze(args: argparse.Namespace) -> int:
     if not isinstance(probe_set_data, dict):
         raise SystemExit("probe set must be a JSON object")
     probe_set = ProbeSet.from_dict(cast(dict[str, object], probe_set_data))
+    responses_path = _resolve_prompted_arg(
+        args,
+        "responses",
+        label="Model responses JSONL path",
+    )
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "output",
+            label="Probe evidence output path",
+            default="pact-probe-evidence.json",
+        )
+    )
     responses = responses_from_jsonl(
-        Path(args.responses).read_text(encoding="utf-8")
+        Path(responses_path).read_text(encoding="utf-8")
     )
     analysis = analyze_probe_responses(
         probe_set,
@@ -476,7 +896,7 @@ def _cmd_probe_analyze(args: argparse.Namespace) -> int:
         responses=responses,
         analysis=analysis,
     )
-    Path(args.output).write_text(
+    output_path.write_text(
         _serialize_json(package.to_dict()), encoding="utf-8"
     )
     print(
@@ -486,7 +906,7 @@ def _cmd_probe_analyze(args: argparse.Namespace) -> int:
                 "treatment_matches": analysis.treatment_matches,
                 "control_matches": analysis.control_matches,
                 "package_digest": package.package_digest,
-                "output": args.output,
+                "output": str(output_path),
             }
         )
     )
@@ -505,7 +925,15 @@ def _cmd_probe_export(args: argparse.Namespace) -> int:
         if args.identity_file
         else package
     )
-    Path(args.output).write_text(
+    output_path = Path(
+        _resolve_prompted_arg(
+            args,
+            "output",
+            label="Exported probe package output path",
+            default="pact-probe-evidence.exported.json",
+        )
+    )
+    output_path.write_text(
         _serialize_json(signed_package.to_dict()),
         encoding="utf-8",
     )
@@ -514,7 +942,7 @@ def _cmd_probe_export(args: argparse.Namespace) -> int:
             {
                 "package_digest": signed_package.package_digest,
                 "signed": signed_package.signature is not None,
-                "output": args.output,
+                "output": str(output_path),
             }
         )
     )
@@ -547,15 +975,13 @@ def _serve(
     public_base_url: str,
     local_mode: bool,
     admin_jwk_files: list[str],
-    store_backend: str,
-    sqlite_database: str,
+    database: str,
 ) -> int:
     service = _bootstrap_service(
         data_dir,
         registry_url,
         admin_jwk_files=admin_jwk_files,
-        store_backend=store_backend,
-        sqlite_database=sqlite_database,
+        database=database,
     )
     app = create_app(
         service,
@@ -567,50 +993,64 @@ def _serve(
 
 
 def _cmd_registry_serve(args: argparse.Namespace) -> int:
+    registry_url = _resolve_registry_url(args)
     return _serve(
-        data_dir=Path(args.data_dir).expanduser(),
-        registry_url=normalize_registry_url(args.registry),
+        data_dir=_resolve_data_dir(args),
+        registry_url=registry_url,
         host=args.host,
         port=args.port,
-        public_base_url=args.public_base_url,
+        public_base_url=cast(str | None, args.public_base_url)
+        or os.getenv("PACT_PUBLIC_BASE_URL")
+        or registry_url,
         local_mode=False,
         admin_jwk_files=args.admin_jwk_file,
-        store_backend=args.store_backend,
-        sqlite_database=args.sqlite_database,
+        database=_resolve_database(args),
     )
 
 
 def _cmd_web(args: argparse.Namespace) -> int:
     port = args.port
+    registry_url = _resolve_registry_url(args)
     public_base_url = f"http://127.0.0.1:{port}"
-    data_dir = Path(args.data_dir).expanduser()
+    data_dir = _resolve_data_dir(args)
     try:
-        _load_authority(data_dir, normalize_registry_url(args.registry))
+        _load_authority(data_dir, registry_url)
     except SystemExit:
         _write_authority(
             data_dir,
             RegistryCertificateAuthority.initialize(
-                normalize_registry_url(args.registry)
+                registry_url,
             ).online_material(),
         )
     return _serve(
         data_dir=data_dir,
-        registry_url=normalize_registry_url(args.registry),
+        registry_url=registry_url,
         host="127.0.0.1",
         port=port,
         public_base_url=public_base_url,
         local_mode=True,
         admin_jwk_files=args.admin_jwk_file,
-        store_backend=args.store_backend,
-        sqlite_database=args.sqlite_database,
+        database=_resolve_database(args),
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pact")
+    parser = argparse.ArgumentParser(
+        prog="pact",
+        formatter_class=HelpFormatter,
+        description=(
+            "Sign content claims, run a local registry, and publish claims "
+            "without needing custom scripts."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    identity = subparsers.add_parser("identity")
+    identity = subparsers.add_parser(
+        "identity",
+        formatter_class=HelpFormatter,
+        help="Create, show, import, export, or rotate claimant identities.",
+        description="Manage the signing identity scoped to one registry.",
+    )
     identity_subparsers = identity.add_subparsers(
         dest="identity_command", required=True
     )
@@ -621,140 +1061,552 @@ def build_parser() -> argparse.ArgumentParser:
         "import": _cmd_identity_import,
         "rotate": _cmd_identity_rotate,
     }.items():
-        subparser = identity_subparsers.add_parser(name)
-        subparser.add_argument("--registry", required=True)
-        subparser.add_argument("--identity-file")
-        subparser.add_argument("--identity-password")
+        subparser = identity_subparsers.add_parser(
+            name,
+            formatter_class=HelpFormatter,
+        )
+        subparser.add_argument(
+            "--registry",
+            help=(
+                "Registry URL this identity belongs to. Uses "
+                "PACT_REGISTRY_URL or prompts when omitted."
+            ),
+        )
+        subparser.add_argument(
+            "--identity-file",
+            help=(
+                "Encrypted local identity store. Omit to use the OS keyring."
+            ),
+        )
+        subparser.add_argument(
+            "--identity-password",
+            help=(
+                "Password for --identity-file. Uses PACT_IDENTITY_PASSWORD "
+                "or prompts securely when omitted."
+            ),
+        )
         if name == "export":
-            subparser.add_argument("--export-password", required=True)
-            subparser.add_argument("--out", required=True)
+            subparser.add_argument(
+                "--export-password",
+                help="Password used to encrypt the exported PKCS#8 key.",
+            )
+            subparser.add_argument(
+                "--out",
+                help="Path where the encrypted private key should be written.",
+            )
         if name == "import":
-            subparser.add_argument("--source", required=True)
-            subparser.add_argument("--import-password", required=True)
+            subparser.add_argument(
+                "--source",
+                help="Encrypted PKCS#8 private key to import.",
+            )
+            subparser.add_argument(
+                "--import-password",
+                help="Password for the imported private key.",
+            )
         subparser.set_defaults(handler=handler)
 
-    sign = subparsers.add_parser("sign")
-    sign.add_argument("input")
-    sign.add_argument("--registry", required=True)
-    sign.add_argument("--registry-root-fingerprint", required=True)
-    sign.add_argument("--output", required=True)
-    sign.add_argument("--nonce-out", required=True)
-    sign.add_argument("--policy", default="no-ai-training")
-    sign.add_argument("--carrier", default="visible")
-    sign.add_argument("--canonicalization", default="pact.text.v1")
-    sign.add_argument("--mime-type")
-    sign.add_argument("--identity-file")
-    sign.add_argument("--identity-password")
+    sign = subparsers.add_parser(
+        "sign",
+        formatter_class=HelpFormatter,
+        help="Create a signed manifest for a content file.",
+        description=(
+            "Create a signed manifest. When --registry-root-fingerprint is "
+            "omitted, the CLI fetches it from the registry."
+        ),
+    )
+    sign.add_argument("input", help="Content file to bind into the manifest.")
+    sign.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts when omitted.",
+    )
+    sign.add_argument(
+        "--registry-root-fingerprint",
+        help=(
+            "Expected registry root certificate fingerprint. Usually omitted; "
+            "the CLI fetches it from /api/v1/registry."
+        ),
+    )
+    sign.add_argument(
+        "--output",
+        help="Manifest output path. Defaults to INPUT.manifest.json.",
+    )
+    sign.add_argument(
+        "--nonce-out",
+        help="Nonce output path needed for later content verification.",
+    )
+    sign.add_argument(
+        "--policy",
+        default="no-ai-training",
+        help="Policy preset to attach to the manifest.",
+    )
+    sign.add_argument(
+        "--carrier",
+        default="visible",
+        help="Carrier hint recorded in the manifest.",
+    )
+    sign.add_argument(
+        "--canonicalization",
+        default="pact.text.v1",
+        help="Canonicalization profile for the input content.",
+    )
+    sign.add_argument(
+        "--mime-type",
+        help="Input MIME type. Omit to infer from the file extension.",
+    )
+    sign.add_argument(
+        "--identity-file",
+        help="Encrypted local identity store. Omit to use the OS keyring.",
+    )
+    sign.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
     sign.set_defaults(handler=_cmd_sign)
 
-    verify = subparsers.add_parser("verify")
-    verify.add_argument("manifest")
-    verify.add_argument("--public-jwk", required=True)
-    verify.add_argument("--content")
-    verify.add_argument("--nonce")
+    verify = subparsers.add_parser(
+        "verify",
+        formatter_class=HelpFormatter,
+        help="Verify a manifest signature and optional content binding.",
+        description=(
+            "Verify a signed manifest. If --public-jwk is omitted, the CLI "
+            "fetches the claimant profile from the manifest's registry."
+        ),
+    )
+    verify.add_argument("manifest", help="Signed manifest JSON to verify.")
+    verify.add_argument(
+        "--public-jwk",
+        help="Claimant public JWK file. Usually omitted for registered claims.",
+    )
+    verify.add_argument(
+        "--content",
+        help="Original content file. Include with --nonce to verify binding.",
+    )
+    verify.add_argument(
+        "--nonce",
+        help="Nonce file written by pact sign.",
+    )
     verify.set_defaults(handler=_cmd_verify)
 
-    inspect = subparsers.add_parser("inspect")
-    inspect.add_argument("input")
-    inspect.add_argument("--mime-type")
+    inspect = subparsers.add_parser(
+        "inspect",
+        formatter_class=HelpFormatter,
+        help="Read a manifest or supported carrier file.",
+    )
+    inspect.add_argument(
+        "input", help="Manifest or content carrier to inspect."
+    )
+    inspect.add_argument("--mime-type", help="MIME type for carrier parsing.")
     inspect.set_defaults(handler=_cmd_inspect)
 
-    watermark = subparsers.add_parser("watermark")
+    watermark = subparsers.add_parser(
+        "watermark",
+        formatter_class=HelpFormatter,
+        help="Embed soft-binding watermark evidence.",
+        description="Add image or text watermark evidence tied to a claim.",
+    )
     watermark_subparsers = watermark.add_subparsers(
         dest="watermark_command",
         required=True,
     )
-    watermark_image = watermark_subparsers.add_parser("image")
-    watermark_image.add_argument("input")
-    watermark_image.add_argument("--claim-id", required=True)
-    watermark_image.add_argument("--registry-root-fingerprint", required=True)
-    watermark_image.add_argument("--output", required=True)
-    watermark_image.add_argument("--strength", type=float, default=1.0)
-    watermark_image.add_argument("--mime-type")
+    watermark_image = watermark_subparsers.add_parser(
+        "image",
+        formatter_class=HelpFormatter,
+        help="Embed an image watermark locator.",
+    )
+    watermark_image.add_argument("input", help="Image file to watermark.")
+    watermark_image.add_argument(
+        "--claim-id",
+        help="Registry claim ID this watermark should point to.",
+    )
+    watermark_image.add_argument(
+        "--registry",
+        help="Registry URL used to fetch the root fingerprint when omitted.",
+    )
+    watermark_image.add_argument(
+        "--registry-root-fingerprint",
+        help=(
+            "Registry root fingerprint used to bind the watermark locator. "
+            "Usually omitted; the CLI fetches it from the registry."
+        ),
+    )
+    watermark_image.add_argument(
+        "--output",
+        help="Path where the watermarked image should be written.",
+    )
+    watermark_image.add_argument(
+        "--strength",
+        type=float,
+        default=1.0,
+        help="Watermark embedding strength.",
+    )
+    watermark_image.add_argument(
+        "--mime-type",
+        help="Image MIME type. Omit to infer from the extension.",
+    )
     watermark_image.set_defaults(handler=_cmd_watermark_image)
-    watermark_text = watermark_subparsers.add_parser("text")
-    watermark_text.add_argument("input")
-    watermark_text.add_argument("--methods", required=True)
-    watermark_text.add_argument("--secret", required=True)
-    watermark_text.add_argument("--output", required=True)
-    watermark_text.add_argument("--confirm", action="store_true")
-    watermark_text.add_argument("--allow-semantic", action="store_true")
-    watermark_text.add_argument("--canary-phrase")
-    watermark_text.add_argument("--max-changes", type=int, default=8)
-    watermark_text.add_argument("--selection-stride", type=int, default=3)
+    watermark_text = watermark_subparsers.add_parser(
+        "text",
+        formatter_class=HelpFormatter,
+        help="Apply one or more text watermark methods.",
+    )
+    watermark_text.add_argument("input", help="Text file to watermark.")
+    watermark_text.add_argument(
+        "--methods",
+        help=(
+            "Comma-separated methods: invisible, lexical, syntactic, "
+            "semantic, canary, statistical."
+        ),
+    )
+    watermark_text.add_argument(
+        "--secret",
+        help="Secret used to make watermark choices reproducible.",
+    )
+    watermark_text.add_argument(
+        "--output",
+        help="Path where the transformed text should be written.",
+    )
+    watermark_text.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Acknowledge that visible text changes are acceptable.",
+    )
+    watermark_text.add_argument(
+        "--allow-semantic",
+        action="store_true",
+        help="Allow semantic paraphrase watermarking methods.",
+    )
+    watermark_text.add_argument(
+        "--canary-phrase",
+        help="Approved phrase to insert when using the canary method.",
+    )
+    watermark_text.add_argument(
+        "--max-changes",
+        type=int,
+        default=8,
+        help="Maximum number of text edits the pipeline may make.",
+    )
+    watermark_text.add_argument(
+        "--selection-stride",
+        type=int,
+        default=3,
+        help="Spacing used when selecting candidate watermark positions.",
+    )
     watermark_text.set_defaults(handler=_cmd_watermark_text)
 
-    probe = subparsers.add_parser("probe")
+    probe = subparsers.add_parser(
+        "probe",
+        formatter_class=HelpFormatter,
+        help="Create and analyze model training-use probes.",
+        description=(
+            "Prepare prompts, analyze model responses, and export evidence "
+            "packages for possible training-use claims."
+        ),
+    )
     probe_subparsers = probe.add_subparsers(
         dest="probe_command", required=True
     )
-    probe_create = probe_subparsers.add_parser("create")
-    probe_create.add_argument("--protected", action="append", required=True)
-    probe_create.add_argument("--control", action="append", required=True)
-    probe_create.add_argument("--target-model", required=True)
-    probe_create.add_argument("--output", required=True)
-    probe_create.add_argument("--claim-id")
-    probe_create.add_argument("--prefix-chars", type=int, default=160)
-    probe_create.add_argument("--withheld-chars", type=int, default=220)
+    probe_create = probe_subparsers.add_parser(
+        "create",
+        formatter_class=HelpFormatter,
+        help="Create probe prompts from protected and control text.",
+    )
+    probe_create.add_argument(
+        "--protected",
+        action="append",
+        help="Protected text file. Repeat for multiple files.",
+    )
+    probe_create.add_argument(
+        "--control",
+        action="append",
+        help="Control text file. Repeat for multiple files.",
+    )
+    probe_create.add_argument(
+        "--target-model",
+        help="Name of the third-party model the probes will be sent to.",
+    )
+    probe_create.add_argument(
+        "--output",
+        help="Path where the probe set JSON should be written.",
+    )
+    probe_create.add_argument(
+        "--claim-id",
+        help="Optional registry claim ID associated with the protected text.",
+    )
+    probe_create.add_argument(
+        "--prefix-chars",
+        type=int,
+        default=160,
+        help="Characters revealed to the target model in each probe.",
+    )
+    probe_create.add_argument(
+        "--withheld-chars",
+        type=int,
+        default=220,
+        help="Characters held back and later compared with model output.",
+    )
     probe_create.set_defaults(handler=_cmd_probe_create)
-    probe_analyze = probe_subparsers.add_parser("analyze")
-    probe_analyze.add_argument("probe_set")
-    probe_analyze.add_argument("--responses", required=True)
-    probe_analyze.add_argument("--output", required=True)
+    probe_analyze = probe_subparsers.add_parser(
+        "analyze",
+        formatter_class=HelpFormatter,
+        help="Analyze model responses against a probe set.",
+    )
+    probe_analyze.add_argument("probe_set", help="Probe set JSON file.")
     probe_analyze.add_argument(
-        "--false-positive-threshold", type=float, default=0.05
+        "--responses",
+        help="JSONL file containing responses collected from the model.",
+    )
+    probe_analyze.add_argument(
+        "--output",
+        help="Path where the evidence package should be written.",
+    )
+    probe_analyze.add_argument(
+        "--false-positive-threshold",
+        type=float,
+        default=0.05,
+        help="Maximum tolerated false-positive probability.",
     )
     probe_analyze.set_defaults(handler=_cmd_probe_analyze)
-    probe_export = probe_subparsers.add_parser("export")
-    probe_export.add_argument("package")
-    probe_export.add_argument("--output", required=True)
-    probe_export.add_argument("--identity-file")
-    probe_export.add_argument("--identity-password")
-    probe_export.add_argument("--registry", default="https://registry.example")
+    probe_export = probe_subparsers.add_parser(
+        "export",
+        formatter_class=HelpFormatter,
+        help="Export and optionally sign a probe evidence package.",
+    )
+    probe_export.add_argument("package", help="Evidence package JSON file.")
+    probe_export.add_argument(
+        "--output",
+        help="Path where the exported package should be written.",
+    )
+    probe_export.add_argument(
+        "--identity-file",
+        help="Encrypted local identity store. Include to sign the package.",
+    )
+    probe_export.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
+    probe_export.add_argument(
+        "--registry",
+        help="Registry URL for signing identity lookup.",
+    )
     probe_export.set_defaults(handler=_cmd_probe_export)
 
-    privacy = subparsers.add_parser("privacy")
+    privacy = subparsers.add_parser(
+        "privacy",
+        formatter_class=HelpFormatter,
+        help="Audit whether public payloads leak private material.",
+    )
     privacy_subparsers = privacy.add_subparsers(
         dest="privacy_command", required=True
     )
-    privacy_audit = privacy_subparsers.add_parser("audit")
-    privacy_audit.add_argument("manifest")
-    privacy_audit.add_argument("--content")
-    privacy_audit.add_argument("--nonce")
-    privacy_audit.add_argument("--private-value", action="append", default=[])
+    privacy_audit = privacy_subparsers.add_parser(
+        "audit",
+        formatter_class=HelpFormatter,
+        help="Audit a signed manifest before publication.",
+    )
+    privacy_audit.add_argument("manifest", help="Signed manifest JSON file.")
+    privacy_audit.add_argument(
+        "--content",
+        help="Original content file to check against accidental disclosure.",
+    )
+    privacy_audit.add_argument(
+        "--nonce",
+        help="Nonce file to check against accidental disclosure.",
+    )
+    privacy_audit.add_argument(
+        "--private-value",
+        action="append",
+        default=[],
+        help="Additional private file value to check. Repeat as needed.",
+    )
     privacy_audit.set_defaults(handler=_cmd_privacy_audit)
 
-    registry = subparsers.add_parser("registry")
+    registry = subparsers.add_parser(
+        "registry",
+        formatter_class=HelpFormatter,
+        help="Initialize, run, and publish to a registry.",
+        description=(
+            "Registry commands use PACT_REGISTRY_URL and PACT_DATA_DIR when "
+            "available, then prompt for missing local setup values."
+        ),
+    )
     registry_subparsers = registry.add_subparsers(
         dest="registry_command", required=True
     )
-    registry_init = registry_subparsers.add_parser("init")
-    registry_init.add_argument("--registry", required=True)
-    registry_init.add_argument("--data-dir", required=True)
-    registry_init.add_argument("--root-key-password", required=True)
+    registry_init = registry_subparsers.add_parser(
+        "init",
+        formatter_class=HelpFormatter,
+        help="Create local registry CA material.",
+        description=(
+            "Create the local certificate authority material needed to run a "
+            "registry. Missing registry URL, data directory, and root key "
+            "password are prompted."
+        ),
+    )
+    registry_init.add_argument(
+        "--registry",
+        help="Public registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    registry_init.add_argument(
+        "--data-dir",
+        help="Directory for registry CA material. Uses PACT_DATA_DIR or prompts.",
+    )
+    registry_init.add_argument(
+        "--root-key-password",
+        help=(
+            "Password for the offline root private key. Uses "
+            "PACT_ROOT_KEY_PASSWORD or prompts securely."
+        ),
+    )
     registry_init.set_defaults(handler=_cmd_registry_init)
-    serve = registry_subparsers.add_parser("serve")
-    serve.add_argument("--registry", required=True)
-    serve.add_argument("--data-dir", required=True)
-    serve.add_argument("--public-base-url", required=True)
-    serve.add_argument("--host", default="0.0.0.0")
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--admin-jwk-file", action="append", default=[])
+    serve = registry_subparsers.add_parser(
+        "serve",
+        formatter_class=HelpFormatter,
+        help="Run the registry API and proof pages locally.",
+        description=(
+            "Run the monolith registry server with SQLite persistence. Use "
+            "--database :memory for throwaway state or a file path to keep "
+            "registry events across restarts."
+        ),
+    )
     serve.add_argument(
-        "--store-backend", choices=("file", "sqlite"), default="file"
+        "--registry",
+        help="Registry URL served by this process.",
     )
-    serve.add_argument("--sqlite-database", default=":memory:")
+    serve.add_argument(
+        "--data-dir",
+        help="Directory containing registry CA material.",
+    )
+    serve.add_argument(
+        "--public-base-url",
+        help="External base URL shown in pages. Defaults to --registry.",
+    )
+    serve.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Network interface the local server binds to.",
+    )
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="TCP port for the local server.",
+    )
+    serve.add_argument(
+        "--admin-jwk-file",
+        action="append",
+        default=[],
+        help="Admin public JWK file. Repeat for multiple admins.",
+    )
+    serve.add_argument(
+        "--database",
+        default=DEFAULT_LOCAL_DATABASE,
+        help="SQLite database path, or :memory / :memory: for ephemeral state.",
+    )
     serve.set_defaults(handler=_cmd_registry_serve)
-
-    web = subparsers.add_parser("web")
-    web.add_argument("--registry", default="http://127.0.0.1:8000")
-    web.add_argument("--data-dir", required=True)
-    web.add_argument("--port", type=int, default=8000)
-    web.add_argument("--admin-jwk-file", action="append", default=[])
-    web.add_argument(
-        "--store-backend", choices=("file", "sqlite"), default="sqlite"
+    register_profile = registry_subparsers.add_parser(
+        "register-profile",
+        formatter_class=HelpFormatter,
+        help="Publish the current identity's public profile.",
+        description=(
+            "Register the selected identity with the registry so others can "
+            "resolve its public JWK and verify manifests without local files."
+        ),
     )
-    web.add_argument("--sqlite-database", default=":memory:")
+    register_profile.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    register_profile.add_argument(
+        "--identity-file",
+        help="Encrypted local identity store. Omit to use the OS keyring.",
+    )
+    register_profile.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
+    register_profile.add_argument(
+        "--display-name",
+        help="Optional public display name for this claimant profile.",
+    )
+    register_profile.add_argument(
+        "--hosted-account",
+        action="store_true",
+        help="Mark this profile as authenticated by the hosting registry.",
+    )
+    register_profile.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    register_profile.set_defaults(handler=_cmd_registry_register_profile)
+    register_claim = registry_subparsers.add_parser(
+        "register-claim",
+        formatter_class=HelpFormatter,
+        help="Publish a signed manifest as a registry claim.",
+        description=(
+            "Submit a signed manifest to the registry using the current "
+            "identity. This replaces the custom Python registration snippet."
+        ),
+    )
+    register_claim.add_argument(
+        "manifest",
+        help="Signed manifest JSON created by pact sign.",
+    )
+    register_claim.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    register_claim.add_argument(
+        "--identity-file",
+        help="Encrypted local identity store. Omit to use the OS keyring.",
+    )
+    register_claim.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
+    )
+    register_claim.add_argument(
+        "--difficulty",
+        type=int,
+        default=4,
+        help="Proof-of-work difficulty for the local mutation request.",
+    )
+    register_claim.set_defaults(handler=_cmd_registry_register_claim)
+
+    web = subparsers.add_parser(
+        "web",
+        formatter_class=HelpFormatter,
+        help="Run a local registry web UI with automatic local CA bootstrap.",
+        description=(
+            "Start a developer web registry. If CA material is missing, this "
+            "command creates online-only local material automatically."
+        ),
+    )
+    web.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    web.add_argument(
+        "--data-dir",
+        help="Directory for local registry material.",
+    )
+    web.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="TCP port for the local web UI.",
+    )
+    web.add_argument(
+        "--admin-jwk-file",
+        action="append",
+        default=[],
+        help="Admin public JWK file. Repeat for multiple admins.",
+    )
+    web.add_argument(
+        "--database",
+        default=DEFAULT_LOCAL_DATABASE,
+        help="SQLite database path, or :memory / :memory: for ephemeral state.",
+    )
     web.set_defaults(handler=_cmd_web)
 
     return parser
