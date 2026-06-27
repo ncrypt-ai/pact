@@ -84,11 +84,14 @@ from pact.detection import (
 )
 from pact.identity import (
     ClaimantIdentity,
+    DeviceBindingError,
+    DeviceIdentityBinding,
     EncryptedFileIdentityStore,
     IdentityError,
     IdentityNotFoundError,
     IdentityStorageError,
     KeyringIdentityStore,
+    LocalDeviceBindingStore,
     normalize_registry_url,
 )
 from pact.manifest import (
@@ -205,6 +208,8 @@ __all__ = [
     "CarrierError",
     "CarrierMode",
     "ClaimantIdentity",
+    "DeviceBindingError",
+    "DeviceIdentityBinding",
     "C2paAsset",
     "C2paError",
     "C2paReadResult",
@@ -227,6 +232,7 @@ __all__ = [
     "ImagePerceptualMatch",
     "InvisibleLocator",
     "KeyringIdentityStore",
+    "LocalDeviceBindingStore",
     "Manifest",
     "ManifestError",
     "ManifestSignature",

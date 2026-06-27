@@ -27,8 +27,11 @@ from pact.detection import (
 )
 from pact.identity import (
     ClaimantIdentity,
+    DeviceBindingError,
     EncryptedFileIdentityStore,
+    IdentityNotFoundError,
     KeyringIdentityStore,
+    LocalDeviceBindingStore,
     normalize_registry_url,
 )
 from pact.manifest import (
@@ -302,6 +305,14 @@ def _identity_store(
     return EncryptedFileIdentityStore(Path(identity_file).expanduser())
 
 
+def _device_binding_store() -> LocalDeviceBindingStore:
+    return LocalDeviceBindingStore()
+
+
+def _device_binding_error(error: DeviceBindingError) -> SystemExit:
+    return SystemExit(str(error))
+
+
 def _require_password(args: argparse.Namespace, field: str) -> str:
     if field == "identity_password":
         return _resolve_secret(
@@ -446,11 +457,33 @@ def _bootstrap_service(
 
 
 def _cmd_identity_init(args: argparse.Namespace) -> int:
-    identity = ClaimantIdentity.generate(_resolve_registry_url(args))
+    registry_url = _resolve_registry_url(args)
+    binding_store = _device_binding_store()
+    try:
+        binding_store.ensure_can_create_identity(registry_url)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
+    try:
+        _load_identity(args)
+    except IdentityNotFoundError:
+        pass
+    else:
+        raise SystemExit(
+            "an identity already exists for this registry; rotate it instead"
+        )
+    identity = ClaimantIdentity.generate(registry_url)
     _save_identity(args, identity)
+    try:
+        binding = binding_store.bind_new_identity(identity)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
     print(
         _serialize_json(
-            {"registry_url": identity.registry_url, "key_id": identity.key_id}
+            {
+                "registry_url": identity.registry_url,
+                "key_id": identity.key_id,
+                "device_fingerprint": binding.device_fingerprint,
+            }
         )
     )
     return 0
@@ -506,10 +539,28 @@ def _cmd_identity_import(args: argparse.Namespace) -> int:
         Path(source).read_bytes(),
         import_password,
     )
+    binding_store = _device_binding_store()
+    try:
+        existing = binding_store.load(identity.registry_url)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
+    if existing is not None and existing.key_id != identity.key_id:
+        raise SystemExit(
+            "this device is already bound to a different identity for this "
+            "registry; rotate the existing identity instead"
+        )
     _save_identity(args, identity)
+    try:
+        binding = binding_store.bind_imported_identity(identity)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
     print(
         _serialize_json(
-            {"registry_url": identity.registry_url, "key_id": identity.key_id}
+            {
+                "registry_url": identity.registry_url,
+                "key_id": identity.key_id,
+                "device_fingerprint": binding.device_fingerprint,
+            }
         )
     )
     return 0
@@ -517,14 +568,24 @@ def _cmd_identity_import(args: argparse.Namespace) -> int:
 
 def _cmd_identity_rotate(args: argparse.Namespace) -> int:
     current = _load_identity(args)
+    binding_store = _device_binding_store()
+    try:
+        binding_store.ensure_can_rotate_identity(current)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
     replacement = current.rotate()
     _save_identity(args, replacement)
+    try:
+        binding = binding_store.rotate_identity(current, replacement)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
     print(
         _serialize_json(
             {
                 "registry_url": replacement.registry_url,
                 "previous_key_id": current.key_id,
                 "replacement_key_id": replacement.key_id,
+                "device_fingerprint": binding.device_fingerprint,
                 "public_jwk": replacement.public_jwk,
             }
         )

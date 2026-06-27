@@ -30,8 +30,9 @@ explanation aid, not a legal or technical assertion that a provider trained on
 specific material.
 
 Trust tiers currently distinguish unauthenticated device continuity, hosted
-account status, domain verification, platform attestation, and third-party
-attestation. Verification labels are evidence-based: ``verified_claim``,
+account status, domain verification, and third-party attestation. Claimant
+certificates are registry-issued key material and do not raise trust tier.
+Verification labels are evidence-based: ``verified_claim``,
 ``partial_match``, ``untrusted_claim``, ``disputed``, ``revoked``, or
 ``inconclusive``.
 
@@ -43,6 +44,20 @@ preferred local store is the operating-system credential store. The explicit
 fallback writes password-encrypted PKCS#8 PEM atomically with mode ``0600``.
 PACT does not silently fall back from an unavailable OS credential store to
 an unencrypted file.
+
+Local identity creation is also bound to a registry-scoped device fingerprint.
+The current CLI derives that fingerprint from harder-to-change local signals,
+including machine identifiers, platform UUIDs, disk or volume identifiers, MAC
+node data, host names, OS version, architecture, and local user name. The raw
+signals are not persisted in the identity binding file. Instead, PACT stores a
+SHA-256/HMAC-derived registry-scoped fingerprint and the claimant key currently
+bound to it.
+
+This is spam resistance, not proof of a unique person. A determined user with
+administrator access can still change hardware identifiers, run virtual
+machines, reinstall the OS, or delete local state. The goal is to make casual
+duplicate identity creation on the same device difficult while allowing normal
+key rotation to preserve the same underlying device binding.
 
 Exported identities must be protected with a high-entropy password and moved
 over a trusted channel. ``ClaimantIdentity.rotate`` creates a new key for the

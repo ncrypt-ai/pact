@@ -66,8 +66,6 @@ class TrustLabel(StrEnum):
     HOSTED_ACCOUNT = "hosted_account"
     DEVICE_ATTESTED = "device_attested"
     DOMAIN_VERIFIED = "domain_verified"
-    PLATFORM_VERIFIED = "platform_verified"
-    PLATFORM_ATTESTED = "platform_attested"
     THIRD_PARTY_ATTESTED = "third_party_attested"
     DOCUMENTED_RIGHTS = "documented_rights"
     DISPUTED = "disputed"
@@ -80,7 +78,6 @@ class TrustTier(StrEnum):
     UNAUTHENTICATED_DEVICE = "unauthenticated_device"
     HOSTED_ACCOUNT = "hosted_account"
     DOMAIN_VERIFIED = "domain_verified"
-    PLATFORM_ATTESTED = "platform_attested"
     THIRD_PARTY_ATTESTED = "third_party_attested"
 
 
@@ -627,8 +624,6 @@ class EvidenceProfile:
 
         if self.third_party_attested:
             return TrustTier.THIRD_PARTY_ATTESTED
-        if self.hardware_attested or self.certificate_count:
-            return TrustTier.PLATFORM_ATTESTED
         if self.verified_domains:
             return TrustTier.DOMAIN_VERIFIED
         if self.hosted_account:
@@ -646,9 +641,6 @@ class EvidenceProfile:
             labels.append(TrustLabel.DEVICE_ATTESTED)
         if self.verified_domains:
             labels.append(TrustLabel.DOMAIN_VERIFIED)
-        if self.certificate_count:
-            labels.append(TrustLabel.PLATFORM_VERIFIED)
-            labels.append(TrustLabel.PLATFORM_ATTESTED)
         if self.third_party_attested:
             labels.append(TrustLabel.THIRD_PARTY_ATTESTED)
         if self.documented_rights:
@@ -1017,7 +1009,33 @@ class RegistryService:
                 "hosted_account": hosted_account,
             },
         )
+        self._append_claimant_certificate(request.claimant_public_jwk)
         return self.get_profile(request.claimant_key_id)
+
+    def _append_claimant_certificate(
+        self,
+        claimant_public_jwk: Mapping[str, object],
+        *,
+        valid_days: int = 30,
+    ) -> tuple[bytes, bytes]:
+        key_id = jwk_thumbprint(cast(Mapping[str, str], claimant_public_jwk))
+        certificate_pem, chain_pem = (
+            self.certificate_authority.issue_claimant_certificate(
+                claimant_public_jwk,
+                common_name=key_id,
+                valid_days=valid_days,
+            )
+        )
+        self.store.append(
+            RegistryEventType.CERTIFICATE_ISSUED,
+            key_id,
+            {
+                "key_id": key_id,
+                "certificate_pem": certificate_pem.decode("ascii"),
+                "chain_pem": chain_pem.decode("ascii"),
+            },
+        )
+        return certificate_pem, chain_pem
 
     def issue_claimant_certificate(
         self,
@@ -1032,23 +1050,10 @@ class RegistryService:
             ChallengePurpose.CERTIFICATE_ISSUANCE,
         )
         self.get_profile(request.claimant_key_id)
-        certificate_pem, chain_pem = (
-            self.certificate_authority.issue_claimant_certificate(
-                request.claimant_public_jwk,
-                common_name=request.claimant_key_id,
-                valid_days=valid_days,
-            )
+        return self._append_claimant_certificate(
+            request.claimant_public_jwk,
+            valid_days=valid_days,
         )
-        self.store.append(
-            RegistryEventType.CERTIFICATE_ISSUED,
-            request.claimant_key_id,
-            {
-                "key_id": request.claimant_key_id,
-                "certificate_pem": certificate_pem.decode("ascii"),
-                "chain_pem": chain_pem.decode("ascii"),
-            },
-        )
-        return certificate_pem, chain_pem
 
     def register_claim(self, request: MutationRequest) -> RegisteredClaim:
         """Register a signed manifest under the claimant's public profile."""

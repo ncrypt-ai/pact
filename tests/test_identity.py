@@ -11,11 +11,13 @@ from keyring.errors import KeyringError
 from pact.canonical import canonical_json
 from pact.identity import (
     ClaimantIdentity,
+    DeviceBindingError,
     EncryptedFileIdentityStore,
     IdentityError,
     IdentityNotFoundError,
     IdentityStorageError,
     KeyringIdentityStore,
+    LocalDeviceBindingStore,
     normalize_registry_url,
 )
 
@@ -152,6 +154,29 @@ def test_encrypted_file_store_round_trip(tmp_path: Path) -> None:
     assert loaded.key_id == identity.key_id
     assert stat.S_IMODE(stored_file.stat().st_mode) == 0o600
     assert not list(store.directory.glob(".pact-*"))
+
+
+def test_local_device_binding_blocks_second_identity_and_allows_rotation(
+    tmp_path: Path,
+) -> None:
+    store = LocalDeviceBindingStore(tmp_path / "bindings")
+    identity = ClaimantIdentity.generate("https://registry.example")
+    other = ClaimantIdentity.generate(identity.registry_url)
+    replacement = identity.rotate()
+
+    binding = store.bind_new_identity(identity)
+
+    assert binding.key_id == identity.key_id
+    assert binding.device_fingerprint == store.fingerprint(
+        identity.registry_url
+    )
+    with pytest.raises(DeviceBindingError, match="already has an identity"):
+        store.bind_new_identity(other)
+
+    rotated = store.rotate_identity(identity, replacement)
+
+    assert rotated.key_id == replacement.key_id
+    assert rotated.device_fingerprint == binding.device_fingerprint
 
 
 def test_keyring_store_round_trip_and_missing_identity() -> None:

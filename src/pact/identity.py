@@ -1,10 +1,17 @@
 """Registry-scoped P-256 claimant identities and secure persistence."""
 
+import getpass
 import hashlib
+import hmac
+import json
 import os
+import platform
+import subprocess
 import tempfile
-from dataclasses import dataclass
+import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from socket import getfqdn, gethostname
 from typing import Protocol, Self
 from urllib.parse import urlsplit, urlunsplit
 
@@ -28,6 +35,10 @@ class IdentityNotFoundError(IdentityStorageError):
     """Raised when a registry has no stored claimant identity."""
 
 
+class DeviceBindingError(IdentityStorageError):
+    """Raised when local device continuity prevents identity creation."""
+
+
 class CredentialBackend(Protocol):
     """The subset of the keyring backend interface used by PACT."""
 
@@ -36,6 +47,13 @@ class CredentialBackend(Protocol):
     def set_password(
         self, service: str, username: str, password: str
     ) -> None: ...
+
+
+def _default_device_binding_dir() -> Path:
+    configured = os.getenv("PACT_DEVICE_BINDING_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".pact" / "device-bindings"
 
 
 def normalize_registry_url(value: str) -> str:
@@ -127,6 +145,307 @@ class ClaimantIdentity:
         """Generate a replacement key scoped to the same registry."""
 
         return type(self).generate(self.registry_url)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceIdentityBinding:
+    """Local registry-scoped binding between one device and one claimant key."""
+
+    registry_url: str
+    device_fingerprint: str
+    key_id: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Return a JSON-compatible binding record."""
+
+        return asdict(self)
+
+
+class LocalDeviceBindingStore:
+    """Local continuity state limiting one claimant identity per registry."""
+
+    def __init__(self, directory: Path | None = None) -> None:
+        self.directory = directory or _default_device_binding_dir()
+
+    def _path(self, registry_url: str) -> Path:
+        normalized = normalize_registry_url(registry_url)
+        name = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return self.directory / f"{name}.json"
+
+    def fingerprint(self, registry_url: str) -> str:
+        """Return a hardware-derived fingerprint scoped to one registry."""
+
+        normalized = normalize_registry_url(registry_url)
+        return hmac.new(
+            _hardware_fingerprint_material(),
+            normalized.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def load(self, registry_url: str) -> DeviceIdentityBinding | None:
+        """Load the local binding for a registry, if present."""
+
+        path = self._path(registry_url)
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise DeviceBindingError(
+                "local device identity binding is invalid JSON"
+            ) from error
+        if not isinstance(value, dict):
+            raise DeviceBindingError(
+                "local device identity binding must be an object"
+            )
+        try:
+            registry = value["registry_url"]
+            fingerprint = value["device_fingerprint"]
+            key_id = value["key_id"]
+        except KeyError as error:
+            raise DeviceBindingError(
+                "local device identity binding is missing required fields"
+            ) from error
+        if not all(
+            isinstance(item, str) for item in (registry, fingerprint, key_id)
+        ):
+            raise DeviceBindingError(
+                "local device identity binding fields must be strings"
+            )
+        return DeviceIdentityBinding(
+            registry_url=registry,
+            device_fingerprint=fingerprint,
+            key_id=key_id,
+        )
+
+    def bind_new_identity(
+        self, identity: ClaimantIdentity
+    ) -> DeviceIdentityBinding:
+        """Create the first local identity binding for a registry."""
+
+        existing = self.load(identity.registry_url)
+        if existing is not None:
+            raise DeviceBindingError(
+                "this device already has an identity for this registry; "
+                "rotate the existing identity instead of creating a new one"
+            )
+        binding = DeviceIdentityBinding(
+            registry_url=identity.registry_url,
+            device_fingerprint=self.fingerprint(identity.registry_url),
+            key_id=identity.key_id,
+        )
+        self._save(binding)
+        return binding
+
+    def ensure_can_create_identity(self, registry_url: str) -> None:
+        """Raise if this device is already bound to the registry."""
+
+        if self.load(registry_url) is not None:
+            raise DeviceBindingError(
+                "this device already has an identity for this registry; "
+                "rotate the existing identity instead of creating a new one"
+            )
+
+    def ensure_can_rotate_identity(self, identity: ClaimantIdentity) -> None:
+        """Raise if this device is bound to a different claimant key."""
+
+        existing = self.load(identity.registry_url)
+        if existing is not None and existing.key_id != identity.key_id:
+            raise DeviceBindingError(
+                "this device is bound to another identity for this registry"
+            )
+
+    def bind_imported_identity(
+        self,
+        identity: ClaimantIdentity,
+    ) -> DeviceIdentityBinding:
+        """Bind an imported identity unless this device is bound elsewhere."""
+
+        existing = self.load(identity.registry_url)
+        if existing is not None and existing.key_id != identity.key_id:
+            raise DeviceBindingError(
+                "this device is already bound to a different identity for "
+                "this registry; rotate the existing identity instead"
+            )
+        if existing is not None:
+            return existing
+        binding = DeviceIdentityBinding(
+            registry_url=identity.registry_url,
+            device_fingerprint=self.fingerprint(identity.registry_url),
+            key_id=identity.key_id,
+        )
+        self._save(binding)
+        return binding
+
+    def rotate_identity(
+        self,
+        current: ClaimantIdentity,
+        replacement: ClaimantIdentity,
+    ) -> DeviceIdentityBinding:
+        """Update the key bound to this device while preserving fingerprint."""
+
+        if current.registry_url != replacement.registry_url:
+            raise DeviceBindingError(
+                "replacement identity has another registry"
+            )
+        existing = self.load(current.registry_url)
+        if existing is not None and existing.key_id != current.key_id:
+            raise DeviceBindingError(
+                "this device is bound to another identity for this registry"
+            )
+        binding = DeviceIdentityBinding(
+            registry_url=current.registry_url,
+            device_fingerprint=self.fingerprint(current.registry_url),
+            key_id=replacement.key_id,
+        )
+        self._save(binding)
+        return binding
+
+    def _save(self, binding: DeviceIdentityBinding) -> None:
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self._path(binding.registry_url)
+        temporary = tempfile.NamedTemporaryFile(
+            dir=self.directory,
+            prefix=".pact-binding-",
+            delete=False,
+        )
+        temporary_path = Path(temporary.name)
+        try:
+            with temporary:
+                os.chmod(temporary.name, 0o600)
+                temporary.write(
+                    json.dumps(
+                        binding.to_dict(),
+                        indent=2,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                )
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary.name, path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _hardware_fingerprint_material() -> bytes:
+    values = (
+        ("machine-id", _machine_id()),
+        ("platform-uuid", _platform_uuid()),
+        ("disk-id", _disk_identifier()),
+        ("mac-node", _mac_node()),
+        ("hostname", gethostname()),
+        ("fqdn", getfqdn()),
+        ("user", getpass.getuser()),
+        ("system", platform.system()),
+        ("release", platform.release()),
+        ("version", platform.version()),
+        ("machine", platform.machine()),
+    )
+    material_values = {
+        name: value
+        for name, value in values
+        if value is not None and value != ""
+    }
+    if not material_values:
+        raise DeviceBindingError("could not derive a local device fingerprint")
+    material = json.dumps(
+        material_values,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(material.encode("utf-8")).digest()
+
+
+def _machine_id() -> str | None:
+    for path in (
+        Path("/etc/machine-id"),
+        Path("/var/lib/dbus/machine-id"),
+    ):
+        if path.is_file():
+            value = path.read_text(encoding="utf-8", errors="ignore").strip()
+            if value:
+                return value
+    return None
+
+
+def _platform_uuid() -> str | None:
+    if platform.system() == "Darwin":
+        return _command_value(
+            (
+                "ioreg",
+                "-rd1",
+                "-c",
+                "IOPlatformExpertDevice",
+            ),
+            "IOPlatformUUID",
+        )
+    if platform.system() == "Windows":
+        return _command_value(
+            (
+                "reg",
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Cryptography",
+                "/v",
+                "MachineGuid",
+            ),
+            "MachineGuid",
+        )
+    return None
+
+
+def _disk_identifier() -> str | None:
+    system = platform.system()
+    if system == "Darwin":
+        return _command_value(
+            ("diskutil", "info", "/"),
+            "Volume UUID",
+        )
+    if system == "Windows":
+        return _command_value(
+            (
+                "wmic",
+                "csproduct",
+                "get",
+                "uuid",
+            ),
+            "UUID",
+        )
+    for path in (
+        Path("/dev/disk/by-uuid"),
+        Path("/dev/disk/by-id"),
+    ):
+        if path.is_dir():
+            values = sorted(item.name for item in path.iterdir())
+            if values:
+                return ",".join(values[:8])
+    return None
+
+
+def _command_value(command: tuple[str, ...], marker: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in completed.stdout.splitlines():
+        if marker in line:
+            value = line.split(marker, 1)[-1]
+            value = value.replace("=", " ").replace('"', " ").strip()
+            if value:
+                return value.split()[-1]
+    return None
+
+
+def _mac_node() -> str | None:
+    node = uuid.getnode()
+    if node >> 40 & 1:
+        return None
+    return f"{node:012x}"
 
 
 class EncryptedFileIdentityStore:

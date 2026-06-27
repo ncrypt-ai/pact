@@ -188,10 +188,21 @@ def test_registry_profile_claim_certificate_and_domain_flow(
 
     evidence = service.evidence_profile(identity.key_id)
     assert evidence.active_claim_count == 1
-    assert evidence.certificate_count == 1
-    assert evidence.trust_tier is TrustTier.PLATFORM_ATTESTED
+    assert evidence.certificate_count == 2
+    assert evidence.trust_tier is TrustTier.DOMAIN_VERIFIED
     assert TrustLabel.DOMAIN_VERIFIED in evidence.trust_labels
-    assert TrustLabel.PLATFORM_VERIFIED in evidence.trust_labels
+
+
+def test_profile_certificate_does_not_raise_trust_tier(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+
+    evidence = service.evidence_profile(identity.key_id)
+
+    assert evidence.certificate_count == 1
+    assert evidence.trust_tier is TrustTier.UNAUTHENTICATED_DEVICE
+    assert evidence.trust_labels == (TrustLabel.UNAUTHENTICATED_DEVICE,)
 
 
 def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:

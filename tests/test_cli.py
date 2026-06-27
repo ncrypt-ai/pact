@@ -1,7 +1,17 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from pact.cli import build_parser, main
+
+
+@pytest.fixture(autouse=True)
+def isolated_device_binding_dir(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(
+        "PACT_DEVICE_BINDING_DIR",
+        str(tmp_path / "device-bindings"),
+    )
 
 
 def test_cli_identity_sign_verify_and_inspect_flow(
@@ -117,6 +127,88 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     )
     privacy_output = json.loads(capsys.readouterr().out)
     assert privacy_output["passed"] is True
+
+
+def test_cli_identity_init_blocks_second_identity_for_same_device(
+    tmp_path: Path,
+) -> None:
+    registry = "https://registry.example"
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(tmp_path / "identities"),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+
+    with pytest.raises(SystemExit, match="already has an identity"):
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(tmp_path / "other-identities"),
+                "--identity-password",
+                "secret",
+            ]
+        )
+
+
+def test_cli_identity_rotate_preserves_device_fingerprint(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    identity_file = tmp_path / "identities"
+    registry = "https://registry.example"
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    created = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "identity",
+                "rotate",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    rotated = json.loads(capsys.readouterr().out)
+
+    assert rotated["previous_key_id"] == created["key_id"]
+    assert rotated["replacement_key_id"] != created["key_id"]
+    assert rotated["device_fingerprint"] == created["device_fingerprint"]
 
 
 def test_cli_web_command_bootstraps_local_app(
