@@ -3,7 +3,6 @@
 import argparse
 import getpass
 import json
-import mimetypes
 import os
 import secrets
 from dataclasses import asdict
@@ -38,6 +37,7 @@ from pact.manifest import (
     sign_manifest,
     verify_manifest,
 )
+from pact.media import infer_mime_type
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
 from pact.registry.app import (
@@ -47,9 +47,7 @@ from pact.registry.app import (
     RegistryCertificateAuthority,
     RegistryService,
 )
-from pact.registry.store import (
-    SqliteRegistryStore,
-)
+from pact.registry.store import SqliteRegistryStore
 from pact.watermarks import (
     CanaryPhrasePlugin,
     InvisibleFramePlugin,
@@ -368,10 +366,10 @@ def _default_policy(_name: str) -> Policy:
 
 
 def _infer_mime_type(path: Path) -> str:
-    mime_type, _encoding = mimetypes.guess_type(path.name)
-    if mime_type is None:
-        raise SystemExit("could not infer a MIME type from the input path")
-    return mime_type
+    try:
+        return infer_mime_type(path.name)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
 
 def _authority_paths(data_dir: Path) -> dict[str, Path]:

@@ -1,16 +1,12 @@
 """FastAPI application for the registry API and proof pages."""
 
-import io
-import mimetypes
-import zipfile
-from dataclasses import asdict, is_dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,6 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pact.inspection import inspect_content
+from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
 from pact.registry.app import (
     ChallengePurpose,
@@ -29,42 +26,7 @@ from pact.registry.app import (
     RegistryService,
 )
 from pact.server.config import default_routes
-
-_BROWSER_CORE_MODULES = (
-    "browser.py",
-    "canonical.py",
-    "crypto.py",
-    "identity.py",
-    "manifest.py",
-    "policy.py",
-    "privacy.py",
-    "registry/__init__.py",
-    "registry/app.py",
-    "registry/store.py",
-    "carriers/__init__.py",
-    "carriers/text.py",
-    "carriers/structured.py",
-    "detection/__init__.py",
-    "detection/evidence.py",
-    "detection/probes.py",
-    "detection/risk.py",
-    "detection/statistics.py",
-    "watermarks/__init__.py",
-    "watermarks/base.py",
-    "watermarks/canary.py",
-    "watermarks/invisible.py",
-    "watermarks/lexical.py",
-    "watermarks/semantic.py",
-    "watermarks/statistical.py",
-    "watermarks/syntactic.py",
-    "watermarks/textual.py",
-)
-_BROWSER_C2PA_MODULES = (
-    "carriers/c2pa.py",
-    "carriers/c2pa_text.py",
-)
-_BROWSER_DOCUMENT_MODULES = ("carriers/c2pa.py",)
-_BROWSER_IMAGE_MODULES = ("watermarks/image.py",)
+from pact.web.browser_bundle import FEATURE_MODULES, browser_python_archive
 
 
 def _templates() -> Jinja2Templates:
@@ -74,50 +36,6 @@ def _templates() -> Jinja2Templates:
 
 def _static_directory() -> Path:
     return Path(__file__).with_name("static")
-
-
-def _source_directory() -> Path:
-    return Path(__file__).resolve().parents[1]
-
-
-def _browser_python_archive(feature: str) -> bytes:
-    source_directory = _source_directory()
-    modules = list(_BROWSER_CORE_MODULES)
-    if feature == "c2pa":
-        modules.extend(_BROWSER_C2PA_MODULES)
-    if feature == "documents":
-        modules.extend(_BROWSER_DOCUMENT_MODULES)
-    if feature == "image-watermarks":
-        modules.extend(_BROWSER_IMAGE_MODULES)
-
-    archive = io.BytesIO()
-    with zipfile.ZipFile(
-        archive, "w", compression=zipfile.ZIP_DEFLATED
-    ) as package:
-        package.writestr(
-            "pact/__init__.py",
-            '"""Browser-safe PACT runtime bundle."""\n',
-        )
-        for module in sorted(set(modules)):
-            package.write(source_directory / module, f"pact/{module}")
-    return archive.getvalue()
-
-
-def _jsonable(value: object) -> object:
-    if is_dataclass(value):
-        return {
-            key: _jsonable(item)
-            for key, item in asdict(cast(Any, value)).items()
-        }
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, tuple | list):
-        return [_jsonable(item) for item in value]
-    return value
 
 
 def _registry_info(service: RegistryService) -> dict[str, object]:
@@ -133,16 +51,18 @@ def _registry_info(service: RegistryService) -> dict[str, object]:
     }
 
 
+def _json_dict(value: object) -> dict[str, object]:
+    return cast(dict[str, object], jsonable_encoder(value))
+
+
 def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
     if mime_type:
         return mime_type
     if file.content_type:
         return file.content_type
     if file.filename:
-        guessed, _encoding = mimetypes.guess_type(file.filename)
-        if guessed is not None:
-            return guessed
-    return "application/octet-stream"
+        return infer_mime_type(file.filename, default=DEFAULT_BINARY_MIME_TYPE)
+    return DEFAULT_BINARY_MIME_TYPE
 
 
 def _raise_http_error(error: Exception) -> None:
@@ -303,10 +223,10 @@ def create_app(
     async def browser_python_feature(feature: str) -> Response:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
-        if feature not in {"core", "c2pa", "documents", "image-watermarks"}:
+        if feature not in FEATURE_MODULES:
             raise HTTPException(status_code=404, detail="unknown feature pack")
         return Response(
-            _browser_python_archive(feature),
+            browser_python_archive(feature),
             media_type="application/zip",
             headers={"Cache-Control": "public, max-age=3600"},
         )
@@ -362,7 +282,7 @@ def create_app(
             bound_key_id=body.bound_key_id,
             difficulty=body.difficulty,
         )
-        return cast(dict[str, object], _jsonable(challenge.to_dict()))
+        return _json_dict(challenge.to_dict())
 
     @app.post("/api/v1/profiles")
     async def register_profile(
@@ -372,7 +292,7 @@ def create_app(
             profile = service.register_profile(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(profile))
+        return _json_dict(profile)
 
     @app.get("/api/v1/profiles/{key_id}")
     async def get_profile(key_id: str) -> dict[str, object]:
@@ -380,7 +300,7 @@ def create_app(
             profile = service.get_profile(key_id)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(profile))
+        return _json_dict(profile)
 
     @app.get("/api/v1/profiles/{key_id}/evidence")
     async def get_profile_evidence(key_id: str) -> dict[str, object]:
@@ -388,7 +308,7 @@ def create_app(
             evidence = service.evidence_profile(key_id)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(evidence))
+        return _json_dict(evidence)
 
     @app.post("/api/v1/certificates")
     async def issue_certificate(
@@ -412,7 +332,7 @@ def create_app(
             claim = service.register_claim(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(claim))
+        return _json_dict(claim)
 
     @app.get("/api/v1/claims/{claim_id}")
     async def get_claim(claim_id: UUID) -> dict[str, object]:
@@ -420,7 +340,7 @@ def create_app(
             claim = service.get_claim(claim_id)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(claim))
+        return _json_dict(claim)
 
     @app.post("/api/v1/claims/{claim_id}/revoke")
     async def revoke_claim(
@@ -438,7 +358,7 @@ def create_app(
             claim = service.revoke_claim(request_model)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(claim))
+        return _json_dict(claim)
 
     @app.post("/api/v1/rotations")
     async def rotate_key(body: RotationRequestModel) -> dict[str, object]:
@@ -446,7 +366,7 @@ def create_app(
             profile = service.rotate_key(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(profile))
+        return _json_dict(profile)
 
     @app.post("/api/v1/domains/verify")
     async def verify_domain(body: MutationRequestModel) -> dict[str, object]:
@@ -454,7 +374,7 @@ def create_app(
             profile = service.verify_domain(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(profile))
+        return _json_dict(profile)
 
     @app.post("/api/v1/disputes")
     async def open_dispute(body: MutationRequestModel) -> dict[str, object]:
@@ -462,7 +382,7 @@ def create_app(
             dispute = service.open_dispute(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(dispute))
+        return _json_dict(dispute)
 
     @app.get("/api/v1/disputes/{dispute_id}")
     async def get_dispute(dispute_id: UUID) -> dict[str, object]:
@@ -470,7 +390,7 @@ def create_app(
             dispute = service.get_dispute(dispute_id)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(dispute))
+        return _json_dict(dispute)
 
     @app.post("/api/v1/disputes/{dispute_id}/resolve")
     async def resolve_dispute(
@@ -491,7 +411,7 @@ def create_app(
             dispute = service.resolve_dispute(request_model)
         except Exception as error:
             _raise_http_error(error)
-        return cast(dict[str, object], _jsonable(dispute))
+        return _json_dict(dispute)
 
     @app.get("/profiles/{key_id}", response_class=HTMLResponse)
     async def public_profile(request: Request, key_id: str) -> HTMLResponse:
@@ -504,8 +424,8 @@ def create_app(
             request,
             "profile.html",
             {
-                "profile": _jsonable(profile),
-                "evidence": _jsonable(evidence),
+                "profile": jsonable_encoder(profile),
+                "evidence": jsonable_encoder(evidence),
                 "public_base_url": app.state.public_base_url,
             },
         )
@@ -521,8 +441,8 @@ def create_app(
             request,
             "claim.html",
             {
-                "claim": _jsonable(claim),
-                "profile": _jsonable(profile),
+                "claim": jsonable_encoder(claim),
+                "profile": jsonable_encoder(profile),
                 "public_base_url": app.state.public_base_url,
             },
         )
@@ -542,9 +462,9 @@ def create_app(
             request,
             "verify_claim.html",
             {
-                "claim": _jsonable(claim),
-                "profile": _jsonable(profile),
-                "verification": _jsonable(verification),
+                "claim": jsonable_encoder(claim),
+                "profile": jsonable_encoder(profile),
+                "verification": jsonable_encoder(verification),
             },
         )
 
