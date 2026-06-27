@@ -105,7 +105,7 @@ def inspect_content(
             result["registry_verification"] = _registry_verification(
                 registry_service,
                 claim.claim_id,
-                content=_content_for_reference(reference),
+                content=reference.content,
                 nonce=_nonce_for_reference(reference),
             )
     if signed is not None:
@@ -115,7 +115,7 @@ def inspect_content(
             source,
             signed=signed,
             registry_service=registry_service,
-            content=_content_for_reference(reference),
+            content=reference.content,
             nonce=_nonce_for_reference(reference),
         )
     return result
@@ -382,10 +382,6 @@ def _manifest_verification(
         nonce=nonce,
     )
     return {**asdict(report), "valid": report.valid}
-
-
-def _content_for_reference(reference: ExtractedReference) -> bytes | None:
-    return reference.content
 
 
 def _nonce_for_reference(reference: ExtractedReference) -> bytes | None:

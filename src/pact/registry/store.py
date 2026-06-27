@@ -76,6 +76,20 @@ def _parse_datetime(value: object, label: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _parse_stored_json_object(
+    payload: object, label: str
+) -> dict[str, object]:
+    if not isinstance(payload, str | bytes):
+        raise RegistryStoreError(f"{label} payload is invalid")
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise RegistryStoreError(f"{label} contains invalid JSON") from error
+    if not isinstance(parsed, dict):
+        raise RegistryStoreError(f"{label} entries must be objects")
+    return cast(dict[str, object], parsed)
+
+
 def _merkle_parent(left: bytes, right: bytes) -> bytes:
     return hashlib.sha256(b"\x01" + left + right).digest()
 
@@ -245,6 +259,24 @@ class RegistryBatch:
         )
 
 
+def _new_event_and_batch(
+    *,
+    sequence: int,
+    event_type: RegistryEventType,
+    actor_key_id: str | None,
+    data: dict[str, object],
+) -> tuple[RegistryEvent, RegistryBatch]:
+    event = RegistryEvent(
+        sequence=sequence,
+        event_id=uuid4(),
+        event_type=event_type,
+        occurred_at=_utc_now(),
+        actor_key_id=actor_key_id,
+        data=data,
+    )
+    return event, RegistryBatch.from_events([event])
+
+
 class FileRegistryStore:
     """Append-only JSONL-backed persistence for registry events and batches."""
 
@@ -271,16 +303,7 @@ class FileRegistryStore:
         for line in self.events_path.read_bytes().splitlines():
             if not line:
                 continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise RegistryStoreError(
-                    "registry event log contains invalid JSON"
-                ) from error
-            if not isinstance(parsed, dict):
-                raise RegistryStoreError(
-                    "registry event log entries must be objects"
-                )
+            parsed = _parse_stored_json_object(line, "registry event log")
             result.append(RegistryEvent.from_dict(parsed))
         return tuple(result)
 
@@ -293,16 +316,7 @@ class FileRegistryStore:
         for line in self.batches_path.read_bytes().splitlines():
             if not line:
                 continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise RegistryStoreError(
-                    "registry batch log contains invalid JSON"
-                ) from error
-            if not isinstance(parsed, dict):
-                raise RegistryStoreError(
-                    "registry batch log entries must be objects"
-                )
+            parsed = _parse_stored_json_object(line, "registry batch log")
             result.append(RegistryBatch.from_dict(parsed))
         return tuple(result)
 
@@ -315,11 +329,9 @@ class FileRegistryStore:
         """Append one event and one disclosure batch."""
 
         next_sequence = len(self.list_events()) + 1
-        event = RegistryEvent(
+        event, batch = _new_event_and_batch(
             sequence=next_sequence,
-            event_id=uuid4(),
             event_type=event_type,
-            occurred_at=_utc_now(),
             actor_key_id=actor_key_id,
             data=data,
         )
@@ -327,7 +339,6 @@ class FileRegistryStore:
             self.events_path,
             event.to_dict(),
         )
-        batch = RegistryBatch.from_events([event])
         self._append_jsonl(
             self.batches_path,
             batch.to_dict(),
@@ -374,19 +385,9 @@ class SqliteRegistryStore:
         rows = self.connection.execute(query).fetchall()
         result: list[dict[str, object]] = []
         for (payload,) in rows:
-            if not isinstance(payload, str):
-                raise RegistryStoreError("stored SQLite payload is invalid")
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError as error:
-                raise RegistryStoreError(
-                    "SQLite registry payload contains invalid JSON"
-                ) from error
-            if not isinstance(parsed, dict):
-                raise RegistryStoreError(
-                    "SQLite registry payloads must be objects"
-                )
-            result.append(cast(dict[str, object], parsed))
+            result.append(
+                _parse_stored_json_object(payload, "SQLite registry")
+            )
         return result
 
     def list_events(self) -> tuple[RegistryEvent, ...]:
@@ -422,15 +423,12 @@ class SqliteRegistryStore:
                 "SELECT COALESCE(MAX(sequence), 0) + 1 FROM registry_events"
             ).fetchone()
             next_sequence = int(row[0])
-            event = RegistryEvent(
+            event, batch = _new_event_and_batch(
                 sequence=next_sequence,
-                event_id=uuid4(),
                 event_type=event_type,
-                occurred_at=_utc_now(),
                 actor_key_id=actor_key_id,
                 data=data,
             )
-            batch = RegistryBatch.from_events([event])
             with self.connection:
                 self.connection.execute(
                     """
@@ -519,20 +517,9 @@ class PostgresRegistryStore:
         rows = self.connection.execute(query).fetchall()
         result: list[dict[str, object]] = []
         for row in rows:
-            payload = row[0]
-            if not isinstance(payload, str):
-                raise RegistryStoreError("stored Postgres payload is invalid")
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError as error:
-                raise RegistryStoreError(
-                    "Postgres registry payload contains invalid JSON"
-                ) from error
-            if not isinstance(parsed, dict):
-                raise RegistryStoreError(
-                    "Postgres registry payloads must be objects"
-                )
-            result.append(cast(dict[str, object], parsed))
+            result.append(
+                _parse_stored_json_object(row[0], "Postgres registry")
+            )
         return result
 
     def list_events(self) -> tuple[RegistryEvent, ...]:
@@ -571,15 +558,12 @@ class PostgresRegistryStore:
                 "Postgres sequence query returned no rows"
             )
         next_sequence = int(row[0])
-        event = RegistryEvent(
+        event, batch = _new_event_and_batch(
             sequence=next_sequence,
-            event_id=uuid4(),
             event_type=event_type,
-            occurred_at=_utc_now(),
             actor_key_id=actor_key_id,
             data=data,
         )
-        batch = RegistryBatch.from_events([event])
         try:
             self.connection.execute(
                 """
