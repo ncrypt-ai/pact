@@ -1,8 +1,200 @@
 """Public package exports for PACT."""
 
 from importlib import import_module
+from typing import TYPE_CHECKING
 
 from pact.metadata import PACKAGE_VERSION
+
+if TYPE_CHECKING:
+    from pact.canonical import (
+        CanonicalizationProfile,
+        ContentCanonicalizationError,
+        canonical_json,
+        canonicalize_content,
+    )
+    from pact.carriers import (
+        PACT_XML_NAMESPACE,
+        C2paAsset,
+        C2paError,
+        C2paReadResult,
+        C2paSignerMaterial,
+        CarrierError,
+        CarrierMode,
+        ExternalManifestReference,
+        InvisibleLocator,
+        StructuredCarrierExtraction,
+        TextCarrierExtraction,
+        build_c2pa_manifest_definition,
+        build_external_manifest_reference,
+        c2pa_pdf_embedding_supported,
+        c2pa_supported_builder_mime_types,
+        c2pa_supported_embedded_document_mime_types,
+        c2pa_supported_embedded_image_mime_types,
+        c2pa_supported_reader_mime_types,
+        embed_c2pa_image,
+        embed_c2pa_manifest_in_pdf,
+        embed_c2pa_manifest_in_zip_document,
+        embed_html_carrier,
+        embed_text_carrier,
+        embed_xml_carrier,
+        extract_c2pa_manifest_from_pdf,
+        extract_c2pa_manifest_from_zip_document,
+        extract_html_carrier,
+        extract_text_carrier,
+        extract_xml_carrier,
+        pdf_external_manifest_reference,
+        read_c2pa_asset,
+        sign_c2pa_document,
+        sign_c2pa_manifest_store,
+    )
+    from pact.crypto import (
+        CryptographyError,
+        base64url_decode,
+        base64url_encode,
+    )
+    from pact.detection import (
+        ConfidenceInterval,
+        EvidenceSignal,
+        HypothesisTest,
+        Probe,
+        ProbeAnalysisReport,
+        ProbeConclusion,
+        ProbeEvidencePackage,
+        ProbeEvidenceSignature,
+        ProbeKind,
+        ProbeMeasurement,
+        ProbeResponse,
+        ProbeSet,
+        TrainingUseRiskLevel,
+        TrainingUseRiskReport,
+        analyze_probe_responses,
+        create_probe_set,
+        create_training_use_risk_report,
+        responses_from_jsonl,
+    )
+    from pact.identity import (
+        ClaimantIdentity,
+        DeviceBindingError,
+        DeviceIdentityBinding,
+        EncryptedFileIdentityStore,
+        IdentityError,
+        IdentityNotFoundError,
+        IdentityStorageError,
+        KeyringIdentityStore,
+        LocalDeviceBindingStore,
+        normalize_registry_url,
+    )
+    from pact.inspection import inspect_content
+    from pact.manifest import (
+        C2PAAction,
+        C2PAIngredient,
+        ClaimMeaning,
+        ContentBinding,
+        Manifest,
+        ManifestError,
+        ManifestSignature,
+        SignedManifest,
+        VerificationReport,
+        sign_manifest,
+        verify_manifest,
+    )
+    from pact.policy import (
+        Permission,
+        PermissionValue,
+        Policy,
+        PolicyEntry,
+        PolicyError,
+    )
+    from pact.privacy import (
+        PrivacyAuditError,
+        PrivacyAuditReport,
+        PrivacyFinding,
+        PrivacySeverity,
+        audit_public_json_payload,
+        audit_registry_claim_payload,
+        audit_signed_manifest_publication,
+    )
+    from pact.registry import (
+        ChallengePurpose,
+        ClaimantProfile,
+        ClaimVerificationReport,
+        DisputeRecord,
+        DisputeStatus,
+        EvidenceProfile,
+        FileRegistryStore,
+        KeyRotationRequest,
+        MutationChallenge,
+        MutationRequest,
+        PostgresRegistryStore,
+        RegisteredClaim,
+        RegistryBatch,
+        RegistryCertificateAuthority,
+        RegistryError,
+        RegistryEvent,
+        RegistryEventType,
+        RegistryService,
+        RegistryStore,
+        RegistryStoreError,
+        SqliteRegistryStore,
+        TrustLabel,
+        TrustTier,
+        VerificationLabel,
+        merkle_root,
+    )
+    from pact.server import (
+        AuthProvider,
+        AwsLambdaRoute,
+        CognitoAuthorizerConfig,
+        DeploymentMode,
+        RouteAuth,
+        RouteConfig,
+        RuntimeConfig,
+        SecurityProfile,
+        StoreBackend,
+        aws_lambda_routes,
+        create_registry_store,
+        default_routes,
+    )
+    from pact.watermarks import (
+        PERCEPTUAL_IMAGE_WATERMARK_ID,
+        TRUSTMARK_WATERMARK_ID,
+        CanaryPhrasePlugin,
+        DecodedImageWatermark,
+        ImagePerceptualFingerprint,
+        ImagePerceptualHash,
+        ImagePerceptualMatch,
+        ImageSoftBindingVerification,
+        ImageWatermark,
+        ImageWatermarkDependencyError,
+        InvisibleFramePlugin,
+        LexicalSubstitutionPlugin,
+        SemanticParaphrasePlugin,
+        StatisticalSentencePatternPlugin,
+        SyntacticVariationPlugin,
+        TextWatermarkDetection,
+        TextWatermarkEligibility,
+        TextWatermarkEmbedding,
+        TextWatermarkParameters,
+        TextWatermarkPipelineResult,
+        TextWatermarkPlugin,
+        TextWatermarkQualityReport,
+        TextWatermarkRecord,
+        TrustMarkBackend,
+        TrustMarkLocator,
+        WatermarkError,
+        apply_text_watermark_plugins,
+        assess_text_watermark_eligibility,
+        compare_image_perceptual_fingerprints,
+        create_image_perceptual_fingerprint,
+        decode_image_soft_binding,
+        embed_experimental_text_carrier,
+        embed_image_soft_binding,
+        perceptual_image_watermark_id,
+        trustmark_supported_image_mime_types,
+        verify_image_soft_binding,
+        watermark_id_for_image_soft_binding,
+    )
+    from pact.web import RateLimitConfig, create_app
 
 _EXPORTS = {
     "CanonicalizationProfile": "pact.canonical",
@@ -75,6 +267,8 @@ _EXPORTS = {
     "normalize_registry_url": "pact.identity",
     "inspect_content": "pact.inspection",
     "ClaimMeaning": "pact.manifest",
+    "C2PAAction": "pact.manifest",
+    "C2PAIngredient": "pact.manifest",
     "ContentBinding": "pact.manifest",
     "Manifest": "pact.manifest",
     "ManifestError": "pact.manifest",
@@ -179,10 +373,10 @@ __version__ = PACKAGE_VERSION
 def __getattr__(name: str) -> object:
     """Load public exports on demand."""
 
-    if name == "create_app":
-        from pact.web import create_app
+    if name in {"RateLimitConfig", "create_app"}:
+        from pact import web
 
-        return create_app
+        return getattr(web, name)
     module_name = _EXPORTS.get(name)
     if module_name is None:
         raise AttributeError(name)

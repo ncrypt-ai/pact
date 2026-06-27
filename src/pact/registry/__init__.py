@@ -1,6 +1,38 @@
 """Public registry exports."""
 
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pact.registry.app import (
+        ChallengePurpose,
+        ClaimantProfile,
+        ClaimVerificationReport,
+        DisputeRecord,
+        DisputeStatus,
+        EvidenceProfile,
+        KeyRotationRequest,
+        MutationChallenge,
+        MutationRequest,
+        RegisteredClaim,
+        RegistryCertificateAuthority,
+        RegistryError,
+        RegistryService,
+        TrustLabel,
+        TrustTier,
+        VerificationLabel,
+    )
+    from pact.registry.store import (
+        FileRegistryStore,
+        PostgresRegistryStore,
+        RegistryBatch,
+        RegistryEvent,
+        RegistryEventType,
+        RegistryStore,
+        RegistryStoreError,
+        SqliteRegistryStore,
+        merkle_root,
+    )
 
 _EXPORTS = {
     "ChallengePurpose": "pact.registry.app",

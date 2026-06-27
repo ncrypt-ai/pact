@@ -1,5 +1,7 @@
 """Public watermark exports."""
 
+from typing import TYPE_CHECKING
+
 from pact.watermarks.base import (
     TRUSTMARK_WATERMARK_ID,
     DecodedImageWatermark,
@@ -17,23 +19,6 @@ from pact.watermarks.base import (
     assess_text_watermark_eligibility,
 )
 from pact.watermarks.canary import CanaryPhrasePlugin
-from pact.watermarks.image import (
-    PERCEPTUAL_IMAGE_WATERMARK_ID,
-    ImagePerceptualFingerprint,
-    ImagePerceptualHash,
-    ImagePerceptualMatch,
-    ImageSoftBindingVerification,
-    ImageWatermarkDependencyError,
-    TrustMarkBackend,
-    compare_image_perceptual_fingerprints,
-    create_image_perceptual_fingerprint,
-    decode_image_soft_binding,
-    embed_image_soft_binding,
-    perceptual_image_watermark_id,
-    trustmark_supported_image_mime_types,
-    verify_image_soft_binding,
-    watermark_id_for_image_soft_binding,
-)
 from pact.watermarks.invisible import InvisibleFramePlugin
 from pact.watermarks.lexical import LexicalSubstitutionPlugin
 from pact.watermarks.semantic import SemanticParaphrasePlugin
@@ -44,6 +29,56 @@ from pact.watermarks.textual import (
     apply_text_watermark_plugins,
     embed_experimental_text_carrier,
 )
+
+if TYPE_CHECKING:
+    from pact.watermarks.image import (
+        PERCEPTUAL_IMAGE_WATERMARK_ID,
+        ImagePerceptualFingerprint,
+        ImagePerceptualHash,
+        ImagePerceptualMatch,
+        ImageSoftBindingVerification,
+        ImageWatermarkDependencyError,
+        TrustMarkBackend,
+        compare_image_perceptual_fingerprints,
+        create_image_perceptual_fingerprint,
+        decode_image_soft_binding,
+        embed_image_soft_binding,
+        perceptual_image_watermark_id,
+        trustmark_supported_image_mime_types,
+        verify_image_soft_binding,
+        watermark_id_for_image_soft_binding,
+    )
+
+_IMAGE_EXPORTS = {
+    "PERCEPTUAL_IMAGE_WATERMARK_ID",
+    "ImagePerceptualFingerprint",
+    "ImagePerceptualHash",
+    "ImagePerceptualMatch",
+    "ImageSoftBindingVerification",
+    "ImageWatermarkDependencyError",
+    "TrustMarkBackend",
+    "compare_image_perceptual_fingerprints",
+    "create_image_perceptual_fingerprint",
+    "decode_image_soft_binding",
+    "embed_image_soft_binding",
+    "perceptual_image_watermark_id",
+    "trustmark_supported_image_mime_types",
+    "verify_image_soft_binding",
+    "watermark_id_for_image_soft_binding",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Load image watermark exports only when callers need them."""
+
+    if name in _IMAGE_EXPORTS:
+        from pact.watermarks import image
+
+        value = getattr(image, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(name)
+
 
 __all__ = [
     "DecodedImageWatermark",

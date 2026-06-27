@@ -2,6 +2,7 @@ import io
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -431,10 +432,11 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
     register_profile(client, identity)
     signed = make_signed_manifest(identity)
     claim = register_claim(client, identity, signed)
+    claim_id = cast(str, claim["claim_id"])
     dispute = open_dispute(
         client,
         identity,
-        claim["claim_id"],
+        claim_id,
         misuse_url="https://example.com/copied-media",
     )
     assert dispute["misuse_url"] == "https://example.com/copied-media"
@@ -442,7 +444,7 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
     claims_response = client.get(f"/api/v1/profiles/{identity.key_id}/claims")
     assert claims_response.status_code == 200
     claims = claims_response.json()["claims"]
-    assert [item["claim_id"] for item in claims] == [claim["claim_id"]]
+    assert [item["claim_id"] for item in claims] == [claim_id]
 
     profile_disputes = client.get(
         f"/api/v1/profiles/{identity.key_id}/disputes"
@@ -452,7 +454,7 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
         "https://example.com/copied-media"
     )
 
-    claim_disputes = client.get(f"/api/v1/claims/{claim['claim_id']}/disputes")
+    claim_disputes = client.get(f"/api/v1/claims/{claim_id}/disputes")
     assert claim_disputes.status_code == 200
     assert (
         claim_disputes.json()["disputes"][0]["dispute_id"]

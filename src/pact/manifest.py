@@ -78,6 +78,16 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(cast(list[str], value))
 
 
+def _optional_string(value: object, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ManifestError(f"{label} must be a string")
+    if not value.strip():
+        raise ManifestError(f"{label} must not be blank")
+    return value
+
+
 def _claim_meaning_list(value: object) -> tuple[ClaimMeaning, ...]:
     items = _string_list(value, "claim_meanings")
     try:
@@ -99,6 +109,170 @@ def _reject_unknown_fields(
         raise ManifestError(
             f"unsupported {label} fields: {sorted(unexpected)}"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class C2PAAction:
+    """One C2PA-style action entry claimed by the manifest signer."""
+
+    action: str
+    description: str | None = None
+    when: str | None = None
+    parameters: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, str) or not self.action.strip():
+            raise ManifestError("action must be a nonempty string")
+        if self.description is not None:
+            _optional_string(self.description, "action description")
+        if self.when is not None:
+            _optional_string(self.when, "action when")
+        if self.parameters is not None and not isinstance(
+            self.parameters, Mapping
+        ):
+            raise ManifestError("action parameters must be an object")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return this action using C2PA action field names."""
+
+        result: dict[str, object] = {"action": self.action}
+        if self.description is not None:
+            result["description"] = self.description
+        if self.when is not None:
+            result["when"] = self.when
+        if self.parameters is not None:
+            result["parameters"] = dict(self.parameters)
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        """Parse one C2PA-style action from manifest JSON."""
+
+        _reject_unknown_fields(
+            value,
+            {"action", "description", "when", "parameters"},
+            "action",
+        )
+        parameters = value.get("parameters")
+        if parameters is not None and not isinstance(parameters, Mapping):
+            raise ManifestError("action parameters must be an object")
+        return cls(
+            action=_required_string(value, "action"),
+            description=_optional_string(
+                value.get("description"),
+                "action description",
+            ),
+            when=_optional_string(value.get("when"), "action when"),
+            parameters=None
+            if parameters is None
+            else cast(Mapping[str, object], parameters),
+        )
+
+
+def _action_list(value: object) -> tuple[C2PAAction, ...]:
+    if not isinstance(value, Mapping):
+        raise ManifestError("actions must be a C2PA actions object")
+    action_map = cast(Mapping[str, object], value)
+    _reject_unknown_fields(action_map, {"actions"}, "actions")
+    items = action_map.get("actions", [])
+    if not isinstance(items, list):
+        raise ManifestError("actions must contain an actions array")
+    actions = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ManifestError("actions must contain objects")
+        actions.append(C2PAAction.from_dict(cast(Mapping[str, object], item)))
+    return tuple(actions)
+
+
+@dataclass(frozen=True, slots=True)
+class C2PAIngredient:
+    """One C2PA-style source asset used by this manifest."""
+
+    claim_id: str
+    registry_url: str | None = None
+    title: str | None = None
+    format: str | None = None
+    relationship: str = "parentOf"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.claim_id, str) or not self.claim_id.strip():
+            raise ManifestError(
+                "ingredient claim_id must be a nonempty string"
+            )
+        if self.registry_url is not None:
+            _validate_url(self.registry_url, "ingredient registry_url")
+        if self.title is not None:
+            _optional_string(self.title, "ingredient title")
+        if self.format is not None:
+            _optional_string(self.format, "ingredient format")
+        if (
+            not isinstance(self.relationship, str)
+            or not self.relationship.strip()
+        ):
+            raise ManifestError("ingredient relationship must be nonempty")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return this ingredient using C2PA ingredient-style field names."""
+
+        result: dict[str, object] = {
+            "claim_id": self.claim_id,
+            "relationship": self.relationship,
+        }
+        if self.registry_url is not None:
+            result["registry_url"] = self.registry_url
+        if self.title is not None:
+            result["title"] = self.title
+        if self.format is not None:
+            result["format"] = self.format
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        """Parse one C2PA-style ingredient from manifest JSON."""
+
+        _reject_unknown_fields(
+            value,
+            {"claim_id", "registry_url", "title", "format", "relationship"},
+            "ingredient",
+        )
+        registry_url = value.get("registry_url")
+        title = value.get("title")
+        media_format = value.get("format")
+        relationship = value.get("relationship", "parentOf")
+        if registry_url is not None and not isinstance(registry_url, str):
+            raise ManifestError("ingredient registry_url must be a string")
+        if title is not None and not isinstance(title, str):
+            raise ManifestError("ingredient title must be a string")
+        if media_format is not None and not isinstance(media_format, str):
+            raise ManifestError("ingredient format must be a string")
+        if not isinstance(relationship, str):
+            raise ManifestError("ingredient relationship must be a string")
+        return cls(
+            claim_id=_required_string(value, "claim_id"),
+            registry_url=registry_url,
+            title=title,
+            format=media_format,
+            relationship=relationship,
+        )
+
+
+def _ingredient_list(value: object) -> tuple[C2PAIngredient, ...]:
+    if not isinstance(value, Mapping):
+        raise ManifestError("ingredients must be a C2PA ingredients object")
+    ingredient_map = cast(Mapping[str, object], value)
+    _reject_unknown_fields(ingredient_map, {"ingredients"}, "ingredients")
+    items = ingredient_map.get("ingredients", [])
+    if not isinstance(items, list):
+        raise ManifestError("ingredients must contain an ingredients array")
+    ingredients = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            raise ManifestError("ingredients must contain objects")
+        ingredients.append(
+            C2PAIngredient.from_dict(cast(Mapping[str, object], item))
+        )
+    return tuple(ingredients)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +355,8 @@ class Manifest:
     )
     carriers: tuple[str, ...] = ()
     watermarks: tuple[str, ...] = ()
+    actions: tuple[C2PAAction, ...] = ()
+    ingredients: tuple[C2PAIngredient, ...] = ()
     source_url: str | None = None
     licensing_url: str | None = None
     version: str = "1"
@@ -226,6 +402,26 @@ class Manifest:
             raise ManifestError("carrier identifiers must be unique")
         if len(set(self.watermarks)) != len(self.watermarks):
             raise ManifestError("watermark identifiers must be unique")
+        object.__setattr__(
+            self,
+            "actions",
+            tuple(
+                item
+                if isinstance(item, C2PAAction)
+                else C2PAAction.from_dict(cast(Mapping[str, object], item))
+                for item in self.actions
+            ),
+        )
+        object.__setattr__(
+            self,
+            "ingredients",
+            tuple(
+                item
+                if isinstance(item, C2PAIngredient)
+                else C2PAIngredient.from_dict(cast(Mapping[str, object], item))
+                for item in self.ingredients
+            ),
+        )
         if self.source_url is not None:
             _validate_url(self.source_url, "source_url")
         if self.licensing_url is not None:
@@ -247,6 +443,8 @@ class Manifest:
         ),
         carriers: tuple[str, ...] = (),
         watermarks: tuple[str, ...] = (),
+        actions: tuple[C2PAAction, ...] = (),
+        ingredients: tuple[C2PAIngredient, ...] = (),
         source_url: str | None = None,
         licensing_url: str | None = None,
         claim_id: UUID | None = None,
@@ -270,6 +468,8 @@ class Manifest:
             claim_meanings=claim_meanings,
             carriers=carriers,
             watermarks=watermarks,
+            actions=actions,
+            ingredients=ingredients,
             source_url=source_url,
             licensing_url=licensing_url,
         )
@@ -293,6 +493,10 @@ class Manifest:
             "claim_meanings": [item.value for item in self.claim_meanings],
             "carriers": list(self.carriers),
             "watermarks": list(self.watermarks),
+            "actions": {"actions": [item.to_dict() for item in self.actions]},
+            "ingredients": {
+                "ingredients": [item.to_dict() for item in self.ingredients]
+            },
         }
         if self.source_url is not None:
             result["source_url"] = self.source_url
@@ -325,6 +529,8 @@ class Manifest:
                     "claim_meanings",
                     "carriers",
                     "watermarks",
+                    "actions",
+                    "ingredients",
                     "source_url",
                     "licensing_url",
                 },
@@ -355,6 +561,11 @@ class Manifest:
                 "claim_meanings",
                 [ClaimMeaning.SIGNED_BY.value],
             )
+            actions_value = value.get("actions", {"actions": []})
+            ingredients_value = value.get(
+                "ingredients",
+                {"ingredients": []},
+            )
             if source_url is not None and not isinstance(source_url, str):
                 raise ManifestError("source_url must be a string")
             if licensing_url is not None and not isinstance(
@@ -378,6 +589,8 @@ class Manifest:
                 claim_meanings=_claim_meaning_list(claim_meanings_value),
                 carriers=_string_list(value["carriers"], "carriers"),
                 watermarks=_string_list(value["watermarks"], "watermarks"),
+                actions=_action_list(actions_value),
+                ingredients=_ingredient_list(ingredients_value),
                 source_url=source_url,
                 licensing_url=licensing_url,
             )

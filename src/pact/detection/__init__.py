@@ -1,6 +1,35 @@
 """Local probe generation and statistical evidence exports."""
 
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pact.detection.evidence import (
+        ProbeEvidencePackage,
+        ProbeEvidenceSignature,
+    )
+    from pact.detection.probes import (
+        Probe,
+        ProbeKind,
+        ProbeResponse,
+        ProbeSet,
+        create_probe_set,
+        responses_from_jsonl,
+    )
+    from pact.detection.risk import (
+        EvidenceSignal,
+        TrainingUseRiskLevel,
+        TrainingUseRiskReport,
+        create_training_use_risk_report,
+    )
+    from pact.detection.statistics import (
+        ConfidenceInterval,
+        HypothesisTest,
+        ProbeAnalysisReport,
+        ProbeConclusion,
+        ProbeMeasurement,
+        analyze_probe_responses,
+    )
 
 _EXPORTS = {
     "Probe": "pact.detection.probes",

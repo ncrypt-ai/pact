@@ -10,7 +10,9 @@ async function loadRuntime() {
     await pyodide.loadPackage(["micropip", "cryptography"]);
     const micropip = pyodide.pyimport("micropip");
     await micropip.install(["rfc8785", "defusedxml", "pypdf"]);
-    const response = await fetch("/app/pact-browser-core.pyz");
+    const response = await fetch(`/app/pact-browser-core.pyz?v=${Date.now()}`, {
+      cache: "no-store"
+    });
     pyodide.unpackArchive(await response.arrayBuffer(), "zip");
     await pyodide.runPythonAsync("import pact.browser");
     return pyodide;
@@ -19,7 +21,9 @@ async function loadRuntime() {
 }
 
 async function loadFeature(pyodide, feature) {
-  const response = await fetch(`/app/pact-browser-${feature}.pyz`);
+  const response = await fetch(`/app/pact-browser-${feature}.pyz?v=${Date.now()}`, {
+    cache: "no-store"
+  });
   if (!response.ok) {
     throw new Error(`feature pack unavailable: ${feature}`);
   }
@@ -33,6 +37,7 @@ self.onmessage = async (event) => {
     if (feature) {
       await loadFeature(pyodide, feature);
     }
+    await pyodide.runPythonAsync("import importlib, pact.browser; importlib.reload(pact.browser)");
     const module = pyodide.pyimport("pact.browser");
     const result = module[name](...args);
     self.postMessage({ id, ok: true, result });

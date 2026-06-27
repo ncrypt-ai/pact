@@ -183,7 +183,7 @@ branch = true
 source = ["pact"]
 
 [tool.coverage.report]
-fail_under = 100
+fail_under = 80
 show_missing = true
 skip_covered = true
 

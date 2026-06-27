@@ -10,6 +10,8 @@ from pact.canonical import CanonicalizationProfile
 from pact.crypto import base64url_encode
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
+    C2PAAction,
+    C2PAIngredient,
     ClaimMeaning,
     ContentBinding,
     Manifest,
@@ -55,6 +57,20 @@ def make_manifest(identity: ClaimantIdentity | None = None) -> Manifest:
         policy=make_policy(),
         carriers=("pact.visible.v1",),
         watermarks=("pact.invisible.v1",),
+        actions=(
+            C2PAAction(
+                "c2pa.created",
+                description="created original work",
+            ),
+        ),
+        ingredients=(
+            C2PAIngredient(
+                claim_id="018f7f79-7b42-7c00-8000-000000000000",
+                registry_url="https://registry.example",
+                title="source.txt",
+                format="text/plain",
+            ),
+        ),
         source_url="https://creator.example/work",
         licensing_url="https://creator.example/license",
         claim_id=CLAIM_ID,
@@ -112,6 +128,25 @@ def test_manifest_create_and_round_trip() -> None:
         "signed_by",
         "training_restriction",
     ]
+    assert manifest.to_dict()["actions"] == {
+        "actions": [
+            {
+                "action": "c2pa.created",
+                "description": "created original work",
+            }
+        ]
+    }
+    assert manifest.to_dict()["ingredients"] == {
+        "ingredients": [
+            {
+                "claim_id": "018f7f79-7b42-7c00-8000-000000000000",
+                "registry_url": "https://registry.example",
+                "title": "source.txt",
+                "format": "text/plain",
+                "relationship": "parentOf",
+            }
+        ]
+    }
     assert manifest.canonical_bytes() == parsed.canonical_bytes()
 
 
@@ -201,6 +236,10 @@ def test_manifest_parser_rejects_bad_policy_and_shape() -> None:
         (("policy", "entries"), [], "entries must be an object"),
         (("carriers",), "carrier", "array of strings"),
         (("watermarks",), [1], "array of strings"),
+        (("actions",), [], "C2PA actions object"),
+        (("actions", "actions"), "c2pa.created", "actions array"),
+        (("ingredients",), [], "C2PA ingredients object"),
+        (("ingredients", "ingredients"), "claim", "ingredients array"),
         (("claim_meanings",), ["unknown"], "unsupported claim meaning"),
         (("source_url",), 1, "source_url must be a string"),
         (("licensing_url",), 1, "licensing_url must be a string"),

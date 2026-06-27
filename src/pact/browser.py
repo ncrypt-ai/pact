@@ -19,6 +19,8 @@ from pact.detection.probes import (
 from pact.detection.statistics import analyze_probe_responses
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
+    C2PAAction,
+    C2PAIngredient,
     Manifest,
     SignedManifest,
     sign_manifest,
@@ -38,6 +40,27 @@ def _unb64(value: str) -> bytes:
 
 def _json(value: object) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _policy_from_json(value: str | None, fallback: str) -> Policy:
+    if value:
+        raw = json.loads(value)
+        if not isinstance(raw, dict):
+            raise ValueError("policy must be a JSON object")
+        return Policy.from_dict(cast(dict[str, object], raw))
+    permission_value = (
+        PermissionValue.NOT_ALLOWED
+        if fallback == "no-ai-training"
+        else PermissionValue.ALLOWED
+    )
+    return Policy(
+        (
+            PolicyEntry(
+                Permission.GENERATIVE_TRAINING,
+                permission_value,
+            ),
+        )
+    )
 
 
 def _identity(
@@ -190,6 +213,53 @@ def create_mutation_request(
     )
 
 
+def create_rotation_request(
+    registry_url: str,
+    current_encrypted_pkcs8_b64: str,
+    replacement_encrypted_pkcs8_b64: str,
+    password: str,
+    challenge_json: str,
+    payload_json: str,
+) -> str:
+    """Create a signed registry key-rotation request."""
+
+    current = _identity(registry_url, current_encrypted_pkcs8_b64, password)
+    replacement = _identity(
+        registry_url,
+        replacement_encrypted_pkcs8_b64,
+        password,
+    )
+    challenge = challenge_from_json(challenge_json)
+    proof_of_work_solution = solve_pow(challenge_json)
+    payload = cast(dict[str, object], json.loads(payload_json))
+    signed_bytes = canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge,
+                "current_public_jwk": current.public_jwk,
+                "replacement_public_jwk": replacement.public_jwk,
+                "proof_of_work_solution": proof_of_work_solution,
+                "payload": payload,
+            },
+        )
+    )
+    return _json(
+        {
+            "challenge_id": challenge["challenge_id"],
+            "current_public_jwk": current.public_jwk,
+            "replacement_public_jwk": replacement.public_jwk,
+            "proof_of_work_solution": proof_of_work_solution,
+            "payload": payload,
+            "current_signature": sign_es256(current.private_key, signed_bytes),
+            "replacement_signature": sign_es256(
+                replacement.private_key,
+                signed_bytes,
+            ),
+        }
+    )
+
+
 def sign_content(
     registry_url: str,
     encrypted_pkcs8_b64: str,
@@ -200,32 +270,33 @@ def sign_content(
     canonicalization: str = "pact.text.v1",
     policy: str = "no-ai-training",
     carrier: str = "visible",
+    source_url: str | None = None,
+    actions_json: str = "[]",
+    ingredients_json: str = "[]",
+    policy_json: str | None = None,
 ) -> str:
     """Create a signed manifest and nonce for browser-selected content."""
 
     identity = _identity(registry_url, encrypted_pkcs8_b64, password)
     content = _unb64(content_b64)
     nonce = os.urandom(32)
-    permission_value = (
-        PermissionValue.NOT_ALLOWED
-        if policy == "no-ai-training"
-        else PermissionValue.ALLOWED
-    )
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=registry_root_fingerprint,
         content=content,
         mime_type=mime_type,
         canonicalization=CanonicalizationProfile(canonicalization),
-        policy=Policy(
-            (
-                PolicyEntry(
-                    Permission.GENERATIVE_TRAINING,
-                    permission_value,
-                ),
-            )
-        ),
+        policy=_policy_from_json(policy_json, policy),
         carriers=(carrier,),
+        actions=tuple(
+            C2PAAction.from_dict(cast(dict[str, object], item))
+            for item in json.loads(actions_json)
+        ),
+        ingredients=tuple(
+            C2PAIngredient.from_dict(cast(dict[str, object], item))
+            for item in json.loads(ingredients_json)
+        ),
+        source_url=source_url or None,
         nonce=nonce,
     )
     signed = sign_manifest(manifest, identity)
@@ -370,6 +441,58 @@ def watermark_image(
             "image_b64": _b64(result.image_bytes),
         }
     )
+
+
+def embed_signed_manifest_carrier(
+    asset_b64: str,
+    mime_type: str,
+    signed_manifest_json: str,
+) -> str:
+    """Embed a PACT signed manifest in a browser-provided asset."""
+
+    from pact.carriers import (
+        CarrierMode,
+        embed_html_carrier,
+        embed_text_carrier,
+        embed_xml_carrier,
+    )
+
+    asset = _unb64(asset_b64)
+    signed = SignedManifest.from_json(signed_manifest_json.encode("utf-8"))
+    if mime_type in {"text/html", "application/xhtml+xml"}:
+        embedded = embed_html_carrier(asset, signed)
+    elif mime_type in {"application/xml", "text/xml", "image/svg+xml"}:
+        embedded = embed_xml_carrier(asset, signed)
+    elif mime_type.startswith("text/"):
+        embedded = embed_text_carrier(
+            asset, signed, nonce=b"", mode=CarrierMode.VISIBLE
+        )
+    elif mime_type == "application/pdf":
+        from pact.carriers.c2pa import embed_c2pa_manifest_in_pdf
+
+        embedded = embed_c2pa_manifest_in_pdf(
+            asset,
+            signed_manifest_json.encode("utf-8"),
+        ).asset_bytes
+    elif mime_type in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/epub+zip",
+    }:
+        from pact.carriers.c2pa import embed_c2pa_manifest_in_zip_document
+
+        embedded = embed_c2pa_manifest_in_zip_document(
+            asset,
+            mime_type,
+            signed_manifest_json.encode("utf-8"),
+        ).asset_bytes
+    else:
+        raise ValueError(
+            "embedded proof downloads are available for text, HTML, XML, PDF, "
+            "and ZIP-based Office documents"
+        )
+    return _json({"asset_b64": _b64(embedded), "mime_type": mime_type})
 
 
 def embed_pdf_manifest(pdf_b64: str, manifest_store_b64: str) -> str:
