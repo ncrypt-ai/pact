@@ -9,6 +9,9 @@
     <p>Registry: {{ registry_url }}</p>
     <p>Base URL: {{ public_base_url }}</p>
     <p>Mode: {{ "local preview" if local_mode else "public service" }}</p>
+    {% if workspace_enabled %}
+    <p><a href="/app">Open the browser workspace</a></p>
+    {% endif %}
 
     <h2>Public entry points</h2>
     <p>This host publishes the API and the human-readable proof pages side by side.</p>

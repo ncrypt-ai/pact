@@ -83,6 +83,8 @@ Optional extras:
 
 ```bash
 uv sync --locked --extra c2pa
+uv sync --locked --extra server
+uv sync --locked --extra web
 uv sync --locked --extra image-watermark
 uv sync --locked --extra aws
 ```
@@ -142,6 +144,12 @@ Run the local registry/web app:
 
 ```bash
 pact web --data-dir ./.pact-dev --port 8000 --database ./.pact-dev/registry.sqlite3
+```
+
+Run only the browser workspace against a remote registry:
+
+```bash
+pact web --remote-registry https://registry.example --port 8000
 ```
 
 ## Library example

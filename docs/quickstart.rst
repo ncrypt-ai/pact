@@ -252,7 +252,10 @@ profile evidence:
    request = MutationRequest.create(
        identity,
        challenge,
-       payload={"display_name": "Alice"},
+       payload={
+           "display_name": "Alice",
+           "device_fingerprint": "registry-scoped-device-fingerprint",
+       },
        proof_of_work_solution=0,  # supply a solved proof-of-work value
    )
    profile = service.register_profile(request)
@@ -276,7 +279,8 @@ pages:
      --registry https://registry.example \
      --data-dir ./registry-data \
      --public-base-url https://registry.example \
-     --database ./registry-data/registry.sqlite3
+     --database ./registry-data/registry.sqlite3 \
+     --enable-workspace
 
 Once the server is running, the CLI can publish identities and claims without
 custom request scripts:
@@ -306,7 +310,8 @@ This serves:
 Run the loopback-local web UI
 -----------------------------
 
-For a local-only browser workflow, bind to loopback:
+For a local-only browser workflow, bind to loopback. This starts the registry
+API, proof pages, and the Pyodide browser workspace:
 
 .. code-block:: bash
 
@@ -316,7 +321,33 @@ For a local-only browser workflow, bind to loopback:
      --database ./local-registry/registry.sqlite3
 
 That starts the same API and proof-page app on ``127.0.0.1`` with a local
-base URL.
+base URL. Open ``/app`` to use the browser workflow instead of the CLI.
+
+Run only the browser workspace
+------------------------------
+
+You can also self-host only the browser interface and point it at a remote
+registry:
+
+.. code-block:: bash
+
+   pact web \
+     --remote-registry https://registry.example \
+     --port 8000
+
+In that mode, the local process serves static workspace assets and Pyodide
+feature packs. The browser sends signed mutations directly to the remote
+registry. The remote registry must allow the workspace origin with CORS, for
+example:
+
+.. code-block:: bash
+
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3 \
+     --cors-allowed-origin http://127.0.0.1:8000
 
 Embed a TrustMark soft binding
 ------------------------------

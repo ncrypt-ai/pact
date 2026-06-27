@@ -1,0 +1,56 @@
+body {
+  color: #1f2937;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  margin: 2rem auto;
+  max-width: 960px;
+}
+
+section {
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem;
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+label {
+  display: block;
+  margin: 0.75rem 0;
+}
+
+input,
+select,
+textarea {
+  box-sizing: border-box;
+  display: block;
+  max-width: 100%;
+  padding: 0.4rem;
+  width: 100%;
+}
+
+textarea {
+  min-height: 7rem;
+}
+
+button {
+  margin: 0.25rem 0.25rem 0.25rem 0;
+  padding: 0.45rem 0.7rem;
+}
+
+pre {
+  background: #111827;
+  border-radius: 0.5rem;
+  color: #f9fafb;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.actions {
+  margin-top: 0.75rem;
+}
+
+.note {
+  background: #eff6ff;
+  border-left: 4px solid #2563eb;
+  padding: 0.75rem;
+}

@@ -50,7 +50,11 @@ def make_signed_manifest(identity: ClaimantIdentity):
     return sign_manifest(manifest, identity)
 
 
-def make_client(tmp_path: Path) -> tuple[TestClient, ClaimantIdentity]:
+def make_client(
+    tmp_path: Path,
+    *,
+    enable_workspace: bool = False,
+) -> tuple[TestClient, ClaimantIdentity]:
     registry_url = "https://registry.example"
     authority = RegistryCertificateAuthority.initialize(registry_url)
     service = RegistryService(
@@ -58,7 +62,11 @@ def make_client(tmp_path: Path) -> tuple[TestClient, ClaimantIdentity]:
         store=FileRegistryStore(tmp_path / "store"),
         certificate_authority=authority,
     )
-    app = create_app(service, public_base_url="http://testserver")
+    app = create_app(
+        service,
+        public_base_url="http://testserver",
+        enable_workspace=enable_workspace,
+    )
     return TestClient(app), ClaimantIdentity.generate(registry_url)
 
 
@@ -81,7 +89,10 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
     request = MutationRequest.create(
         identity,
         challenge_object,
-        payload={"display_name": "Alice"},
+        payload={
+            "display_name": "Alice",
+            "device_fingerprint": f"test-device-{identity.key_id}",
+        },
         proof_of_work_solution=solve_pow(challenge_object),
     )
     client.post(
@@ -164,3 +175,38 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
+
+
+def test_web_workspace_is_optional_and_serves_pyodide_assets(
+    tmp_path: Path,
+) -> None:
+    disabled_client, _identity = make_client(tmp_path / "disabled")
+    assert disabled_client.get("/app").status_code == 404
+
+    enabled_client, _identity = make_client(
+        tmp_path / "enabled",
+        enable_workspace=True,
+    )
+    workspace = enabled_client.get("/app")
+    assert workspace.status_code == 200
+    assert "PACT Workspace" in workspace.text
+    assert "Pyodide worker" in workspace.text
+    package = enabled_client.get("/app/pact-browser-core.pyz")
+    assert package.status_code == 200
+    assert package.headers["content-type"] == "application/zip"
+
+
+def test_web_workspace_can_run_without_local_registry_service() -> None:
+    app = create_app(
+        None,
+        public_base_url="http://testserver",
+        registry_url="https://registry.example",
+        enable_workspace=True,
+    )
+    client = TestClient(app)
+
+    workspace = client.get("/app")
+    assert workspace.status_code == 200
+    assert "standalone web interface" in workspace.text
+    assert "https://registry.example" in workspace.text
+    assert client.get("/api/v1/registry").status_code == 404

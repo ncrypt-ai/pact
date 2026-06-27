@@ -14,11 +14,6 @@ from pact.carriers import (
     C2paError,
     C2paReadResult,
     C2paSignerMaterial,
-    C2paTextAsset,
-    C2paTextError,
-    C2paTextExtractionResult,
-    C2paTextReadResult,
-    C2paTextValidationResult,
     CarrierError,
     CarrierMode,
     ExternalManifestReference,
@@ -32,34 +27,21 @@ from pact.carriers import (
     c2pa_supported_embedded_document_mime_types,
     c2pa_supported_embedded_image_mime_types,
     c2pa_supported_reader_mime_types,
-    c2pa_text_comment_syntax,
-    c2pa_text_recommended_method,
     embed_c2pa_image,
     embed_c2pa_manifest_in_pdf,
     embed_c2pa_manifest_in_zip_document,
-    embed_c2pa_text_html,
-    embed_c2pa_text_structured,
-    embed_c2pa_text_unstructured,
     embed_html_carrier,
     embed_text_carrier,
     embed_xml_carrier,
     extract_c2pa_manifest_from_pdf,
     extract_c2pa_manifest_from_zip_document,
-    extract_c2pa_text_asset,
-    extract_c2pa_text_html,
-    extract_c2pa_text_structured,
-    extract_c2pa_text_unstructured,
     extract_html_carrier,
     extract_text_carrier,
     extract_xml_carrier,
     pdf_external_manifest_reference,
     read_c2pa_asset,
-    read_c2pa_text_asset,
     sign_c2pa_document,
     sign_c2pa_manifest_store,
-    sign_c2pa_text_asset,
-    validate_c2pa_text_document,
-    validate_c2pa_text_manifest_store,
 )
 from pact.crypto import CryptographyError, base64url_decode, base64url_encode
 from pact.detection import (
@@ -201,7 +183,6 @@ from pact.watermarks import (
     verify_image_soft_binding,
     watermark_id_for_image_soft_binding,
 )
-from pact.web import create_app
 
 __all__ = [
     "CanonicalizationProfile",
@@ -214,11 +195,6 @@ __all__ = [
     "C2paError",
     "C2paReadResult",
     "C2paSignerMaterial",
-    "C2paTextAsset",
-    "C2paTextError",
-    "C2paTextExtractionResult",
-    "C2paTextReadResult",
-    "C2paTextValidationResult",
     "ContentBinding",
     "ContentCanonicalizationError",
     "CryptographyError",
@@ -329,40 +305,28 @@ __all__ = [
     "canonical_json",
     "canonicalize_content",
     "compare_image_perceptual_fingerprints",
-    "create_app",
     "create_image_perceptual_fingerprint",
     "c2pa_pdf_embedding_supported",
     "c2pa_supported_builder_mime_types",
     "c2pa_supported_embedded_document_mime_types",
     "c2pa_supported_embedded_image_mime_types",
     "c2pa_supported_reader_mime_types",
-    "c2pa_text_comment_syntax",
-    "c2pa_text_recommended_method",
     "embed_c2pa_image",
     "embed_c2pa_manifest_in_pdf",
     "embed_c2pa_manifest_in_zip_document",
-    "embed_c2pa_text_html",
-    "embed_c2pa_text_structured",
-    "embed_c2pa_text_unstructured",
     "embed_html_carrier",
     "embed_text_carrier",
     "embed_xml_carrier",
     "extract_c2pa_manifest_from_pdf",
     "extract_c2pa_manifest_from_zip_document",
-    "extract_c2pa_text_asset",
-    "extract_c2pa_text_html",
-    "extract_c2pa_text_structured",
-    "extract_c2pa_text_unstructured",
     "decode_image_soft_binding",
     "embed_image_soft_binding",
     "embed_experimental_text_carrier",
     "pdf_external_manifest_reference",
     "perceptual_image_watermark_id",
     "read_c2pa_asset",
-    "read_c2pa_text_asset",
     "sign_c2pa_document",
     "sign_c2pa_manifest_store",
-    "sign_c2pa_text_asset",
     "extract_html_carrier",
     "extract_text_carrier",
     "extract_xml_carrier",
@@ -381,8 +345,6 @@ __all__ = [
     "create_registry_store",
     "create_training_use_risk_report",
     "default_routes",
-    "validate_c2pa_text_document",
-    "validate_c2pa_text_manifest_store",
     "verify_manifest",
     "verify_image_soft_binding",
     "watermark_id_for_image_soft_binding",
@@ -390,3 +352,13 @@ __all__ = [
 ]
 
 __version__ = version("pact")
+
+
+def __getattr__(name: str) -> object:
+    """Load optional package exports on demand."""
+
+    if name == "create_app":
+        from pact.web import create_app
+
+        return create_app
+    raise AttributeError(name)

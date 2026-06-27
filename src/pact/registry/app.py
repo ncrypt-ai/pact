@@ -570,6 +570,7 @@ class ClaimantProfile:
     replacement_key_id: str | None = None
     verified_domains: tuple[str, ...] = ()
     hosted_account: bool = False
+    device_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -749,6 +750,9 @@ class RegistryService:
                 key_id = cast(str, data["key_id"])
                 display_name = cast(str | None, data.get("display_name"))
                 hosted_account = bool(data.get("hosted_account", False))
+                device_fingerprint = cast(
+                    str | None, data.get("device_fingerprint")
+                )
                 public_jwk_value = data["public_jwk"]
                 if not isinstance(public_jwk_value, dict):
                     raise RegistryStoreError(
@@ -760,6 +764,7 @@ class RegistryService:
                     created_at=self._event_time(event),
                     display_name=display_name,
                     hosted_account=hosted_account,
+                    device_fingerprint=device_fingerprint,
                 )
             elif event.event_type is RegistryEventType.KEY_ROTATED:
                 current_key_id = cast(str, data["current_key_id"])
@@ -778,6 +783,7 @@ class RegistryService:
                     replacement_key_id=replacement_key_id,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
+                    device_fingerprint=current.device_fingerprint,
                 )
                 profiles[replacement_key_id] = ClaimantProfile(
                     key_id=replacement_key_id,
@@ -786,6 +792,7 @@ class RegistryService:
                     display_name=current.display_name,
                     verified_domains=current.verified_domains,
                     hosted_account=current.hosted_account,
+                    device_fingerprint=current.device_fingerprint,
                 )
             elif event.event_type is RegistryEventType.DOMAIN_VERIFIED:
                 key_id = cast(str, data["key_id"])
@@ -801,6 +808,7 @@ class RegistryService:
                         sorted({*current.verified_domains, domain})
                     ),
                     hosted_account=current.hosted_account,
+                    device_fingerprint=current.device_fingerprint,
                 )
         return profiles
 
@@ -993,6 +1001,16 @@ class RegistryService:
         profiles = self._load_profiles()
         if request.claimant_key_id in profiles:
             raise RegistryError("claimant profile already exists")
+        device_fingerprint = request.payload.get("device_fingerprint")
+        if not isinstance(device_fingerprint, str) or not device_fingerprint:
+            raise RegistryError("device_fingerprint must be a nonempty string")
+        if any(
+            profile.device_fingerprint == device_fingerprint
+            for profile in profiles.values()
+        ):
+            raise RegistryError(
+                "this device is already registered to another claimant profile"
+            )
         display_name = request.payload.get("display_name")
         if display_name is not None and not isinstance(display_name, str):
             raise RegistryError("display_name must be a string")
@@ -1007,6 +1025,7 @@ class RegistryService:
                 "public_jwk": request.claimant_public_jwk,
                 "display_name": display_name,
                 "hosted_account": hosted_account,
+                "device_fingerprint": device_fingerprint,
             },
         )
         self._append_claimant_certificate(request.claimant_public_jwk)

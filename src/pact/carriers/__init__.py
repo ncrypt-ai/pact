@@ -23,26 +23,6 @@ from pact.carriers.c2pa import (
     sign_c2pa_document,
     sign_c2pa_manifest_store,
 )
-from pact.carriers.c2pa_text import (
-    C2paTextAsset,
-    C2paTextError,
-    C2paTextExtractionResult,
-    C2paTextReadResult,
-    C2paTextValidationResult,
-    c2pa_text_comment_syntax,
-    c2pa_text_recommended_method,
-    embed_c2pa_text_html,
-    embed_c2pa_text_structured,
-    embed_c2pa_text_unstructured,
-    extract_c2pa_text_asset,
-    extract_c2pa_text_html,
-    extract_c2pa_text_structured,
-    extract_c2pa_text_unstructured,
-    read_c2pa_text_asset,
-    sign_c2pa_text_asset,
-    validate_c2pa_text_document,
-    validate_c2pa_text_manifest_store,
-)
 from pact.carriers.structured import (
     PACT_XML_NAMESPACE,
     StructuredCarrierExtraction,
@@ -67,11 +47,6 @@ __all__ = [
     "C2paError",
     "C2paReadResult",
     "C2paSignerMaterial",
-    "C2paTextAsset",
-    "C2paTextError",
-    "C2paTextExtractionResult",
-    "C2paTextReadResult",
-    "C2paTextValidationResult",
     "ExternalManifestReference",
     "InvisibleLocator",
     "PACT_XML_NAMESPACE",
@@ -84,12 +59,7 @@ __all__ = [
     "c2pa_supported_embedded_document_mime_types",
     "c2pa_supported_embedded_image_mime_types",
     "c2pa_supported_reader_mime_types",
-    "c2pa_text_comment_syntax",
-    "c2pa_text_recommended_method",
     "embed_c2pa_image",
-    "embed_c2pa_text_html",
-    "embed_c2pa_text_structured",
-    "embed_c2pa_text_unstructured",
     "embed_c2pa_manifest_in_pdf",
     "embed_c2pa_manifest_in_zip_document",
     "embed_html_carrier",
@@ -97,19 +67,44 @@ __all__ = [
     "embed_xml_carrier",
     "extract_c2pa_manifest_from_pdf",
     "extract_c2pa_manifest_from_zip_document",
-    "extract_c2pa_text_asset",
-    "extract_c2pa_text_html",
-    "extract_c2pa_text_structured",
-    "extract_c2pa_text_unstructured",
     "pdf_external_manifest_reference",
-    "read_c2pa_text_asset",
     "read_c2pa_asset",
-    "sign_c2pa_text_asset",
     "sign_c2pa_document",
     "sign_c2pa_manifest_store",
-    "validate_c2pa_text_document",
-    "validate_c2pa_text_manifest_store",
     "extract_html_carrier",
     "extract_text_carrier",
     "extract_xml_carrier",
 ]
+
+_C2PA_TEXT_EXPORTS = {
+    "C2paTextAsset",
+    "C2paTextError",
+    "C2paTextExtractionResult",
+    "C2paTextReadResult",
+    "C2paTextValidationResult",
+    "c2pa_text_comment_syntax",
+    "c2pa_text_recommended_method",
+    "embed_c2pa_text_html",
+    "embed_c2pa_text_structured",
+    "embed_c2pa_text_unstructured",
+    "extract_c2pa_text_asset",
+    "extract_c2pa_text_html",
+    "extract_c2pa_text_structured",
+    "extract_c2pa_text_unstructured",
+    "read_c2pa_text_asset",
+    "sign_c2pa_text_asset",
+    "validate_c2pa_text_document",
+    "validate_c2pa_text_manifest_store",
+}
+
+__all__.extend(sorted(_C2PA_TEXT_EXPORTS))
+
+
+def __getattr__(name: str) -> object:
+    """Load optional C2PA text exports when requested."""
+
+    if name in _C2PA_TEXT_EXPORTS:
+        from pact.carriers import c2pa_text
+
+        return getattr(c2pa_text, name)
+    raise AttributeError(name)

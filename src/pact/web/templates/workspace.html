@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>PACT Workspace</title>
+    <link rel="stylesheet" href="/static/workspace.css">
+  </head>
+  <body>
+    <header>
+      <p><a href="/">PACT Registry</a></p>
+      <h1>PACT Workspace</h1>
+      <p>
+        Registry:
+        <input id="registry-url" value="{{ registry_url }}" size="48">
+      </p>
+      <p>
+        Mode:
+        {{ "standalone web interface" if standalone else "registry-hosted web interface" }}
+      </p>
+      <p class="note">
+        Private keys stay in this browser unless you export them. Registry
+        actions are signed locally before they are submitted.
+      </p>
+    </header>
+
+    <main>
+      <section>
+        <h2>1. Identity</h2>
+        <p>
+          Create or import the key that signs your claims. Save the encrypted
+          export; losing it means losing the signing identity.
+        </p>
+        <label>Password <input id="identity-password" type="password"></label>
+        <div class="actions">
+          <button id="create-identity">Create identity</button>
+          <button id="show-identity">Show identity</button>
+          <button id="export-identity">Download encrypted identity</button>
+        </div>
+        <label>
+          Import encrypted identity
+          <input id="identity-import" type="file">
+        </label>
+      </section>
+
+      <section>
+        <h2>2. Register profile</h2>
+        <p>
+          This publishes your public key and device/browser fingerprint to the
+          registry. The fingerprint is anti-spam friction, not proof of legal
+          identity.
+        </p>
+        <label>Display name <input id="display-name"></label>
+        <button id="register-profile">Register profile</button>
+      </section>
+
+      <section>
+        <h2>3. Sign and register content</h2>
+        <p>
+          The file is read in your browser. PACT stores a signed manifest and
+          nonce for verification; the registry receives the signed manifest when
+          you register the claim.
+        </p>
+        <input id="content-file" type="file">
+        <label>MIME type <input id="mime-type" placeholder="text/plain"></label>
+        <label>
+          Canonicalization
+          <select id="canonicalization">
+            <option value="pact.text.v1">Text</option>
+            <option value="pact.binary.v1">Binary</option>
+          </select>
+        </label>
+        <div class="actions">
+          <button id="sign-content">Sign content</button>
+          <button id="register-claim">Register signed claim</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Verify and audit</h2>
+        <p>
+          Verification checks signatures and optional content binding. Privacy
+          audit checks what would become public before you register a claim.
+        </p>
+        <label>Signed manifest <input id="manifest-file" type="file"></label>
+        <label>Nonce <input id="nonce-file" type="file"></label>
+        <label>Original content <input id="verify-content-file" type="file"></label>
+        <div class="actions">
+          <button id="verify-manifest">Verify manifest</button>
+          <button id="audit-manifest">Privacy audit</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>5. Document carriers</h2>
+        <p>
+          PDF and ZIP-based documents use the same Python embedding code as the
+          CLI. Native C2PA SDK operations load only when available in the
+          browser runtime.
+        </p>
+        <label>Document <input id="document-file" type="file"></label>
+        <label>Manifest store <input id="manifest-store-file" type="file"></label>
+        <label>Document MIME type <input id="document-mime-type" placeholder="application/pdf"></label>
+        <div class="actions">
+          <button id="embed-document">Embed manifest store</button>
+          <button id="extract-document">Extract manifest store</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>6. Model probes</h2>
+        <p>
+          Create probes locally, paste model responses later, and export the
+          evidence package.
+        </p>
+        <label>Protected text <textarea id="protected-text"></textarea></label>
+        <label>Control text <textarea id="control-text"></textarea></label>
+        <label>Target model <input id="target-model"></label>
+        <label>Responses JSONL <textarea id="responses-jsonl"></textarea></label>
+        <div class="actions">
+          <button id="create-probes">Create probes</button>
+          <button id="analyze-probes">Analyze responses</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Output</h2>
+        <pre id="output">Loading Pyodide worker...</pre>
+      </section>
+    </main>
+
+    <script>
+      window.PACT_WORKSPACE = {
+        registryUrl: "{{ registry_url }}",
+        publicBaseUrl: "{{ public_base_url }}"
+      };
+    </script>
+    <script type="module" src="/static/workspace.js"></script>
+  </body>
+</html>

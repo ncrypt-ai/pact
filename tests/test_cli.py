@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -223,7 +225,11 @@ def test_cli_web_command_bootstraps_local_app(
         calls["log_level"] = log_level
         calls["app_title"] = app.title
 
-    monkeypatch.setattr("pact.cli.uvicorn.run", fake_run)
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        types.SimpleNamespace(run=fake_run),
+    )
     monkeypatch.setenv("PACT_REGISTRY_URL", "http://127.0.0.1:8123")
 
     assert (

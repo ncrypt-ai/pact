@@ -78,7 +78,10 @@ def register_profile(
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={"display_name": "Alice"},
+        payload={
+            "display_name": "Alice",
+            "device_fingerprint": f"test-device-{identity.key_id}",
+        },
         proof_of_work_solution=solve_pow(challenge),
     )
     service.register_profile(request)
@@ -215,7 +218,11 @@ def test_registry_hosted_account_trust_tier(tmp_path: Path) -> None:
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={"display_name": "Alice", "hosted_account": True},
+        payload={
+            "display_name": "Alice",
+            "hosted_account": True,
+            "device_fingerprint": f"test-device-{identity.key_id}",
+        },
         proof_of_work_solution=solve_pow(challenge),
     )
 
@@ -306,13 +313,37 @@ def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={},
+        payload={"device_fingerprint": f"test-device-{identity.key_id}"},
         proof_of_work_solution=solve_pow(challenge),
     )
 
     service.register_profile(request)
     with pytest.raises(RegistryError, match="already consumed"):
         service.register_profile(request)
+
+
+def test_registry_rejects_duplicate_device_fingerprint(tmp_path: Path) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    first = ClaimantIdentity.generate(service.registry_url)
+    second = ClaimantIdentity.generate(service.registry_url)
+    fingerprint = "same-device"
+
+    for identity in (first, second):
+        challenge = service.issue_challenge(
+            ChallengePurpose.PROFILE_REGISTRATION,
+            difficulty=4,
+        )
+        request = MutationRequest.create(
+            identity,
+            challenge,
+            payload={"device_fingerprint": fingerprint},
+            proof_of_work_solution=solve_pow(challenge),
+        )
+        if identity is first:
+            service.register_profile(request)
+        else:
+            with pytest.raises(RegistryError, match="already registered"):
+                service.register_profile(request)
 
 
 def test_registry_key_rotation_requires_old_and_new_signatures(

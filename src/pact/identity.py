@@ -15,10 +15,8 @@ from socket import getfqdn, gethostname
 from typing import Protocol, Self
 from urllib.parse import urlsplit, urlunsplit
 
-import keyring
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from keyring.errors import KeyringError
 
 from pact.crypto import jwk_thumbprint, public_jwk
 
@@ -499,9 +497,16 @@ class KeyringIdentityStore:
     service = "pact.claimant"
 
     def __init__(self, backend: CredentialBackend | None = None) -> None:
-        self.backend = (
-            backend if backend is not None else keyring.get_keyring()
-        )
+        if backend is not None:
+            self.backend = backend
+        else:
+            try:
+                import keyring
+            except ImportError as error:
+                raise IdentityStorageError(
+                    "OS credential storage requires the keyring dependency"
+                ) from error
+            self.backend = keyring.get_keyring()
 
     @staticmethod
     def _account(registry_url: str) -> str:
@@ -522,7 +527,7 @@ class KeyringIdentityStore:
                 self._account(identity.registry_url),
                 value,
             )
-        except KeyringError as error:
+        except Exception as error:
             raise IdentityStorageError(
                 "OS credential storage failed"
             ) from error
@@ -535,7 +540,7 @@ class KeyringIdentityStore:
                 self.service,
                 self._account(registry_url),
             )
-        except KeyringError as error:
+        except Exception as error:
             raise IdentityStorageError(
                 "OS credential lookup failed"
             ) from error

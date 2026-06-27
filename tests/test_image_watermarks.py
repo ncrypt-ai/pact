@@ -122,7 +122,10 @@ def register_profile(
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={"display_name": "Alice"},
+        payload={
+            "display_name": "Alice",
+            "device_fingerprint": f"test-device-{identity.key_id}",
+        },
         proof_of_work_solution=solve_pow(challenge),
     )
     service.register_profile(request)

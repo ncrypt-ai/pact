@@ -1,5 +1,7 @@
 """FastAPI application for the registry API and proof pages."""
 
+import io
+import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
@@ -8,10 +10,12 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from pact.registry import (
@@ -23,10 +27,80 @@ from pact.registry import (
 )
 from pact.server.config import default_routes
 
+_BROWSER_CORE_MODULES = (
+    "browser.py",
+    "canonical.py",
+    "crypto.py",
+    "identity.py",
+    "manifest.py",
+    "policy.py",
+    "privacy.py",
+    "registry/__init__.py",
+    "registry/app.py",
+    "registry/store.py",
+    "carriers/__init__.py",
+    "carriers/text.py",
+    "carriers/structured.py",
+    "detection/__init__.py",
+    "detection/evidence.py",
+    "detection/probes.py",
+    "detection/risk.py",
+    "detection/statistics.py",
+    "watermarks/__init__.py",
+    "watermarks/base.py",
+    "watermarks/canary.py",
+    "watermarks/invisible.py",
+    "watermarks/lexical.py",
+    "watermarks/semantic.py",
+    "watermarks/statistical.py",
+    "watermarks/syntactic.py",
+    "watermarks/textual.py",
+)
+_BROWSER_C2PA_MODULES = (
+    "carriers/c2pa.py",
+    "carriers/c2pa_text.py",
+)
+_BROWSER_DOCUMENT_MODULES = (
+    "carriers/c2pa.py",
+    "carriers/c2pa_text.py",
+)
+_BROWSER_IMAGE_MODULES = ("watermarks/image.py",)
+
 
 def _templates() -> Jinja2Templates:
     directory = Path(__file__).with_name("templates")
     return Jinja2Templates(directory=str(directory))
+
+
+def _static_directory() -> Path:
+    return Path(__file__).with_name("static")
+
+
+def _source_directory() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _browser_python_archive(feature: str) -> bytes:
+    source_directory = _source_directory()
+    modules = list(_BROWSER_CORE_MODULES)
+    if feature in {"c2pa", "documents"}:
+        modules.extend(_BROWSER_C2PA_MODULES)
+    if feature == "documents":
+        modules.extend(_BROWSER_DOCUMENT_MODULES)
+    if feature == "image-watermarks":
+        modules.extend(_BROWSER_IMAGE_MODULES)
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(
+        archive, "w", compression=zipfile.ZIP_DEFLATED
+    ) as package:
+        package.writestr(
+            "pact/__init__.py",
+            '"""Browser-safe PACT runtime bundle."""\n',
+        )
+        for module in sorted(set(modules)):
+            package.write(source_directory / module, f"pact/{module}")
+    return archive.getvalue()
 
 
 def _jsonable(value: object) -> object:
@@ -116,15 +190,23 @@ class RotationRequestModel(BaseModel):
 
 
 def create_app(
-    service: RegistryService,
+    service: RegistryService | None = None,
     *,
     public_base_url: str,
+    registry_url: str | None = None,
     local_mode: bool = False,
+    enable_workspace: bool = False,
+    cors_allowed_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
     templates = _templates()
     parsed_public_url = urlsplit(public_base_url)
+    normalized_registry_url = (
+        service.registry_url if service is not None else registry_url
+    )
+    if normalized_registry_url is None:
+        raise ValueError("registry_url is required when service is omitted")
     allowed_hosts = [parsed_public_url.hostname or "localhost"]
     if local_mode:
         allowed_hosts.extend(["127.0.0.1", "localhost"])
@@ -138,7 +220,22 @@ def create_app(
     )
     app.state.registry_service = service
     app.state.public_base_url = public_base_url.rstrip("/")
+    app.state.registry_url = normalized_registry_url
     app.state.local_mode = local_mode
+    app.state.enable_workspace = enable_workspace
+    if cors_allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_allowed_origins),
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["content-type"],
+        )
+    if enable_workspace:
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(_static_directory())),
+            name="static",
+        )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -148,7 +245,10 @@ def create_app(
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
-            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'",
+            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' https://cdn.jsdelivr.net; "
+            "worker-src 'self'; connect-src 'self' https: http://localhost:* "
+            "http://127.0.0.1:*",
         )
         if local_mode:
             response.headers.setdefault("Cache-Control", "no-store")
@@ -165,11 +265,41 @@ def create_app(
             request,
             "home.html",
             {
-                "registry_url": service.registry_url,
+                "registry_url": app.state.registry_url,
+                "workspace_enabled": enable_workspace,
                 "public_base_url": app.state.public_base_url,
                 "local_mode": local_mode,
             },
         )
+
+    @app.get("/app", response_class=HTMLResponse)
+    async def workspace(request: Request) -> HTMLResponse:
+        if not enable_workspace:
+            raise HTTPException(status_code=404, detail="workspace disabled")
+        return templates.TemplateResponse(
+            request,
+            "workspace.html",
+            {
+                "registry_url": app.state.registry_url,
+                "public_base_url": app.state.public_base_url,
+                "standalone": service is None,
+            },
+        )
+
+    @app.get("/app/pact-browser-{feature}.pyz")
+    async def browser_python_feature(feature: str) -> Response:
+        if not enable_workspace:
+            raise HTTPException(status_code=404, detail="workspace disabled")
+        if feature not in {"core", "c2pa", "documents", "image-watermarks"}:
+            raise HTTPException(status_code=404, detail="unknown feature pack")
+        return Response(
+            _browser_python_archive(feature),
+            media_type="application/zip",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    if service is None:
+        return app
 
     @app.get("/api/v1/registry")
     async def registry_info() -> dict[str, object]:

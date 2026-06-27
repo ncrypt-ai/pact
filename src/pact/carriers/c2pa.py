@@ -7,42 +7,78 @@ from ctypes import POINTER, byref, c_ubyte, string_at
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any
-
-from c2pa import (
-    Builder,
-    C2paBuilderIntent,
-    C2paDigitalSourceType,
-    C2paSignerInfo,
-    C2paSigningAlg,
-    Context,
-    Reader,
-    Signer,
-)
-from c2pa import (
-    C2paError as NativeC2paError,
-)
-from c2pa.c2pa import (
-    Stream,
-    _check_ffi_operation_result,
-    _lib,
-    format_embeddable,
-)
-from pypdf import PdfReader, PdfWriter
-from pypdf.generic import (
-    ArrayObject,
-    DictionaryObject,
-    NameObject,
-    TextStringObject,
-)
+from typing import Any, cast
 
 from pact.canonical import canonical_json
 from pact.carriers.text import CarrierError
 from pact.crypto import base64url_encode
 from pact.manifest import SignedManifest
 
-_SUPPORTED_READER_MIME_TYPES = frozenset(Reader.get_supported_mime_types())
-_SUPPORTED_BUILDER_MIME_TYPES = frozenset(Builder.get_supported_mime_types())
+_DEFAULT_READER_MIME_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+        "application/pdf",
+    }
+)
+_DEFAULT_BUILDER_MIME_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/tiff",
+        "image/webp",
+    }
+)
+
+
+def _c2pa_sdk() -> Any:
+    try:
+        import c2pa
+    except ImportError as error:
+        raise C2paError(
+            "native C2PA operations require the c2pa-python dependency"
+        ) from error
+    return c2pa
+
+
+def _c2pa_native() -> Any:
+    try:
+        from c2pa import c2pa as native
+    except ImportError as error:
+        raise C2paError(
+            "native C2PA operations require the c2pa-python dependency"
+        ) from error
+    return native
+
+
+def _pypdf() -> Any:
+    try:
+        import pypdf
+        from pypdf import generic
+    except ImportError as error:
+        raise C2paError("PDF C2PA embedding requires pypdf") from error
+    return pypdf, generic
+
+
+def _supported_reader_mime_types() -> frozenset[str]:
+    try:
+        return frozenset(_c2pa_sdk().Reader.get_supported_mime_types())
+    except C2paError:
+        return _DEFAULT_READER_MIME_TYPES
+
+
+def _supported_builder_mime_types() -> frozenset[str]:
+    try:
+        return frozenset(_c2pa_sdk().Builder.get_supported_mime_types())
+    except C2paError:
+        return _DEFAULT_BUILDER_MIME_TYPES
+
+
+_SUPPORTED_READER_MIME_TYPES = _supported_reader_mime_types()
+_SUPPORTED_BUILDER_MIME_TYPES = _supported_builder_mime_types()
+Reader: Any = None
 
 _EMBEDDED_IMAGE_MIME_TYPES = tuple(
     mime_type
@@ -85,6 +121,15 @@ _ZIP_BASED_MIME_TYPES = {
 }
 
 
+def format_embeddable(mime_type: str, manifest_bytes: bytes) -> tuple[int, bytes]:
+    """Format native C2PA manifest bytes for embeddable asset storage."""
+
+    return cast(
+        tuple[int, bytes],
+        _c2pa_native().format_embeddable(mime_type, manifest_bytes),
+    )
+
+
 class C2paError(CarrierError):
     """Raised when C2PA credential operations fail."""
 
@@ -95,22 +140,24 @@ class C2paSignerMaterial:
 
     certificate_chain_pem: bytes
     private_key_pem: bytes
-    algorithm: C2paSigningAlg = C2paSigningAlg.ES256
+    algorithm: object | None = None
     tsa_url: bytes = b""
 
-    def to_sdk_signer(self) -> Signer:
+    def to_sdk_signer(self) -> Any:
         """Create an SDK Signer from PEM material."""
 
+        sdk = _c2pa_sdk()
+        algorithm = self.algorithm or sdk.C2paSigningAlg.ES256
         try:
-            return Signer.from_info(
-                C2paSignerInfo(
-                    self.algorithm,
+            return sdk.Signer.from_info(
+                sdk.C2paSignerInfo(
+                    algorithm,
                     self.certificate_chain_pem,
                     self.private_key_pem,
                     self.tsa_url,
                 )
             )
-        except (NativeC2paError, TypeError, ValueError) as error:
+        except (sdk.C2paError, TypeError, ValueError) as error:
             raise C2paError("invalid C2PA signer material") from error
 
 
@@ -253,14 +300,15 @@ def _make_builder(
     manifest_definition: dict[str, object],
     *,
     signer_material: C2paSignerMaterial | None = None,
-) -> Builder:
+) -> Any:
+    sdk = _c2pa_sdk()
     if signer_material is None:
-        return Builder(manifest_definition)
-    context = Context.from_dict(
+        return sdk.Builder(manifest_definition)
+    context = sdk.Context.from_dict(
         {"verify": {"verify_after_sign": False}},
         signer=signer_material.to_sdk_signer(),
     )
-    return Builder(manifest_definition, context=context)
+    return sdk.Builder(manifest_definition, context=context)
 
 
 def _sign_c2pa_manifest_store_any_format(
@@ -271,8 +319,13 @@ def _sign_c2pa_manifest_store_any_format(
     signer_material: C2paSignerMaterial,
     title: str,
     claim_generator: str = "pact",
-    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+    digital_source_type: object | None = None,
 ) -> bytes:
+    sdk = _c2pa_sdk()
+    native = _c2pa_native()
+    source_type = (
+        digital_source_type or sdk.C2paDigitalSourceType.DIGITAL_CREATION
+    )
     manifest_definition = build_c2pa_manifest_definition(
         signed,
         title=title,
@@ -285,24 +338,24 @@ def _sign_c2pa_manifest_store_any_format(
     )
     builder.set_no_embed()
     builder.set_intent(
-        C2paBuilderIntent.CREATE,
-        digital_source_type=digital_source_type,
+        sdk.C2paBuilderIntent.CREATE,
+        digital_source_type=source_type,
     )
     if (
-        _lib is None
+        native._lib is None
     ):  # pragma: no cover - package initialization guarantees this
         raise C2paError("C2PA native library is not available")
     try:
-        with Stream(BytesIO(asset_bytes)) as source_stream:
-            with Stream(BytesIO()) as dest_stream:
-                result = _lib.c2pa_builder_sign_context(
+        with native.Stream(BytesIO(asset_bytes)) as source_stream:
+            with native.Stream(BytesIO()) as dest_stream:
+                result = native._lib.c2pa_builder_sign_context(
                     builder._handle,
                     mime_type.encode("utf-8"),
                     source_stream._stream,
                     dest_stream._stream,
                     byref(manifest_bytes_ptr),
                 )
-                _check_ffi_operation_result(
+                native._check_ffi_operation_result(
                     result,
                     "Error during C2PA sidecar signing",
                     check=lambda value: value < 0,
@@ -312,11 +365,11 @@ def _sign_c2pa_manifest_store_any_format(
                         "C2PA sidecar signing returned no manifest bytes"
                     )
                 return string_at(manifest_bytes_ptr, result)
-    except NativeC2paError as error:
+    except sdk.C2paError as error:
         raise C2paError(f"C2PA sidecar signing failed: {error}") from error
     finally:
         if manifest_bytes_ptr:
-            _lib.c2pa_manifest_bytes_free(manifest_bytes_ptr)
+            native._lib.c2pa_manifest_bytes_free(manifest_bytes_ptr)
         builder.close()
 
 
@@ -328,10 +381,14 @@ def embed_c2pa_image(
     signer_material: C2paSignerMaterial,
     title: str,
     claim_generator: str = "pact",
-    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+    digital_source_type: object | None = None,
 ) -> C2paAsset:
     """Embed a C2PA manifest store into a supported image asset."""
 
+    sdk = _c2pa_sdk()
+    source_type = (
+        digital_source_type or sdk.C2paDigitalSourceType.DIGITAL_CREATION
+    )
     if mime_type not in _EMBEDDED_IMAGE_MIME_TYPES:
         raise C2paError(
             "embedded C2PA writing is only available for supported image formats"
@@ -347,8 +404,8 @@ def embed_c2pa_image(
             signer_material=signer_material,
         ) as builder:
             builder.set_intent(
-                C2paBuilderIntent.CREATE,
-                digital_source_type=digital_source_type,
+                sdk.C2paBuilderIntent.CREATE,
+                digital_source_type=source_type,
             )
             with signer_material.to_sdk_signer() as signer:
                 import io
@@ -361,7 +418,7 @@ def embed_c2pa_image(
                     asset_bytes=dest.getvalue(),
                     manifest_store_bytes=manifest_store,
                 )
-    except NativeC2paError as error:
+    except sdk.C2paError as error:
         raise C2paError(f"C2PA image embedding failed: {error}") from error
 
 
@@ -376,14 +433,17 @@ def embed_c2pa_manifest_in_pdf(
 
     _require_manifest_store_bytes(manifest_store_bytes)
     try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-        writer = PdfWriter()
+        pypdf, generic = _pypdf()
+        reader = pypdf.PdfReader(BytesIO(pdf_bytes))
+        writer = pypdf.PdfWriter()
         writer.clone_document_from_reader(reader)
         embedded = writer.add_attachment(filename, manifest_store_bytes)
-        embedded.subtype = NameObject("/application/c2pa")
-        embedded.associated_file_relationship = NameObject("/C2PA_Manifest")
-        embedded.description = TextStringObject(description)
-        writer.root_object[NameObject("/AF")] = ArrayObject(
+        embedded.subtype = generic.NameObject("/application/c2pa")
+        embedded.associated_file_relationship = generic.NameObject(
+            "/C2PA_Manifest"
+        )
+        embedded.description = generic.TextStringObject(description)
+        writer.root_object[generic.NameObject("/AF")] = generic.ArrayObject(
             [embedded.pdf_object.indirect_reference]
         )
         destination = BytesIO()
@@ -405,7 +465,7 @@ def sign_c2pa_manifest_store(
     signer_material: C2paSignerMaterial,
     title: str,
     claim_generator: str = "pact",
-    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+    digital_source_type: object | None = None,
 ) -> bytes:
     """Create a detached C2PA manifest store for an asset."""
 
@@ -422,9 +482,10 @@ def sign_c2pa_manifest_store(
         )
         try:
             _size, embeddable = format_embeddable(
-                "application/pdf", raw_manifest
+                "application/pdf",
+                raw_manifest,
             )
-        except NativeC2paError as error:
+        except _c2pa_sdk().C2paError as error:
             raise C2paError(
                 f"C2PA PDF manifest formatting failed: {error}"
             ) from error
@@ -448,7 +509,7 @@ def sign_c2pa_document(
     signer_material: C2paSignerMaterial,
     title: str,
     claim_generator: str = "pact",
-    digital_source_type: C2paDigitalSourceType = C2paDigitalSourceType.DIGITAL_CREATION,
+    digital_source_type: object | None = None,
 ) -> C2paAsset:
     """Sign a PDF or document asset, embedding when the container supports it."""
 
@@ -481,9 +542,10 @@ def extract_c2pa_manifest_from_pdf(pdf_bytes: bytes) -> bytes:
     """Extract the active C2PA manifest store from a PDF embedded file stream."""
 
     try:
-        reader = PdfReader(BytesIO(pdf_bytes))
+        pypdf, generic = _pypdf()
+        reader = pypdf.PdfReader(BytesIO(pdf_bytes))
         root = reader.trailer["/Root"].get_object()
-        if not isinstance(root, DictionaryObject):
+        if not isinstance(root, generic.DictionaryObject):
             raise C2paError("PDF catalog is malformed")
         associated_files = root.get("/AF")
         if associated_files is None:
@@ -585,17 +647,20 @@ def read_c2pa_asset(
     """Read a C2PA manifest store from an asset path or in-memory bytes."""
 
     try:
+        sdk = _c2pa_sdk()
         if isinstance(asset, (str, Path)):
-            reader = Reader(asset)
+            reader_class = Reader or sdk.Reader
+            reader = reader_class(asset)
             result_mime_type = mime_type or Path(asset).suffix.lstrip(".")
         else:
             if mime_type is None:
                 raise C2paError("mime_type is required when reading raw bytes")
             import io
 
-            reader = Reader(mime_type, io.BytesIO(asset))
+            reader_class = Reader or sdk.Reader
+            reader = reader_class(mime_type, io.BytesIO(asset))
             result_mime_type = mime_type
-    except NativeC2paError as error:
+    except sdk.C2paError as error:
         raise C2paError(f"C2PA asset reading failed: {error}") from error
 
     with reader:

@@ -35,6 +35,54 @@ prompts for it. File-backed identity commands also read
 Use ``--database .pact-registry/registry.sqlite3`` for a local persistent
 SQLite database.
 
+Browser workspace
+-----------------
+
+The interactive browser workspace is optional. A registry can serve only the
+JSON API and proof pages, or it can also expose ``/app``:
+
+.. code-block:: bash
+
+   pact registry serve \
+     --registry http://127.0.0.1:8000 \
+     --data-dir .pact-registry \
+     --public-base-url http://127.0.0.1:8000 \
+     --host 127.0.0.1 \
+     --port 8000 \
+     --database :memory \
+     --enable-workspace
+
+The workspace runs PACT's Python logic in Pyodide inside a Web Worker. The
+JavaScript layer is limited to browser plumbing: file input/output, registry
+requests, local browser storage, and page updates. Feature packs are loaded on
+demand so identity, manifest, probe, C2PA carrier, PDF, and document workflows
+can stay aligned with the CLI without loading every dependency at startup.
+
+The workspace can also be hosted without a local registry service:
+
+.. code-block:: bash
+
+   pact web \
+     --remote-registry https://registry.example \
+     --port 8000
+
+In this mode the browser sends signed requests directly to the remote registry.
+The remote registry must allow the workspace origin:
+
+.. code-block:: bash
+
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir .pact-registry \
+     --public-base-url https://registry.example \
+     --cors-allowed-origin http://127.0.0.1:8000
+
+``pact[server]`` installs the registry API/proof-page dependencies.
+``pact[web]`` installs the same server dependencies needed to host the
+interactive workspace. C2PA and PDF/document carrier functionality remain in
+``pact[c2pa]`` and are loaded by the browser workspace as feature packs where
+the runtime supports them.
+
 AWS serverless runtime
 ----------------------
 

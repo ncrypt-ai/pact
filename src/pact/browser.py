@@ -1,0 +1,352 @@
+"""Browser-facing helpers used by the Pyodide workspace."""
+
+import base64
+import json
+import os
+from dataclasses import asdict
+from datetime import datetime
+from typing import cast
+from uuid import UUID
+
+from pact.canonical import CanonicalizationProfile
+from pact.carriers.c2pa import (
+    C2paError,
+    embed_c2pa_manifest_in_pdf,
+    embed_c2pa_manifest_in_zip_document,
+    extract_c2pa_manifest_from_pdf,
+    extract_c2pa_manifest_from_zip_document,
+)
+from pact.detection import (
+    ProbeEvidencePackage,
+    ProbeSet,
+    analyze_probe_responses,
+    create_probe_set,
+    responses_from_jsonl,
+)
+from pact.identity import ClaimantIdentity
+from pact.manifest import (
+    Manifest,
+    SignedManifest,
+    sign_manifest,
+    verify_manifest,
+)
+from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
+from pact.privacy import audit_signed_manifest_publication
+from pact.registry import ChallengePurpose, MutationChallenge, MutationRequest
+
+
+def _b64(value: bytes) -> str:
+    return base64.b64encode(value).decode("ascii")
+
+
+def _unb64(value: str) -> bytes:
+    return base64.b64decode(value.encode("ascii"), validate=True)
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _identity(
+    registry_url: str,
+    encrypted_pkcs8_b64: str,
+    password: str,
+) -> ClaimantIdentity:
+    return ClaimantIdentity.import_pkcs8(
+        registry_url,
+        _unb64(encrypted_pkcs8_b64),
+        password,
+    )
+
+
+def create_identity(registry_url: str, password: str) -> str:
+    """Create a claimant identity and return an encrypted browser vault blob."""
+
+    identity = ClaimantIdentity.generate(registry_url)
+    return _json(
+        {
+            "registry_url": identity.registry_url,
+            "key_id": identity.key_id,
+            "public_jwk": identity.public_jwk,
+            "encrypted_pkcs8_b64": _b64(identity.export_pkcs8(password)),
+        }
+    )
+
+
+def import_identity(
+    registry_url: str,
+    encrypted_pkcs8_b64: str,
+    password: str,
+) -> str:
+    """Validate an encrypted identity export and return public identity data."""
+
+    identity = _identity(registry_url, encrypted_pkcs8_b64, password)
+    return _json(
+        {
+            "registry_url": identity.registry_url,
+            "key_id": identity.key_id,
+            "public_jwk": identity.public_jwk,
+        }
+    )
+
+
+def rotate_identity(
+    registry_url: str,
+    encrypted_pkcs8_b64: str,
+    password: str,
+) -> str:
+    """Create a replacement claimant identity for the same registry."""
+
+    current = _identity(registry_url, encrypted_pkcs8_b64, password)
+    replacement = current.rotate()
+    return _json(
+        {
+            "registry_url": replacement.registry_url,
+            "previous_key_id": current.key_id,
+            "replacement_key_id": replacement.key_id,
+            "public_jwk": replacement.public_jwk,
+            "encrypted_pkcs8_b64": _b64(replacement.export_pkcs8(password)),
+        }
+    )
+
+
+def challenge_from_json(value: str) -> MutationChallenge:
+    """Parse a registry challenge JSON response."""
+
+    data = json.loads(value)
+    return MutationChallenge(
+        registry_url=data["registry_url"],
+        challenge_id=UUID(data["challenge_id"]),
+        purpose=ChallengePurpose(data["purpose"]),
+        issued_at=datetime.fromisoformat(data["issued_at"]),
+        expires_at=datetime.fromisoformat(data["expires_at"]),
+        challenge_nonce=data["challenge_nonce"],
+        difficulty=data["difficulty"],
+        bound_key_id=data.get("bound_key_id"),
+    )
+
+
+def solve_pow(challenge_json: str) -> int:
+    """Return the first proof-of-work solution for a challenge."""
+
+    challenge = challenge_from_json(challenge_json)
+    solution = 0
+    while not challenge.verify_solution(solution):
+        solution += 1
+    return solution
+
+
+def create_mutation_request(
+    registry_url: str,
+    encrypted_pkcs8_b64: str,
+    password: str,
+    challenge_json: str,
+    payload_json: str,
+) -> str:
+    """Create a signed registry mutation request."""
+
+    identity = _identity(registry_url, encrypted_pkcs8_b64, password)
+    challenge = challenge_from_json(challenge_json)
+    request = MutationRequest.create(
+        identity,
+        challenge,
+        payload=cast(dict[str, object], json.loads(payload_json)),
+        proof_of_work_solution=solve_pow(challenge_json),
+    )
+    return _json(
+        {
+            "challenge_id": str(request.challenge_id),
+            "claimant_public_jwk": request.claimant_public_jwk,
+            "proof_of_work_solution": request.proof_of_work_solution,
+            "payload": request.payload,
+            "signature": request.signature,
+        }
+    )
+
+
+def sign_content(
+    registry_url: str,
+    encrypted_pkcs8_b64: str,
+    password: str,
+    content_b64: str,
+    registry_root_fingerprint: str,
+    mime_type: str,
+    canonicalization: str = "pact.text.v1",
+    policy: str = "no-ai-training",
+    carrier: str = "visible",
+) -> str:
+    """Create a signed manifest and nonce for browser-selected content."""
+
+    identity = _identity(registry_url, encrypted_pkcs8_b64, password)
+    content = _unb64(content_b64)
+    nonce = os.urandom(32)
+    permission_value = (
+        PermissionValue.NOT_ALLOWED
+        if policy == "no-ai-training"
+        else PermissionValue.ALLOWED
+    )
+    manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint=registry_root_fingerprint,
+        content=content,
+        mime_type=mime_type,
+        canonicalization=CanonicalizationProfile(canonicalization),
+        policy=Policy(
+            (
+                PolicyEntry(
+                    Permission.GENERATIVE_TRAINING,
+                    permission_value,
+                ),
+            )
+        ),
+        carriers=(carrier,),
+        nonce=nonce,
+    )
+    signed = sign_manifest(manifest, identity)
+    return _json(
+        {
+            "claim_id": str(signed.manifest.claim_id),
+            "manifest_json": signed.to_json().decode("utf-8"),
+            "nonce_b64": _b64(nonce),
+        }
+    )
+
+
+def verify_manifest_json(
+    signed_manifest_json: str,
+    public_jwk_json: str,
+    content_b64: str | None = None,
+    nonce_b64: str | None = None,
+) -> str:
+    """Verify a signed manifest and optional content binding."""
+
+    report = verify_manifest(
+        SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
+        cast(dict[str, object], json.loads(public_jwk_json)),
+        content=None if content_b64 is None else _unb64(content_b64),
+        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+    )
+    return _json(asdict(report))
+
+
+def privacy_audit(
+    signed_manifest_json: str,
+    content_b64: str | None = None,
+    nonce_b64: str | None = None,
+) -> str:
+    """Audit a signed manifest before it is registered publicly."""
+
+    report = audit_signed_manifest_publication(
+        SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
+        content=None if content_b64 is None else _unb64(content_b64),
+        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+    )
+    return _json(report.to_dict())
+
+
+def create_probes(
+    protected_json: str,
+    control_json: str,
+    target_model: str,
+    claim_id: str | None = None,
+) -> str:
+    """Create a model-probing prompt set from protected and control text."""
+
+    probe_set = create_probe_set(
+        protected_texts=tuple(json.loads(protected_json)),
+        control_texts=tuple(json.loads(control_json)),
+        target_model=target_model,
+        claim_id=claim_id,
+    )
+    return _json(probe_set.to_dict())
+
+
+def analyze_probes(
+    probe_set_json: str,
+    responses_jsonl: str,
+    false_positive_threshold: float = 0.05,
+) -> str:
+    """Analyze third-party model responses against a probe set."""
+
+    probe_set = ProbeSet.from_dict(json.loads(probe_set_json))
+    responses = responses_from_jsonl(responses_jsonl)
+    analysis = analyze_probe_responses(
+        probe_set,
+        responses,
+        false_positive_threshold=false_positive_threshold,
+    )
+    package = ProbeEvidencePackage.create(
+        probe_set=probe_set,
+        responses=responses,
+        analysis=analysis,
+    )
+    return _json(package.to_dict())
+
+
+def embed_pdf_manifest(pdf_b64: str, manifest_store_b64: str) -> str:
+    """Embed a C2PA manifest store into a PDF embedded file stream."""
+
+    result = embed_c2pa_manifest_in_pdf(
+        _unb64(pdf_b64),
+        _unb64(manifest_store_b64),
+    )
+    return _json(
+        {
+            "mime_type": result.mime_type,
+            "asset_b64": _b64(result.asset_bytes),
+            "manifest_store_b64": _b64(result.manifest_store_bytes),
+        }
+    )
+
+
+def extract_pdf_manifest(pdf_b64: str) -> str:
+    """Extract a C2PA manifest store from a PDF embedded file stream."""
+
+    manifest_store = extract_c2pa_manifest_from_pdf(_unb64(pdf_b64))
+    return _json({"manifest_store_b64": _b64(manifest_store)})
+
+
+def embed_zip_document_manifest(
+    asset_b64: str,
+    mime_type: str,
+    manifest_store_b64: str,
+) -> str:
+    """Embed a C2PA manifest store into a ZIP-based document."""
+
+    result = embed_c2pa_manifest_in_zip_document(
+        _unb64(asset_b64),
+        mime_type,
+        _unb64(manifest_store_b64),
+    )
+    return _json(
+        {
+            "mime_type": result.mime_type,
+            "asset_b64": _b64(result.asset_bytes),
+            "manifest_store_b64": _b64(result.manifest_store_bytes),
+        }
+    )
+
+
+def extract_zip_document_manifest(asset_b64: str) -> str:
+    """Extract a C2PA manifest store from a ZIP-based document."""
+
+    return _json(
+        {
+            "manifest_store_b64": _b64(
+                extract_c2pa_manifest_from_zip_document(_unb64(asset_b64))
+            )
+        }
+    )
+
+
+def unavailable_native_c2pa() -> str:
+    """Explain native C2PA limitations in browser runtimes."""
+
+    try:
+        __import__("c2pa")
+    except ImportError as error:
+        raise C2paError(
+            "native C2PA signing/reading is unavailable in this browser "
+            "runtime unless the official C2PA SDK can be loaded"
+        ) from error
+    return _json({"available": True})

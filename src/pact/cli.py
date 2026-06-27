@@ -14,10 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-import uvicorn
-
 from pact.canonical import CanonicalizationProfile
-from pact.carriers.c2pa import C2paError, read_c2pa_asset
 from pact.detection import (
     ProbeEvidencePackage,
     ProbeSet,
@@ -62,7 +59,6 @@ from pact.watermarks import (
     decode_image_soft_binding,
     embed_image_soft_binding,
 )
-from pact.web import create_app
 
 if TYPE_CHECKING:
     from pact.watermarks.base import TextWatermarkPlugin
@@ -689,7 +685,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
     identity = _load_identity(args)
-    payload: dict[str, object] = {}
+    try:
+        binding = _device_binding_store().bind_imported_identity(identity)
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
+    payload: dict[str, object] = {
+        "device_fingerprint": binding.device_fingerprint,
+    }
     display_name = cast(str | None, args.display_name)
     if display_name:
         payload["display_name"] = display_name
@@ -772,6 +774,8 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
             print(_serialize_json(decoded.to_dict()))
             return 0
     try:
+        from pact.carriers.c2pa import C2paError, read_c2pa_asset
+
         result = read_c2pa_asset(payload, mime_type=mime_type)
     except C2paError as error:
         raise SystemExit(str(error)) from error
@@ -1037,7 +1041,13 @@ def _serve(
     local_mode: bool,
     admin_jwk_files: list[str],
     database: str,
+    enable_workspace: bool,
+    cors_allowed_origins: tuple[str, ...] = (),
 ) -> int:
+    import uvicorn
+
+    from pact.web import create_app
+
     service = _bootstrap_service(
         data_dir,
         registry_url,
@@ -1048,6 +1058,30 @@ def _serve(
         service,
         public_base_url=public_base_url,
         local_mode=local_mode,
+        enable_workspace=enable_workspace,
+        cors_allowed_origins=cors_allowed_origins,
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
+    return 0
+
+
+def _serve_workspace_only(
+    *,
+    registry_url: str,
+    host: str,
+    port: int,
+    public_base_url: str,
+) -> int:
+    import uvicorn
+
+    from pact.web import create_app
+
+    app = create_app(
+        None,
+        public_base_url=public_base_url,
+        registry_url=registry_url,
+        local_mode=True,
+        enable_workspace=True,
     )
     uvicorn.run(app, host=host, port=port, log_level="info")
     return 0
@@ -1066,11 +1100,21 @@ def _cmd_registry_serve(args: argparse.Namespace) -> int:
         local_mode=False,
         admin_jwk_files=args.admin_jwk_file,
         database=_resolve_database(args),
+        enable_workspace=bool(args.enable_workspace),
+        cors_allowed_origins=tuple(args.cors_allowed_origin),
     )
 
 
 def _cmd_web(args: argparse.Namespace) -> int:
     port = args.port
+    remote_registry = cast(str | None, args.remote_registry)
+    if remote_registry:
+        return _serve_workspace_only(
+            registry_url=normalize_registry_url(remote_registry),
+            host="127.0.0.1",
+            port=port,
+            public_base_url=f"http://127.0.0.1:{port}",
+        )
     registry_url = _resolve_registry_url(args)
     public_base_url = f"http://127.0.0.1:{port}"
     data_dir = _resolve_data_dir(args)
@@ -1092,6 +1136,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
         local_mode=True,
         admin_jwk_files=args.admin_jwk_file,
         database=_resolve_database(args),
+        enable_workspace=True,
     )
 
 
@@ -1563,6 +1608,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOCAL_DATABASE,
         help="SQLite database path, or :memory / :memory: for ephemeral state.",
     )
+    serve.add_argument(
+        "--enable-workspace",
+        action="store_true",
+        help=(
+            "Serve the interactive browser workspace with the registry API. "
+            "Omit to expose only the API and proof pages."
+        ),
+    )
+    serve.add_argument(
+        "--cors-allowed-origin",
+        action="append",
+        default=[],
+        help=(
+            "Browser origin allowed to call this registry API. Repeat for "
+            "standalone web interfaces hosted on multiple origins."
+        ),
+    )
     serve.set_defaults(handler=_cmd_registry_serve)
     register_profile = registry_subparsers.add_parser(
         "register-profile",
@@ -1646,6 +1708,13 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument(
         "--registry",
         help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    web.add_argument(
+        "--remote-registry",
+        help=(
+            "Serve only the browser workspace and point it at this external "
+            "registry URL."
+        ),
     )
     web.add_argument(
         "--data-dir",
