@@ -106,9 +106,9 @@ class InvisibleLocator:
 
     claim_id: UUID
     registry_root_fingerprint: str
-    nonce: bytes
     manifest_digest: str
     checksum: str
+    public_nonce: bytes | None = None
     version: str = "1"
 
     def __post_init__(self) -> None:
@@ -122,19 +122,27 @@ class InvisibleLocator:
             raise CarrierError(
                 "locator digests must be SHA-256 base64url"
             ) from error
-        if len(self.nonce) != 32:
-            raise CarrierError("locator nonce must be 32 bytes")
+        if self.public_nonce is not None and len(self.public_nonce) != 32:
+            raise CarrierError("locator public_nonce must be 32 bytes")
         if self.checksum != _checksum(cast(JsonValue, self._unsigned_dict())):
             raise CarrierError("locator checksum does not match payload")
 
     def _unsigned_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "version": self.version,
             "claim_id": str(self.claim_id),
             "registry_root_fingerprint": self.registry_root_fingerprint,
-            "nonce": base64url_encode(self.nonce),
             "manifest_digest": self.manifest_digest,
         }
+        if self.public_nonce is not None:
+            result["public_nonce"] = base64url_encode(self.public_nonce)
+        return result
+
+    @property
+    def nonce(self) -> bytes | None:
+        """Backward-compatible alias for the disclosed locator nonce."""
+
+        return self.public_nonce
 
     def to_dict(self) -> dict[str, object]:
         """Return the locator payload as a JSON-compatible mapping."""
@@ -151,34 +159,43 @@ class InvisibleLocator:
         encoded = bits.replace("0", _BIT_ZERO).replace("1", _BIT_ONE)
         return f"{_FRAME_START}{encoded}{_FRAME_END}"
 
-    def matches_manifest(self, manifest: Manifest, nonce: bytes) -> bool:
+    def matches_manifest(
+        self,
+        manifest: Manifest,
+        public_nonce: bytes | None = None,
+    ) -> bool:
         """Check whether a locator belongs to the provided manifest."""
 
         return (
             self.claim_id == manifest.claim_id
             and self.registry_root_fingerprint
             == manifest.registry_root_fingerprint
-            and self.nonce == nonce
+            and (
+                public_nonce is None
+                or self.public_nonce is None
+                or self.public_nonce == public_nonce
+            )
             and self.manifest_digest == _manifest_digest(manifest)
         )
 
     @classmethod
-    def create(cls, manifest: Manifest, nonce: bytes) -> Self:
-        """Create a locator from a manifest and its private nonce."""
+    def create(cls, manifest: Manifest, public_nonce: bytes | None) -> Self:
+        """Create a locator from a manifest and optional disclosed nonce."""
 
-        unsigned: JsonValue = {
+        unsigned: dict[str, object] = {
             "version": "1",
             "claim_id": str(manifest.claim_id),
             "registry_root_fingerprint": manifest.registry_root_fingerprint,
-            "nonce": base64url_encode(nonce),
             "manifest_digest": _manifest_digest(manifest),
         }
+        if public_nonce is not None:
+            unsigned["public_nonce"] = base64url_encode(public_nonce)
         return cls(
             claim_id=manifest.claim_id,
             registry_root_fingerprint=manifest.registry_root_fingerprint,
-            nonce=nonce,
             manifest_digest=unsigned["manifest_digest"],
-            checksum=_checksum(unsigned),
+            checksum=_checksum(cast(JsonValue, unsigned)),
+            public_nonce=public_nonce,
         )
 
     @classmethod
@@ -190,6 +207,7 @@ class InvisibleLocator:
             "claim_id",
             "registry_root_fingerprint",
             "nonce",
+            "public_nonce",
             "manifest_digest",
             "checksum",
         }
@@ -200,7 +218,7 @@ class InvisibleLocator:
             )
         claim_id = value.get("claim_id")
         version = value.get("version")
-        nonce = value.get("nonce")
+        public_nonce = value.get("public_nonce", value.get("nonce"))
         registry_root_fingerprint = value.get("registry_root_fingerprint")
         manifest_digest = value.get("manifest_digest")
         checksum = value.get("checksum")
@@ -208,8 +226,8 @@ class InvisibleLocator:
             raise CarrierError("claim_id must be a string")
         if not isinstance(version, str):
             raise CarrierError("version must be a string")
-        if not isinstance(nonce, str):
-            raise CarrierError("nonce must be a string")
+        if public_nonce is not None and not isinstance(public_nonce, str):
+            raise CarrierError("public_nonce must be a string")
         if not isinstance(registry_root_fingerprint, str):
             raise CarrierError("registry_root_fingerprint must be a string")
         if not isinstance(manifest_digest, str):
@@ -217,17 +235,21 @@ class InvisibleLocator:
         if not isinstance(checksum, str):
             raise CarrierError("checksum must be a string")
         try:
-            nonce_bytes = base64url_decode(nonce, length=32)
+            nonce_bytes = (
+                None
+                if public_nonce is None
+                else base64url_decode(public_nonce, length=32)
+            )
         except CryptographyError as error:
             raise CarrierError(
-                "nonce must be a 32-byte base64url value"
+                "public_nonce must be a 32-byte base64url value"
             ) from error
         return cls(
             claim_id=UUID(claim_id),
             registry_root_fingerprint=registry_root_fingerprint,
-            nonce=nonce_bytes,
             manifest_digest=manifest_digest,
             checksum=checksum,
+            public_nonce=nonce_bytes,
             version=version,
         )
 
@@ -296,7 +318,7 @@ def embed_text_carrier(
     content: bytes | str,
     signed: SignedManifest,
     *,
-    nonce: bytes,
+    nonce: bytes | None = None,
     mode: CarrierMode = CarrierMode.BOTH,
     secret: bytes | str | None = None,
     plugins: tuple[TextWatermarkPlugin, ...] = (),
@@ -307,6 +329,8 @@ def embed_text_carrier(
     if signed.manifest.canonicalization is not CanonicalizationProfile.TEXT_V1:
         raise CarrierError("text carriers require pact.text.v1 manifests")
     if mode is CarrierMode.EXPERIMENTAL:
+        if nonce is None:
+            raise CarrierError("experimental text carriers require a nonce")
         if secret is None:
             raise CarrierError("experimental text carriers require a secret")
         if not plugins:
@@ -335,13 +359,18 @@ def embed_text_carrier(
 
     canonical_content = _canonical_text_bytes(content)
     body = canonical_content.decode("utf-8")
-    locator = InvisibleLocator.create(signed.manifest, nonce).to_zero_width()
     manifest_json = signed.to_json().decode("utf-8")
     if mode is CarrierMode.VISIBLE:
         result = _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body
     elif mode is CarrierMode.INVISIBLE:
+        locator = InvisibleLocator.create(
+            signed.manifest, nonce
+        ).to_zero_width()
         result = body + locator
     else:
+        locator = InvisibleLocator.create(
+            signed.manifest, nonce
+        ).to_zero_width()
         result = (
             _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body + locator
         )

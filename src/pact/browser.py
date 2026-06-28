@@ -274,6 +274,7 @@ def sign_content(
     actions_json: str = "[]",
     ingredients_json: str = "[]",
     policy_json: str | None = None,
+    disclose_nonce: bool = True,
 ) -> str:
     """Create a signed manifest and nonce for browser-selected content."""
 
@@ -298,6 +299,7 @@ def sign_content(
         ),
         source_url=source_url or None,
         nonce=nonce,
+        disclose_nonce=disclose_nonce,
     )
     signed = sign_manifest(manifest, identity)
     return _json(
@@ -305,6 +307,8 @@ def sign_content(
             "claim_id": str(signed.manifest.claim_id),
             "manifest_json": signed.to_json().decode("utf-8"),
             "nonce_b64": _b64(nonce),
+            "nonce_disclosure": "public" if disclose_nonce else "private",
+            "public_content_verifiable": disclose_nonce,
         }
     )
 
@@ -447,6 +451,7 @@ def embed_signed_manifest_carrier(
     asset_b64: str,
     mime_type: str,
     signed_manifest_json: str,
+    nonce_b64: str | None = None,
 ) -> str:
     """Embed a PACT signed manifest in a browser-provided asset."""
 
@@ -459,13 +464,33 @@ def embed_signed_manifest_carrier(
 
     asset = _unb64(asset_b64)
     signed = SignedManifest.from_json(signed_manifest_json.encode("utf-8"))
+    nonce = (
+        _unb64(nonce_b64)
+        if nonce_b64 is not None
+        else signed.manifest.content_binding.public_nonce_bytes()
+    )
     if mime_type in {"text/html", "application/xhtml+xml"}:
-        embedded = embed_html_carrier(asset, signed)
+        embedded = embed_html_carrier(
+            asset,
+            signed,
+            nonce=nonce,
+            include_locator=nonce is not None,
+        )
     elif mime_type in {"application/xml", "text/xml", "image/svg+xml"}:
-        embedded = embed_xml_carrier(asset, signed)
+        embedded = embed_xml_carrier(
+            asset,
+            signed,
+            nonce=nonce,
+            include_locator=nonce is not None,
+        )
     elif mime_type.startswith("text/"):
         embedded = embed_text_carrier(
-            asset, signed, nonce=b"", mode=CarrierMode.VISIBLE
+            asset,
+            signed,
+            nonce=nonce,
+            mode=CarrierMode.BOTH
+            if nonce is not None
+            else CarrierMode.VISIBLE,
         )
     elif mime_type == "application/pdf":
         from pact.carriers.c2pa import embed_c2pa_manifest_in_pdf

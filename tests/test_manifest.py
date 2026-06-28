@@ -92,7 +92,22 @@ def test_content_binding_create_verify_and_round_trip() -> None:
         b"changed", CanonicalizationProfile.TEXT_V1, NONCE
     )
     assert ContentBinding.from_dict(binding.to_dict()) == binding
-    assert "nonce" not in binding.to_dict()
+    assert binding.public_nonce_bytes() == NONCE
+    assert binding.publicly_verifiable
+    assert binding.to_dict()["public_nonce"] == base64url_encode(NONCE)
+
+
+def test_private_content_binding_omits_public_nonce() -> None:
+    binding = ContentBinding.create(
+        CONTENT,
+        CanonicalizationProfile.TEXT_V1,
+        NONCE,
+        disclose_nonce=False,
+    )
+
+    assert binding.public_nonce is None
+    assert not binding.publicly_verifiable
+    assert "public_nonce" not in binding.to_dict()
 
 
 @pytest.mark.parametrize(
@@ -309,9 +324,36 @@ def test_sign_parse_and_verify_manifest() -> None:
     without_content = verify_manifest(parsed, identity.public_jwk)
     assert without_content.valid
     assert without_content.content_binding_valid is None
+    assert without_content.content_binding_checked is False
+    assert without_content.public_nonce_available is True
 
     without_nonce = verify_manifest(parsed, identity.public_jwk, CONTENT)
+    assert without_nonce.valid
+    assert without_nonce.content_binding_valid is True
+    assert without_nonce.content_binding_checked is True
+    assert without_nonce.errors == ()
+
+
+def test_private_nonce_manifest_requires_nonce_for_content() -> None:
+    identity = make_identity()
+    manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint=ROOT_FINGERPRINT,
+        content=CONTENT,
+        mime_type="text/plain",
+        canonicalization=CanonicalizationProfile.TEXT_V1,
+        policy=make_policy(),
+        nonce=NONCE,
+        disclose_nonce=False,
+    )
+    signed = sign_manifest(manifest, identity)
+
+    without_nonce = verify_manifest(signed, identity.public_jwk, CONTENT)
+
     assert not without_nonce.valid
+    assert without_nonce.content_binding_valid is False
+    assert without_nonce.content_binding_checked is False
+    assert without_nonce.public_nonce_available is False
     assert without_nonce.errors == ("content binding nonce is required",)
 
 

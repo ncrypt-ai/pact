@@ -13,6 +13,7 @@ from pact import (
     PermissionValue,
     Policy,
     PolicyEntry,
+    base64url_encode,
     embed_text_carrier,
     sign_manifest,
 )
@@ -99,9 +100,12 @@ def test_cli_identity_sign_verify_and_inspect_flow(
         == 0
     )
     assert manifest_path.exists()
-    assert nonce_path.exists()
+    assert not nonce_path.exists()
     sign_output = json.loads(capsys.readouterr().out)
     assert sign_output["manifest"] == str(manifest_path)
+    assert sign_output["nonce"] is None
+    assert sign_output["nonce_disclosure"] == "public"
+    assert sign_output["public_content_verifiable"] is True
 
     default_content_path = tmp_path / "default-name.txt"
     default_content_path.write_text("hello again\n", encoding="utf-8")
@@ -126,9 +130,38 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert default_output["manifest"] == str(
         tmp_path / "default-name.manifest.json"
     )
-    assert default_output["nonce"] == str(tmp_path / "default-name.nonce")
+    assert default_output["nonce"] is None
     assert (tmp_path / "default-name.manifest.json").exists()
-    assert (tmp_path / "default-name.nonce").exists()
+    assert not (tmp_path / "default-name.nonce").exists()
+
+    private_manifest_path = tmp_path / "private-manifest.json"
+    private_nonce_path = tmp_path / "private-nonce.bin"
+    assert (
+        main(
+            [
+                "sign",
+                str(default_content_path),
+                "--registry",
+                registry,
+                "--registry-root-fingerprint",
+                "A" * 43,
+                "--output",
+                str(private_manifest_path),
+                "--nonce-out",
+                str(private_nonce_path),
+                "--private-nonce",
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    private_output = json.loads(capsys.readouterr().out)
+    assert private_output["nonce"] == str(private_nonce_path)
+    assert private_output["nonce_disclosure"] == "private"
+    assert private_nonce_path.exists()
 
     assert (
         main(
@@ -139,8 +172,6 @@ def test_cli_identity_sign_verify_and_inspect_flow(
                 str(public_jwk_path),
                 "--content",
                 str(content_path),
-                "--nonce",
-                str(nonce_path),
             ]
         )
         == 0
@@ -186,7 +217,12 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert carrier_output["manifest"]["claim_id"] == str(
         carrier_manifest.claim_id
     )
-    assert carrier_output["source_material"]["content_binding_checked"] is True
+    assert carrier_output["reference"]["locator"]["public_nonce"] == (
+        base64url_encode(nonce)
+    )
+    assert (
+        carrier_output["source_material"]["content_binding_checked"] is False
+    )
 
     assert (
         main(
@@ -196,8 +232,6 @@ def test_cli_identity_sign_verify_and_inspect_flow(
                 str(manifest_path),
                 "--content",
                 str(content_path),
-                "--nonce",
-                str(nonce_path),
             ]
         )
         == 0

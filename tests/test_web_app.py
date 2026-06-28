@@ -293,7 +293,7 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert claim["claim_id"] in claim_page.text
     verify_page = client.get(f"/verify/claim/{claim['claim_id']}")
     assert "Claim check" in verify_page.text
-    assert "verified_claim" in verify_page.text
+    assert "claim_verified_content_unchecked" in verify_page.text
     assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
@@ -422,7 +422,9 @@ def test_web_inspect_accepts_raw_text_carrier(tmp_path: Path) -> None:
     assert inspected["reference"]["carrier"] == "text:both"
     assert inspected["reference"]["claim_id"] == claim["claim_id"]
     assert inspected["registry_claim"]["claim_id"] == claim["claim_id"]
-    assert inspected["registry_verification"]["label"] == "verified_claim"
+    assert (
+        inspected["registry_verification"]["label"] == "content_claim_verified"
+    )
     assert inspected["source_material"]["content_binding_checked"] is True
     assert inspected["source_material"]["verification"]["valid"] is True
 

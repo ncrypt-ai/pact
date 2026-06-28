@@ -101,7 +101,8 @@ def create_training_use_risk_report(
         if registry_verification.label in {
             VerificationLabel.DISPUTED,
             VerificationLabel.REVOKED,
-            VerificationLabel.UNTRUSTED_CLAIM,
+            VerificationLabel.INVALID_CLAIM_SIGNATURE,
+            VerificationLabel.CONTENT_MISMATCH,
         }:
             warnings.append(
                 "Registry verification has dispute, revocation, or trust limitations."
@@ -191,7 +192,7 @@ def _image_perceptual_signal(match: ImagePerceptualMatch) -> EvidenceSignal:
 
 
 def _registry_signal(report: ClaimVerificationReport) -> EvidenceSignal:
-    present = report.label is VerificationLabel.VERIFIED_CLAIM
+    present = report.label is VerificationLabel.CONTENT_CLAIM_VERIFIED
     return EvidenceSignal(
         kind="registry",
         label=report.label.value,

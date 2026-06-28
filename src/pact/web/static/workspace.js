@@ -503,8 +503,14 @@ function renderInspection(result, context = {}) {
     element.append(callout("A claim exists, but it has been revoked."));
   } else if (verification.disputed) {
     element.append(callout("A claim exists, but there are open or upheld disputes."));
-  } else if (verification.label === "verified_claim") {
-    element.append(callout("A verified claim exists for this media."));
+  } else if (verification.label === "content_claim_verified") {
+    element.append(callout("The claim is current and this file matches the signed content commitment."));
+  } else if (verification.label === "claim_verified_content_unchecked") {
+    element.append(callout("The claim is current, but this page has not checked the file content."));
+  } else if (verification.label === "claim_verified_content_private") {
+    element.append(callout("The claim is current, but the content check key is private. Ask the claimant for the nonce to verify this exact file."));
+  } else if (verification.label === "content_mismatch") {
+    element.append(callout("The claim is current, but this file does not match the signed content commitment."));
   } else if (reference.claim_id || manifest.claim_id) {
     element.append(callout("A claim reference exists, but registry verification is incomplete."));
   } else {
@@ -519,6 +525,10 @@ function renderInspection(result, context = {}) {
     ["Recognized", result.recognized ? "Yes" : "No"],
     ["Carrier", reference.carrier || "None found"],
     ["Claim ID", claimIdFromInspection(result) || "None found"],
+    ["What was proven", verification.label || "No registry verification"],
+    ["Claim signature", verification.manifest_signature_valid ?? "Not checked"],
+    ["Content binding", verification.content_binding_valid ?? "Not checked"],
+    ["Public content check key", verification.public_nonce_available ?? "Unknown"],
     ["Source URL", manifest.source_url || "None provided"],
     ["Requested protection", policySummary(manifest.policy)],
     [
@@ -932,7 +942,7 @@ async function previousProofForMutation(editedFile, editedMimeType) {
   return await inspectFile(editedFile, editedMimeType);
 }
 
-async function downloadEmbeddedProofCopy(fileInput, mimeType, manifestJson) {
+async function downloadEmbeddedProofCopy(fileInput, mimeType, manifestJson, nonceB64 = null) {
   const file = fileInput.files[0];
   if (!file) {
     return null;
@@ -940,7 +950,7 @@ async function downloadEmbeddedProofCopy(fileInput, mimeType, manifestJson) {
   const result = JSON.parse(
     await callPython(
       "embed_signed_manifest_carrier",
-      [await readBase64(fileInput), mimeType, manifestJson],
+      [await readBase64(fileInput), mimeType, manifestJson, nonceB64],
       "documents"
     )
   );
@@ -1444,13 +1454,17 @@ document.querySelector("#sign-content").onclick = () =>
         null,
         JSON.stringify(actions),
         "[]",
-        JSON.stringify(policy)
+        JSON.stringify(policy),
+        !document.querySelector("#keep-nonce-private").checked
       ])
     );
     signedManifest = result.manifest_json;
     nonceBase64 = result.nonce_b64;
+    const keepNoncePrivate = document.querySelector("#keep-nonce-private").checked;
     download(`${stem}.proof.json`, signedManifest);
-    downloadBase64(`${stem}.nonce`, nonceBase64);
+    if (keepNoncePrivate) {
+      downloadBase64(`${stem}.nonce`, nonceBase64);
+    }
     let claim = null;
     if (document.querySelector("#publish-after-signing").checked) {
       claim = await publishSignedManifest(signedManifest);
@@ -1463,7 +1477,8 @@ document.querySelector("#sign-content").onclick = () =>
         embeddedFilename = await downloadEmbeddedProofCopy(
           fileInput,
           mimeType,
-          signedManifest
+          signedManifest,
+          keepNoncePrivate ? null : nonceBase64
         );
       } catch (error) {
         console.warn(error);
@@ -1494,7 +1509,13 @@ document.querySelector("#sign-content").onclick = () =>
       ["Claim ID", result.claim_id],
       ["Requested protection", policySummary(policy)],
       ["Claimed actions", actions.map(actionSummary).join("; ")],
-      ["Downloaded", `${stem}.proof.json and ${stem}.nonce`],
+      [
+        "Content verification",
+        result.public_content_verifiable
+          ? "Public: proof JSON contains the content check key"
+          : "Private: nonce file required"
+      ],
+      ["Downloaded", keepNoncePrivate ? `${stem}.proof.json and ${stem}.nonce` : `${stem}.proof.json`],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"],
       ["Watermarked image", imageWatermarkDownloaded || "Not downloaded"],
       ["Published", claim ? "Yes" : "No"],
@@ -1557,14 +1578,14 @@ document.querySelector("#register-mutation").onclick = () =>
         null,
         JSON.stringify([action]),
         JSON.stringify([ingredient]),
-        JSON.stringify(policy)
+        JSON.stringify(policy),
+        true
       ])
     );
     signedManifest = result.manifest_json;
     nonceBase64 = result.nonce_b64;
     const stem = selectedFileStem(fileInput);
     download(`${stem}.proof.json`, signedManifest);
-    downloadBase64(`${stem}.nonce`, nonceBase64);
     const claim = await publishSignedManifest(signedManifest);
     document.querySelector("#revoke-claim-id").value = claim.claim_id;
     document.querySelector("#dispute-claim-id").value = claim.claim_id;
@@ -1574,7 +1595,8 @@ document.querySelector("#register-mutation").onclick = () =>
         embeddedFilename = await downloadEmbeddedProofCopy(
           fileInput,
           mimeType,
-          signedManifest
+          signedManifest,
+          nonceBase64
         );
       } catch (error) {
         console.warn(error);
@@ -1586,7 +1608,8 @@ document.querySelector("#register-mutation").onclick = () =>
       ["Requested protection", policySummary(policy)],
       ["Edit action", actionSummary(action)],
       ["Source ingredient", ingredientSummary(ingredient)],
-      ["Downloaded", `${stem}.proof.json and ${stem}.nonce`],
+      ["Content verification", "Public: proof JSON contains the content check key"],
+      ["Downloaded", `${stem}.proof.json`],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"]
     ]);
     message("Edited file signed and published as a new claim.");

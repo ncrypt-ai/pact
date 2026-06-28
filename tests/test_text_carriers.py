@@ -54,7 +54,20 @@ def test_locator_round_trip_and_matching() -> None:
     locator = InvisibleLocator.create(manifest, NONCE)
 
     assert locator.matches_manifest(manifest, NONCE)
+    assert locator.public_nonce == NONCE
+    assert locator.to_dict()["public_nonce"] == base64url_encode(NONCE)
+    assert "nonce" not in locator.to_dict()
     assert InvisibleLocator.from_zero_width(locator.to_zero_width()) == locator
+
+
+def test_locator_can_omit_public_nonce() -> None:
+    manifest, _signed = make_signed_manifest()
+    locator = InvisibleLocator.create(manifest, None)
+
+    assert locator.public_nonce is None
+    assert locator.nonce is None
+    assert "public_nonce" not in locator.to_dict()
+    assert locator.matches_manifest(manifest)
 
 
 def test_locator_rejects_tampering() -> None:

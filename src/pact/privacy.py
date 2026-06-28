@@ -104,10 +104,19 @@ def audit_signed_manifest_publication(
     *,
     content: bytes | None = None,
     nonce: bytes | None = None,
+    allow_public_nonce: bool | None = None,
     private_values: tuple[bytes | str, ...] = (),
 ) -> PrivacyAuditReport:
     """Audit a signed manifest before publishing it to a registry."""
 
+    public_nonce = signed.manifest.content_binding.public_nonce_bytes()
+    if allow_public_nonce is None:
+        allow_public_nonce = public_nonce is not None
+    marker_nonce = (
+        None
+        if allow_public_nonce and nonce is not None and nonce == public_nonce
+        else nonce
+    )
     findings: list[PrivacyFinding] = [
         PrivacyFinding(
             PrivacySeverity.INFO,
@@ -119,16 +128,31 @@ def audit_signed_manifest_publication(
             PrivacySeverity.INFO,
             "salted_commitment_disclosed",
             "$.manifest.content_binding.commitment",
-            "the public content binding is salted and does not include the nonce",
+            "the public content binding is nonce-bound and does not include raw content",
         ),
     ]
+    if public_nonce is not None:
+        findings.append(
+            PrivacyFinding(
+                PrivacySeverity.INFO
+                if allow_public_nonce
+                else PrivacySeverity.ERROR,
+                "public_content_nonce_disclosed"
+                if allow_public_nonce
+                else "nonce_disclosed",
+                "$.manifest.content_binding.public_nonce",
+                "anyone with candidate content can test whether it matches this commitment"
+                if allow_public_nonce
+                else "private nonce mode cannot publish a content verification nonce",
+            )
+        )
     _scan_json_value(
         signed.to_dict(),
         "$",
         findings,
         private_markers=_private_markers(
             content=content,
-            nonce=nonce,
+            nonce=marker_nonce,
             private_values=private_values,
         ),
     )

@@ -56,7 +56,27 @@ def test_signed_manifest_privacy_audit_allows_salted_commitment() -> None:
         finding.code
         for finding in report.findings
         if finding.severity is PrivacySeverity.INFO
-    } == {"registry_pseudonym_disclosed", "salted_commitment_disclosed"}
+    } == {
+        "registry_pseudonym_disclosed",
+        "salted_commitment_disclosed",
+        "public_content_nonce_disclosed",
+    }
+
+
+def test_private_nonce_privacy_audit_rejects_nonce_disclosure() -> None:
+    signed, content, nonce = make_signed_manifest()
+
+    report = audit_signed_manifest_publication(
+        signed,
+        content=content,
+        nonce=nonce,
+        allow_public_nonce=False,
+    )
+
+    assert report.passed is False
+    assert any(
+        finding.code == "nonce_disclosed" for finding in report.findings
+    )
 
 
 def test_public_payload_privacy_audit_rejects_private_material() -> None:

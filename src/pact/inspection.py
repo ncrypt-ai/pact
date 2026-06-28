@@ -363,7 +363,9 @@ def _source_material_report(
         )
     return {
         **source.to_dict(),
-        "content_binding_checked": content is not None and nonce is not None,
+        "content_binding_checked": bool(
+            report and report.get("content_binding_checked")
+        ),
         "verification": report,
     }
 

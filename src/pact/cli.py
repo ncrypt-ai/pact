@@ -613,6 +613,7 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     nonce_path = Path(
         cast(str | None, args.nonce_out) or _default_nonce_path(input_path)
     )
+    disclose_nonce = not bool(args.private_nonce)
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=_registry_root_fingerprint(args),
@@ -622,15 +623,22 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         policy=_default_policy(args.policy),
         carriers=(args.carrier,) if args.carrier else (),
         nonce=nonce,
+        disclose_nonce=disclose_nonce,
     )
     signed = sign_manifest(manifest, identity)
     output_path.write_bytes(signed.to_json())
-    nonce_path.write_bytes(nonce)
+    if disclose_nonce:
+        nonce_output: str | None = None
+    else:
+        nonce_path.write_bytes(nonce)
+        nonce_output = str(nonce_path)
     print(
         _serialize_json(
             {
                 "manifest": str(output_path),
-                "nonce": str(nonce_path),
+                "nonce": nonce_output,
+                "nonce_disclosure": "public" if disclose_nonce else "private",
+                "public_content_verifiable": disclose_nonce,
                 "claim_id": str(signed.manifest.claim_id),
                 "registry_url": signed.manifest.registry_url,
                 "claimant_key_id": signed.manifest.claimant_key_id,
@@ -1358,7 +1366,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sign.add_argument(
         "--nonce-out",
-        help="Nonce output path. Defaults to INPUT_STEM.nonce.",
+        help=(
+            "Private nonce output path. Used only with --private-nonce and "
+            "defaults to INPUT_STEM.nonce."
+        ),
+    )
+    sign.add_argument(
+        "--private-nonce",
+        action="store_true",
+        help=(
+            "Do not include the content verification nonce in the signed "
+            "proof. Others can verify the claim publicly, but content binding "
+            "requires the nonce file."
+        ),
     )
     sign.add_argument(
         "--policy",
@@ -1405,7 +1425,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument(
         "--content",
-        help="Original content file. Include with --nonce to verify binding.",
+        help=(
+            "Original content file. Public-nonce proofs need only this file; "
+            "private-nonce proofs also need --nonce."
+        ),
     )
     verify.add_argument(
         "--nonce",

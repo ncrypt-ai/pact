@@ -60,7 +60,7 @@ PACT is designed to avoid these failure modes:
 - treating a readable C2PA asset as proof of trust
 - presenting provenance as an AI-content detector
 - relying on opaque central services instead of explicit registry state
-- publishing raw content, nonces, prompts, or private evidence to the registry
+- publishing raw content, private nonces, prompts, or private evidence to the registry
 - silently weakening key storage or verification for convenience
 
 ## Version and releases
@@ -133,13 +133,16 @@ pact registry register-claim ./work.manifest.json \
   --identity-password 'change-this'
 ```
 
-Verify the manifest:
+Verify the manifest. By default, the proof includes the public content
+verification nonce, so the original content file is enough:
 
 ```bash
 pact verify ./work.manifest.json \
-  --content ./work.txt \
-  --nonce ./work.nonce
+  --content ./work.txt
 ```
+
+Use `pact sign --private-nonce` when you want claim verification to be public
+but content verification to require a separately shared `.nonce` file.
 
 Inspect a manifest or raw carrier file:
 
@@ -204,7 +207,7 @@ manifest = Manifest.create(
     nonce=nonce,
 )
 signed = sign_manifest(manifest, identity)
-report = verify_manifest(signed, identity.public_jwk, content, nonce)
+report = verify_manifest(signed, identity.public_jwk, content)
 assert report.valid
 ```
 

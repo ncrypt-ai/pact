@@ -266,6 +266,14 @@
           <input id="publish-after-signing" type="checkbox" checked>
           <span>Publish proof to this registry</span>
         </label>
+        <label class="inline-choice">
+          <input id="keep-nonce-private" type="checkbox">
+          <span>
+            Extra privacy: keep the content verification key private. Others
+            can verify that the claim exists, but they need the nonce file to
+            verify that this exact file matches.
+          </span>
+        </label>
         <details>
           <summary>File type options</summary>
           <label>MIME type <input id="mime-type" placeholder="text/plain"></label>
@@ -278,8 +286,9 @@
           </label>
         </details>
         <p class="small">
-          Downloads: a proof JSON file and a nonce file. Keep both with the
-          original file if you want to verify claim ownership later.
+          By default, the proof JSON includes the content verification key so
+          anyone with the file can check the content binding. Extra privacy
+          mode downloads a separate nonce file instead.
         </p>
         <div class="actions">
           <button type="button" id="sign-content" class="primary-action">Sign file</button>
@@ -368,7 +377,7 @@
         <details>
           <summary>Claim ownership verification</summary>
           <label>Proof file <input id="manifest-file" type="file"></label>
-          <label>Nonce <input id="nonce-file" type="file"></label>
+          <label>Nonce for private proofs <input id="nonce-file" type="file"></label>
           <label>Original content <input id="verify-content-file" type="file"></label>
           <button type="button" id="verify-manifest">Check proof file</button>
         </details>

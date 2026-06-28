@@ -8,8 +8,8 @@ What verification establishes
 
 - whether the supplied public JWK has the manifest's RFC 7638 key identifier;
 - whether that key validates the ES256 signature;
-- when content and its nonce are supplied, whether the content commitment
-  matches.
+- when content and either a public proof nonce or separately supplied private
+  nonce are available, whether the content commitment matches.
 
 A valid report establishes that the holder of a registry-scoped claimant key
 signed a commitment to particular canonical content. It does not establish a
@@ -32,9 +32,14 @@ specific material.
 Trust tiers currently distinguish unauthenticated device continuity, hosted
 account status, domain verification, and third-party attestation. Claimant
 certificates are registry-issued key material and do not raise trust tier.
-Verification labels are evidence-based: ``verified_claim``,
-``partial_match``, ``untrusted_claim``, ``disputed``, ``revoked``, or
-``inconclusive``.
+Verification labels are evidence-based. ``content_claim_verified`` means the
+registry claim is current, the claimant signature is valid, and supplied
+content matches the signed commitment. ``claim_verified_content_unchecked``
+means the registry claim and signature were checked, but no content was
+checked. ``claim_verified_content_private`` means the claim is valid but the
+content check needs a private nonce. ``content_mismatch``,
+``invalid_claim_signature``, ``disputed``, ``revoked``, and
+``inconclusive`` report the corresponding weaker or negative outcomes.
 
 Key storage
 -----------
@@ -67,24 +72,25 @@ requests so a rotation can be published as an append-only registry event.
 Registry privacy boundary
 -------------------------
 
-The signed manifest contains a salted commitment but not the nonce, original
-content, unsalted content hash, or private key. The registry core persists
-public events, claimant keys, signed manifest envelopes, revocations,
-certificates, and dispute records, but it does not need private nonces or
-private keys. Content carriers and evidence packages define how an authorized
-verifier obtains a nonce.
+The signed manifest contains a nonce-bound commitment and may include a public
+content-verification nonce. A public nonce lets anyone with candidate content
+test whether it matches the signed commitment. Private nonce mode omits that
+value, so the registry can verify the claim while exact content verification
+requires the claimant to share the nonce separately. The signed manifest must
+not contain original content, unsalted content hashes, private keys, or private
+nonce values.
 
 ``audit_signed_manifest_publication`` checks a signed manifest against local
 content, nonce, and other private values before publication. It treats the
 registry-scoped claimant key identifier and salted content commitment as public
-disclosures, and reports private material such as nonces, raw content,
-unsalted content hashes, private keys, probe contents, prompts, and provider
-responses as errors. ``pact privacy audit`` exposes the same check from the
-CLI.
+disclosures, treats intentional public content nonces as an info disclosure,
+and reports private material such as private nonces, raw content, unsalted
+content hashes, private keys, probe contents, prompts, and provider responses
+as errors. ``pact privacy audit`` exposes the same check from the CLI.
 
 Claim registration accepts only a signed manifest envelope. Extra fields such
-as raw content, nonces, probe material, or responses are rejected before the
-registry appends an event.
+as raw content, private nonces, probe material, or responses are rejected
+before the registry appends an event.
 
 Registry challenge boundary
 ---------------------------

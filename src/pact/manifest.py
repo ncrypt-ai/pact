@@ -1,5 +1,6 @@
 """PACT Manifest v1 construction, signing, parsing, and verification."""
 
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -277,15 +278,23 @@ def _ingredient_list(value: object) -> tuple[C2PAIngredient, ...]:
 
 @dataclass(frozen=True, slots=True)
 class ContentBinding:
-    """A salted commitment to canonical content."""
+    """A nonce-bound commitment to canonical content."""
 
     commitment: str
     algorithm: str = "sha256-nonce-sha256"
+    public_nonce: str | None = None
 
     def __post_init__(self) -> None:
         if self.algorithm != "sha256-nonce-sha256":
             raise ManifestError("unsupported content binding algorithm")
         _validate_digest(self.commitment, "commitment")
+        if self.public_nonce is not None:
+            try:
+                base64url_decode(self.public_nonce, length=32)
+            except CryptographyError as error:
+                raise ManifestError(
+                    "public_nonce must be a 32-byte base64url value"
+                ) from error
 
     @classmethod
     def create(
@@ -293,11 +302,29 @@ class ContentBinding:
         content: bytes,
         profile: CanonicalizationProfile,
         nonce: bytes,
+        *,
+        disclose_nonce: bool = True,
     ) -> Self:
-        """Create a fresh salted binding for canonical content."""
+        """Create a fresh nonce-bound binding for canonical content."""
 
         commitment = create_content_commitment(content, profile, nonce)
-        return cls(base64url_encode(commitment))
+        return cls(
+            base64url_encode(commitment),
+            public_nonce=base64url_encode(nonce) if disclose_nonce else None,
+        )
+
+    @property
+    def publicly_verifiable(self) -> bool:
+        """Whether this binding includes the nonce needed for public checks."""
+
+        return self.public_nonce is not None
+
+    def public_nonce_bytes(self) -> bytes | None:
+        """Return the disclosed content-verification nonce, if present."""
+
+        if self.public_nonce is None:
+            return None
+        return base64url_decode(self.public_nonce, length=32)
 
     def verify(
         self,
@@ -317,10 +344,13 @@ class ContentBinding:
     def to_dict(self) -> dict[str, str]:
         """Return the binding's wire representation."""
 
-        return {
+        result = {
             "algorithm": self.algorithm,
             "commitment": self.commitment,
         }
+        if self.public_nonce is not None:
+            result["public_nonce"] = self.public_nonce
+        return result
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
@@ -328,12 +358,16 @@ class ContentBinding:
 
         _reject_unknown_fields(
             value,
-            {"algorithm", "commitment"},
+            {"algorithm", "commitment", "public_nonce"},
             "content binding",
         )
+        public_nonce = value.get("public_nonce")
+        if public_nonce is not None and not isinstance(public_nonce, str):
+            raise ManifestError("public_nonce must be a string")
         return cls(
             commitment=_required_string(value, "commitment"),
             algorithm=_required_string(value, "algorithm"),
+            public_nonce=public_nonce,
         )
 
 
@@ -449,6 +483,7 @@ class Manifest:
         licensing_url: str | None = None,
         claim_id: UUID | None = None,
         nonce: bytes,
+        disclose_nonce: bool = True,
     ) -> Self:
         """Create an unsigned manifest and content commitment."""
 
@@ -463,6 +498,7 @@ class Manifest:
                 content,
                 canonicalization,
                 nonce,
+                disclose_nonce=disclose_nonce,
             ),
             policy=policy,
             claim_meanings=claim_meanings,
@@ -746,6 +782,8 @@ class VerificationReport:
     signature_valid: bool
     key_id_valid: bool
     content_binding_valid: bool | None
+    content_binding_checked: bool
+    public_nonce_available: bool
     errors: tuple[str, ...]
 
     @property
@@ -756,6 +794,21 @@ class VerificationReport:
             self.signature_valid
             and self.key_id_valid
             and self.content_binding_valid is not False
+            and not self.errors
+        )
+
+    @property
+    def claim_signature_valid(self) -> bool:
+        """Whether the claimant key id and manifest signature are valid."""
+
+        return self.signature_valid and self.key_id_valid
+
+    @property
+    def content_claim_valid(self) -> bool:
+        """Whether the signed claim is valid and bound to supplied content."""
+
+        return (
+            self.claim_signature_valid and self.content_binding_valid is True
         )
 
 
@@ -779,6 +832,10 @@ def verify_manifest(
             signature_valid=False,
             key_id_valid=False,
             content_binding_valid=None if content is None else False,
+            content_binding_checked=False,
+            public_nonce_available=(
+                signed.manifest.content_binding.public_nonce is not None
+            ),
             errors=("claimant public key is invalid",),
         )
 
@@ -792,16 +849,25 @@ def verify_manifest(
     if not signature_valid:
         errors.append("claimant signature is invalid")
 
+    public_nonce = signed.manifest.content_binding.public_nonce_bytes()
+    public_nonce_available = public_nonce is not None
+    if nonce is not None and public_nonce is not None:
+        if not hmac.compare_digest(nonce, public_nonce):
+            errors.append("supplied nonce does not match public nonce")
+
+    verification_nonce = nonce or public_nonce
     content_binding_valid: bool | None = None
-    if content is not None and nonce is None:
+    content_binding_checked = False
+    if content is not None and verification_nonce is None:
         content_binding_valid = False
         errors.append("content binding nonce is required")
     elif content is not None:
-        assert nonce is not None
+        assert verification_nonce is not None
+        content_binding_checked = True
         content_binding_valid = signed.manifest.content_binding.verify(
             content,
             signed.manifest.canonicalization,
-            nonce,
+            verification_nonce,
         )
         if not content_binding_valid:
             errors.append("content binding does not match")
@@ -810,5 +876,7 @@ def verify_manifest(
         signature_valid,
         key_id_valid,
         content_binding_valid,
+        content_binding_checked,
+        public_nonce_available,
         tuple(errors),
     )

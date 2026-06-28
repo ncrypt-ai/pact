@@ -110,9 +110,13 @@ class TrustTier(StrEnum):
 class VerificationLabel(StrEnum):
     """Evidence-based public verification labels."""
 
-    VERIFIED_CLAIM = "verified_claim"
-    PARTIAL_MATCH = "partial_match"
-    UNTRUSTED_CLAIM = "untrusted_claim"
+    CONTENT_CLAIM_VERIFIED = "content_claim_verified"
+    CLAIM_VERIFIED_CONTENT_UNCHECKED = "claim_verified_content_unchecked"
+    CLAIM_VERIFIED_CONTENT_PRIVATE = "claim_verified_content_private"
+    CONTENT_MISMATCH = "content_mismatch"
+    CLAIM_REFERENCE_FOUND = "claim_reference_found"
+    UNREGISTERED_SIGNED_CLAIM = "unregistered_signed_claim"
+    INVALID_CLAIM_SIGNATURE = "invalid_claim_signature"
     DISPUTED = "disputed"
     REVOKED = "revoked"
     INCONCLUSIVE = "inconclusive"
@@ -918,6 +922,8 @@ class ClaimVerificationReport:
     registry_included: bool
     manifest_signature_valid: bool
     content_binding_valid: bool | None
+    content_binding_checked: bool
+    public_nonce_available: bool
     revoked: bool
     disputed: bool
     open_disputes: int
@@ -928,9 +934,19 @@ class ClaimVerificationReport:
 
     @property
     def verified(self) -> bool:
-        """Whether the claim is currently verified by registry evidence."""
+        """Whether registry evidence verifies this exact content claim."""
 
-        return self.label is VerificationLabel.VERIFIED_CLAIM
+        return self.label is VerificationLabel.CONTENT_CLAIM_VERIFIED
+
+    @property
+    def claim_verified(self) -> bool:
+        """Whether registry evidence verifies the signed claim itself."""
+
+        return self.label in {
+            VerificationLabel.CONTENT_CLAIM_VERIFIED,
+            VerificationLabel.CLAIM_VERIFIED_CONTENT_UNCHECKED,
+            VerificationLabel.CLAIM_VERIFIED_CONTENT_PRIVATE,
+        }
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-compatible verification report."""
@@ -943,6 +959,8 @@ class ClaimVerificationReport:
             "registry_included": self.registry_included,
             "manifest_signature_valid": self.manifest_signature_valid,
             "content_binding_valid": self.content_binding_valid,
+            "content_binding_checked": self.content_binding_checked,
+            "public_nonce_available": self.public_nonce_available,
             "revoked": self.revoked,
             "disputed": self.disputed,
             "open_disputes": self.open_disputes,
@@ -1946,25 +1964,38 @@ class RegistryService:
             nonce,
         )
         disputed = open_disputes > 0 or upheld_disputes > 0
+        claim_signature_valid = (
+            manifest_report.signature_valid and manifest_report.key_id_valid
+        )
         if claim.revoked_at is not None:
             label = VerificationLabel.REVOKED
         elif disputed:
             label = VerificationLabel.DISPUTED
-        elif manifest_report.valid:
-            label = VerificationLabel.VERIFIED_CLAIM
-        elif manifest_report.signature_valid and manifest_report.key_id_valid:
-            label = VerificationLabel.PARTIAL_MATCH
+        elif not claim_signature_valid:
+            label = VerificationLabel.INVALID_CLAIM_SIGNATURE
+        elif manifest_report.content_binding_valid is True:
+            label = VerificationLabel.CONTENT_CLAIM_VERIFIED
+        elif (
+            manifest_report.content_binding_valid is False
+            and content is not None
+        ):
+            label = VerificationLabel.CONTENT_MISMATCH
+        elif content is None:
+            label = VerificationLabel.CLAIM_VERIFIED_CONTENT_UNCHECKED
+        elif not manifest_report.public_nonce_available and nonce is None:
+            label = VerificationLabel.CLAIM_VERIFIED_CONTENT_PRIVATE
         else:
-            label = VerificationLabel.UNTRUSTED_CLAIM
+            label = VerificationLabel.INCONCLUSIVE
         return ClaimVerificationReport(
             claim_id=claim.claim_id,
             label=label,
             trust_tier=evidence_profile.trust_tier,
             trust_labels=evidence_profile.trust_labels,
             registry_included=True,
-            manifest_signature_valid=manifest_report.signature_valid
-            and manifest_report.key_id_valid,
+            manifest_signature_valid=claim_signature_valid,
             content_binding_valid=manifest_report.content_binding_valid,
+            content_binding_checked=manifest_report.content_binding_checked,
+            public_nonce_available=manifest_report.public_nonce_available,
             revoked=claim.revoked_at is not None,
             disputed=disputed,
             open_disputes=open_disputes,

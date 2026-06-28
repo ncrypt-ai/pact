@@ -405,14 +405,34 @@ def test_registry_claim_verification_report_for_current_claim(
         nonce=b"\x01" * 32,
     )
 
-    assert report.label is VerificationLabel.VERIFIED_CLAIM
+    assert report.label is VerificationLabel.CONTENT_CLAIM_VERIFIED
     assert report.verified is True
+    assert report.claim_verified is True
     assert report.registry_included is True
     assert report.manifest_signature_valid is True
     assert report.content_binding_valid is True
+    assert report.content_binding_checked is True
+    assert report.public_nonce_available is True
     assert report.trust_tier is TrustTier.UNAUTHENTICATED_DEVICE
     assert report.claim_meanings == ("signed_by", "training_restriction")
-    assert report.to_dict()["label"] == "verified_claim"
+    assert report.to_dict()["label"] == "content_claim_verified"
+
+
+def test_registry_claim_only_is_not_content_verified(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = register_claim(service, identity)
+
+    report = service.verify_claim(signed_manifest.manifest.claim_id)
+
+    assert report.label is VerificationLabel.CLAIM_VERIFIED_CONTENT_UNCHECKED
+    assert report.verified is False
+    assert report.claim_verified is True
+    assert report.content_binding_valid is None
+    assert report.content_binding_checked is False
 
 
 def test_registry_claim_verification_reports_partial_content_match(
@@ -429,8 +449,9 @@ def test_registry_claim_verification_reports_partial_content_match(
         nonce=b"\x01" * 32,
     )
 
-    assert report.label is VerificationLabel.PARTIAL_MATCH
+    assert report.label is VerificationLabel.CONTENT_MISMATCH
     assert report.verified is False
+    assert report.claim_verified is False
     assert report.content_binding_valid is False
 
 
