@@ -328,10 +328,13 @@ def test_cli_web_command_bootstraps_local_app(
 ) -> None:
     calls: dict[str, object] = {}
 
-    def fake_run(app, host: str, port: int, log_level: str) -> None:
+    def fake_run(
+        app, host: str, port: int, log_level: str, access_log: bool
+    ) -> None:
         calls["host"] = host
         calls["port"] = port
         calls["log_level"] = log_level
+        calls["access_log"] = access_log
         calls["app_title"] = app.title
         calls["app_version"] = app.version
 
@@ -357,6 +360,7 @@ def test_cli_web_command_bootstraps_local_app(
 
     assert calls["host"] == "127.0.0.1"
     assert calls["port"] == 8123
+    assert calls["access_log"] is True
     assert calls["app_title"] == "PACT Registry"
     assert calls["app_version"] == PACKAGE_VERSION
     assert not (

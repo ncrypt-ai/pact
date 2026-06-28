@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     Body,
@@ -40,7 +40,16 @@ from pact.registry.app import (
     RegistryService,
 )
 from pact.server.config import default_routes
+from pact.server.logging import (
+    LoggingConfig,
+    configure_logging,
+    monotonic_ms,
+    request_log_extra,
+    server_logger,
+)
 from pact.web.browser_bundle import FEATURE_MODULES, browser_python_archive
+
+LOGGER = server_logger("web")
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +490,9 @@ def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
 
 def _raise_http_error(error: Exception) -> None:
     if isinstance(error, RegistryError):
+        LOGGER.warning("registry request rejected: %s", error)
         raise HTTPException(status_code=400, detail=str(error)) from error
+    LOGGER.exception("unhandled application error")
     raise HTTPException(
         status_code=500, detail="internal server error"
     ) from error
@@ -656,9 +667,12 @@ def create_app(
     cors_allowed_origins: tuple[str, ...] = (),
     docs_directory: str | Path | None = None,
     rate_limit_config: RateLimitConfig | None = None,
+    logging_config: LoggingConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
+    selected_logging = logging_config or LoggingConfig.from_env()
+    configure_logging(selected_logging)
     templates = _templates()
     rate_limit = rate_limit_config or RateLimitConfig()
     parsed_public_url = urlsplit(public_base_url)
@@ -689,6 +703,14 @@ def create_app(
     app.state.enable_workspace = enable_workspace
     app.state.rate_limiter = SlidingWindowRateLimiter(rate_limit)
     app.state.rate_limit_config = rate_limit
+    app.state.logging_config = selected_logging
+    LOGGER.info(
+        "created web application",
+        extra={
+            "registry_url": normalized_registry_url,
+            "deployment_mode": "local" if local_mode else "hosted",
+        },
+    )
     mounted_docs_directory = _docs_directory(docs_directory)
     app.state.docs_enabled = mounted_docs_directory is not None
     if cors_allowed_origins:
@@ -738,6 +760,46 @@ def create_app(
                 )
 
     @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        request.state.request_id = request_id
+        started_ms = monotonic_ms()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception:
+            duration_ms = monotonic_ms() - started_ms
+            LOGGER.exception(
+                "request failed",
+                extra=request_log_extra(
+                    request_id=request_id,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    client_ip=_client_ip(request),
+                ),
+            )
+            raise
+        finally:
+            duration_ms = monotonic_ms() - started_ms
+            if selected_logging.access_log:
+                level = "warning" if status_code >= 400 else "info"
+                getattr(LOGGER, level)(
+                    "request complete",
+                    extra=request_log_extra(
+                        request_id=request_id,
+                        method=request.method,
+                        path=request.url.path,
+                        status_code=status_code,
+                        duration_ms=duration_ms,
+                        client_ip=_client_ip(request),
+                    ),
+                )
+
+    @app.middleware("http")
     async def rate_limit_requests(request: Request, call_next):
         if (
             rate_limit.enabled
@@ -770,6 +832,9 @@ def create_app(
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
+        request_id = getattr(request.state, "request_id", None)
+        if request_id is not None:
+            response.headers.setdefault("X-Request-ID", request_id)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(

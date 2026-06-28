@@ -9,8 +9,11 @@ from typing import Any, cast
 
 from pact.registry.app import RegistryCertificateAuthority, RegistryService
 from pact.server.config import RuntimeConfig
+from pact.server.logging import configure_logging, server_logger
 from pact.server.runtime import create_registry_store
 from pact.web import create_app
+
+LOGGER = server_logger("lambda")
 
 
 @lru_cache(maxsize=1)
@@ -23,6 +26,15 @@ def _handler():
         ) from error
     mangum_module = cast(Any, mangum)
     config = RuntimeConfig.from_env()
+    configure_logging(config.logging)
+    LOGGER.info(
+        "initializing lambda registry app",
+        extra={
+            "deployment_mode": config.mode.value,
+            "registry_url": config.registry_url,
+            "store_backend": config.store_backend.value,
+        },
+    )
     service = RegistryService(
         config.registry_url,
         store=create_registry_store(config),
@@ -42,6 +54,7 @@ def _handler():
         service,
         public_base_url=config.public_base_url,
         local_mode=False,
+        logging_config=config.logging,
     )
     return mangum_module.Mangum(app)
 

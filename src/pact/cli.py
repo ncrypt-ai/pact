@@ -50,6 +50,7 @@ from pact.registry.app import (
     domain_verification_txt_value,
 )
 from pact.registry.store import SqliteRegistryStore
+from pact.server.logging import LogFormat, LoggingConfig, configure_logging
 from pact.watermarks import (
     CanaryPhrasePlugin,
     InvisibleFramePlugin,
@@ -1171,11 +1172,14 @@ def _serve(
     database: str,
     enable_workspace: bool,
     cors_allowed_origins: tuple[str, ...] = (),
+    logging_config: LoggingConfig | None = None,
 ) -> int:
     import uvicorn
 
     from pact.web import create_app
 
+    selected_logging = logging_config or _logging_config_from_args(None)
+    configure_logging(selected_logging)
     service = _bootstrap_service(
         data_dir,
         registry_url,
@@ -1188,8 +1192,15 @@ def _serve(
         local_mode=local_mode,
         enable_workspace=enable_workspace,
         cors_allowed_origins=cors_allowed_origins,
+        logging_config=selected_logging,
     )
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=selected_logging.level.lower(),
+        access_log=selected_logging.access_log,
+    )
     return 0
 
 
@@ -1199,20 +1210,50 @@ def _serve_workspace_only(
     host: str,
     port: int,
     public_base_url: str,
+    logging_config: LoggingConfig | None = None,
 ) -> int:
     import uvicorn
 
     from pact.web import create_app
 
+    selected_logging = logging_config or _logging_config_from_args(None)
+    configure_logging(selected_logging)
     app = create_app(
         None,
         public_base_url=public_base_url,
         registry_url=registry_url,
         local_mode=True,
         enable_workspace=True,
+        logging_config=selected_logging,
     )
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=selected_logging.level.lower(),
+        access_log=selected_logging.access_log,
+    )
     return 0
+
+
+def _logging_config_from_args(
+    args: argparse.Namespace | None,
+) -> LoggingConfig:
+    base = LoggingConfig.from_env()
+    return LoggingConfig(
+        level=cast(
+            str,
+            getattr(args, "log_level", None) or base.level,
+        ),
+        format=LogFormat(
+            cast(
+                str,
+                getattr(args, "log_format", None) or base.format.value,
+            )
+        ),
+        access_log=base.access_log
+        and not bool(getattr(args, "no_access_log", False)),
+    )
 
 
 def _cmd_registry_serve(args: argparse.Namespace) -> int:
@@ -1230,6 +1271,7 @@ def _cmd_registry_serve(args: argparse.Namespace) -> int:
         database=_resolve_database(args),
         enable_workspace=bool(args.enable_workspace),
         cors_allowed_origins=tuple(args.cors_allowed_origin),
+        logging_config=_logging_config_from_args(args),
     )
 
 
@@ -1242,6 +1284,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
             host="127.0.0.1",
             port=port,
             public_base_url=f"http://127.0.0.1:{port}",
+            logging_config=_logging_config_from_args(args),
         )
     registry_url = _resolve_registry_url(args)
     public_base_url = f"http://127.0.0.1:{port}"
@@ -1265,6 +1308,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
         admin_jwk_files=args.admin_jwk_file,
         database=_resolve_database(args),
         enable_workspace=True,
+        logging_config=_logging_config_from_args(args),
     )
 
 
@@ -1768,6 +1812,7 @@ def build_parser() -> argparse.ArgumentParser:
             "standalone web interfaces hosted on multiple origins."
         ),
     )
+    _add_server_logging_args(serve)
     serve.set_defaults(handler=_cmd_registry_serve)
     register_profile = registry_subparsers.add_parser(
         "register-profile",
@@ -2011,9 +2056,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOCAL_DATABASE,
         help="SQLite database path, or :memory / :memory: for ephemeral state.",
     )
+    _add_server_logging_args(web)
     web.set_defaults(handler=_cmd_web)
 
     return parser
+
+
+def _add_server_logging_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--log-level",
+        choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+        help="Server log level. Defaults to PACT_LOG_LEVEL or INFO.",
+    )
+    parser.add_argument(
+        "--log-format",
+        choices=tuple(item.value for item in LogFormat),
+        help="Server log format. Defaults to PACT_LOG_FORMAT or plain.",
+    )
+    parser.add_argument(
+        "--no-access-log",
+        action="store_true",
+        help="Disable per-request access logs for this server process.",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

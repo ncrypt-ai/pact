@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum
 
+from pact.server.logging import LoggingConfig
+
 
 class DeploymentMode(StrEnum):
     """Supported API deployment modes."""
@@ -117,6 +119,7 @@ class RuntimeConfig:
     sqlite_database: str = ":memory:"
     postgres_dsn: str | None = None
     security: SecurityProfile = SecurityProfile()
+    logging: LoggingConfig = LoggingConfig()
     routes: tuple[RouteConfig, ...] = ()
 
     @classmethod
@@ -142,6 +145,7 @@ class RuntimeConfig:
             sqlite_database=os.getenv("PACT_SQLITE_DATABASE", ":memory:"),
             postgres_dsn=os.getenv("PACT_POSTGRES_DSN"),
             security=security,
+            logging=LoggingConfig.from_env(),
             routes=default_routes(),
         )
 
@@ -157,6 +161,7 @@ class RuntimeConfig:
             "sqlite_database": self.sqlite_database,
             "postgres_dsn_configured": self.postgres_dsn is not None,
             "security": self.security.to_dict(),
+            "logging": self.logging.to_dict(),
             "routes": [route.to_dict() for route in self.routes],
         }
 
