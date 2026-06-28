@@ -8,7 +8,7 @@
   <body data-registry-url="{{ registry_url }}" data-public-base-url="{{ public_base_url }}">
     <header>
       <p><a href="/">PACT Registry</a></p>
-      <h1>PACT Web App</h1>
+      <h1>PACT</h1>
       <p>
         Registry:
         <input id="registry-url" value="{{ registry_url }}" size="48">
@@ -96,9 +96,9 @@
             <div class="actions">
               <button type="button" id="complete-hosted-login">Complete hosted login</button>
             </div>
-            <label>
-              Admin approval key ID
-              <input id="authorize-hosted-key-id" placeholder="Profile key to approve">
+          <label>
+            Admin approval profile ID
+            <input id="authorize-hosted-key-id" placeholder="Profile ID to approve">
             </label>
             <label>
               Provider
@@ -116,8 +116,8 @@
           <details>
             <summary>Third-party attestation</summary>
             <label>
-              Claimant key ID
-              <input id="third-party-key-id" placeholder="Profile key to attest">
+              Profile ID
+              <input id="third-party-key-id" placeholder="Profile ID to attest">
             </label>
             <label class="inline-choice">
               <input id="third-party-documented-rights" type="checkbox">
@@ -391,14 +391,14 @@
       <section data-page="lookup">
         <h2>Look up records</h2>
         <p>
-          Paste an ID to open a public registry record. Profile keys identify
-          claimants. Claim IDs identify published proofs. Dispute IDs identify
-          objections to claims.
+          Paste an ID to open a public registry record. Profile IDs identify
+          public profiles. Claim IDs identify published proofs. Dispute IDs
+          identify objections to claims.
         </p>
         <fieldset>
-          <legend>Claimant</legend>
-          <label>Profile key <input id="lookup-profile-key"></label>
-          <button type="button" id="lookup-profile" class="primary-action">Look up claimant</button>
+          <legend>Profile</legend>
+          <label>Profile ID <input id="lookup-profile-key"></label>
+          <button type="button" id="lookup-profile" class="primary-action">Look up profile</button>
         </fieldset>
         <fieldset>
           <legend>Claim</legend>

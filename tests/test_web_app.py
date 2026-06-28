@@ -468,13 +468,13 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     tmp_path: Path,
 ) -> None:
     disabled_client, _identity = make_client(tmp_path / "disabled")
-    assert disabled_client.get("/app").status_code == 404
+    assert disabled_client.get("/pact").status_code == 404
 
     enabled_client, _identity = make_client(
         tmp_path / "enabled",
         enable_workspace=True,
     )
-    workspace = enabled_client.get("/app")
+    workspace = enabled_client.get("/pact")
     assert workspace.status_code == 200
     assert "PACT Workspace" in workspace.text
     assert "Output" not in workspace.text
@@ -521,14 +521,14 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
         "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net"
         in csp
     )
-    package = enabled_client.get("/app/pact-browser-core.pyz")
+    package = enabled_client.get("/pact/pact-browser-core.pyz")
     assert package.status_code == 200
     assert package.headers["content-type"] == "application/zip"
     core_names = zipfile.ZipFile(io.BytesIO(package.content)).namelist()
     assert "pact/browser.py" in core_names
     assert "pact/carriers/c2pa_text.py" not in core_names
 
-    documents = enabled_client.get("/app/pact-browser-documents.pyz")
+    documents = enabled_client.get("/pact/pact-browser-documents.pyz")
     document_names = zipfile.ZipFile(io.BytesIO(documents.content)).namelist()
     assert "pact/carriers/c2pa.py" in document_names
     assert "pact/carriers/c2pa_text.py" not in document_names
@@ -543,7 +543,7 @@ def test_web_workspace_can_run_without_local_registry_service() -> None:
     )
     client = TestClient(app)
 
-    workspace = client.get("/app")
+    workspace = client.get("/pact")
     assert workspace.status_code == 200
     assert "standalone web interface" in workspace.text
     assert "https://registry.example" in workspace.text

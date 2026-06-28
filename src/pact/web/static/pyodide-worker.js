@@ -10,7 +10,7 @@ async function loadRuntime() {
     await pyodide.loadPackage(["micropip", "cryptography"]);
     const micropip = pyodide.pyimport("micropip");
     await micropip.install(["rfc8785", "defusedxml", "pypdf"]);
-    const response = await fetch(`/app/pact-browser-core.pyz?v=${Date.now()}`, {
+    const response = await fetch(`/pact/pact-browser-core.pyz?v=${Date.now()}`, {
       cache: "no-store"
     });
     pyodide.unpackArchive(await response.arrayBuffer(), "zip");
@@ -21,7 +21,7 @@ async function loadRuntime() {
 }
 
 async function loadFeature(pyodide, feature) {
-  const response = await fetch(`/app/pact-browser-${feature}.pyz?v=${Date.now()}`, {
+  const response = await fetch(`/pact/pact-browser-${feature}.pyz?v=${Date.now()}`, {
     cache: "no-store"
   });
   if (!response.ok) {

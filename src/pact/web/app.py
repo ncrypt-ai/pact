@@ -799,7 +799,7 @@ def create_app(
             },
         )
 
-    @app.get("/app", response_class=HTMLResponse)
+    @app.get("/pact", response_class=HTMLResponse)
     async def workspace(request: Request) -> HTMLResponse:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
@@ -813,7 +813,7 @@ def create_app(
             },
         )
 
-    @app.get("/app/pact-browser-{feature}.pyz")
+    @app.get("/pact/pact-browser-{feature}.pyz")
     async def browser_python_feature(feature: str) -> Response:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")

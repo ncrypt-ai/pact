@@ -323,7 +323,7 @@ API, proof pages, and the Pyodide browser workspace:
      --database ./local-registry/registry.sqlite3
 
 That starts the same API and proof-page app on ``127.0.0.1`` with a local
-base URL. Open ``/app`` to use the browser workflow instead of the CLI.
+base URL. Open ``/pact`` to use the browser workflow instead of the CLI.
 
 Run only the browser workspace
 ------------------------------

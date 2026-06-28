@@ -39,7 +39,7 @@ Browser workspace
 -----------------
 
 The interactive browser workspace is optional. A registry can serve only the
-JSON API and proof pages, or it can also expose ``/app``:
+JSON API and proof pages, or it can also expose ``/pact``:
 
 .. code-block:: bash
 

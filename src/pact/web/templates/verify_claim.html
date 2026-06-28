@@ -7,7 +7,7 @@
   <body>
     <h1>Claim check</h1>
     <p><strong>Claim:</strong> {{ claim.claim_id }}</p>
-    <p><strong>Claimant:</strong> {{ profile.key_id }}</p>
+    <p><strong>Profile ID:</strong> {{ profile.key_id }}</p>
     <p><strong>Verification label:</strong> {{ verification.label }}</p>
     <p><strong>Trust tier:</strong> {{ verification.trust_tier }}</p>
     <p><strong>Claim meanings:</strong> {{ ", ".join(verification.claim_meanings) }}</p>

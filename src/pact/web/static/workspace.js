@@ -75,35 +75,13 @@ function embeddedProofSupported(mimeType) {
 }
 
 function updateSigningOptions() {
-  const file = document.querySelector("#content-file").files[0];
-  const mimeType = file ? inferMimeType(file) : "";
-  const isText = mimeType.startsWith("text/");
-  const isImage = mimeType.startsWith("image/");
-  const canEmbed = Boolean(mimeType) && embeddedProofSupported(mimeType);
-  setVisible("#text-protection-options", isText);
-  setVisible("#image-protection-options", isImage);
-  setVisible("#embedded-proof-options", canEmbed);
-  if (!isText) {
-    document.querySelector("#protect-text-before-signing").checked = false;
-  }
-  if (!isImage) {
-    document.querySelector("#protect-image-after-publish").checked = false;
-  }
-  if (!canEmbed) {
-    document.querySelector("#download-embedded-proof").checked = false;
-  }
+  setVisible("#text-protection-options", true);
+  setVisible("#image-protection-options", true);
+  setVisible("#embedded-proof-options", true);
 }
 
 function updateMutationOptions() {
-  const file = document.querySelector("#mutation-edited-file").files[0];
-  const mimeType = file ? inferMimeTypeFrom(file, "#mutation-mime-type") : "";
-  setVisible(
-    "#mutation-embedded-proof-options",
-    embeddedProofSupported(mimeType)
-  );
-  if (!embeddedProofSupported(mimeType)) {
-    document.querySelector("#mutation-download-embedded-proof").checked = false;
-  }
+  setVisible("#mutation-embedded-proof-options", true);
 }
 
 function updateSession() {
@@ -130,7 +108,7 @@ function showSavedBrowserProfile() {
   identity = current;
   renderObject("#browser-profile-summary", "Saved browser profile", [
     ["What this is", "The private signing profile saved in this browser."],
-    ["Profile key", current.key_id],
+    ["Profile ID", current.key_id],
     ["Registry", current.registry_url],
     [
       "Status",
@@ -358,23 +336,38 @@ function renderList(target, title, rows, emptyText) {
 }
 
 function renderProfile(target, profile, evidence = null) {
-  renderObject(target, "Public registry profile", [
+  const authLevel = evidence ? evidence.trust_tier : "unauthenticated_device";
+  const trustLabels =
+    evidence && evidence.trust_labels && evidence.trust_labels.length
+      ? evidence.trust_labels.join(", ")
+      : "unauthenticated_device";
+  const element = renderObject(target, "Public registry profile", [
     ["Display name", profile.display_name || "Anonymous"],
-    ["Profile key", profile.key_id],
+    ["Profile ID", profile.key_id],
     ["Created", profile.created_at],
+    ["Auth level", authLevel],
     ["Verified domains", (profile.verified_domains || []).join(", ") || "None"],
     ["Hosted account", profile.hosted_account ? "Yes" : "No"],
     ["Third-party attested", profile.third_party_attested ? "Yes" : "No"],
     ["Documented rights", profile.documented_rights ? "Yes" : "No"],
     ["Replacement key", profile.replacement_key_id || "None"],
-    ["Trust tier", evidence ? evidence.trust_tier : "Not loaded"],
-    [
-      "Trust labels",
-      evidence && evidence.trust_labels ? evidence.trust_labels.join(", ") : "Not loaded"
-    ],
+    ["Trust tier", authLevel],
+    ["Trust labels", trustLabels],
     ["Active claims", evidence ? evidence.active_claim_count : "Not loaded"],
-    ["Open disputes", evidence ? evidence.open_disputes : "Not loaded"]
+    ["Revoked claims", evidence ? evidence.revoked_claim_count : "Not loaded"],
+    ["Open disputes", evidence ? evidence.open_disputes : "Not loaded"],
+    ["Upheld disputes", evidence ? evidence.upheld_disputes : "Not loaded"],
+    ["Rejected disputes", evidence ? evidence.rejected_disputes : "Not loaded"],
+    ["Certificates", evidence ? evidence.certificate_count : "Not loaded"],
+    ["Key rotations", evidence ? evidence.rotation_count : "Not loaded"]
   ]);
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = "Raw profile data";
+  const raw = document.createElement("pre");
+  raw.textContent = JSON.stringify({ profile, evidence }, null, 2);
+  details.append(summary, raw);
+  element.append(details);
 }
 
 function renderClaims(claims) {
@@ -406,7 +399,7 @@ function claimRows(claim) {
       : {};
   return [
     ["Claim ID", claim.claim_id],
-    ["Claimant", claim.claimant_key_id],
+    ["Profile ID", claim.claimant_key_id],
     ["Registered", claim.registered_at],
     ["Source URL", manifest.source_url || "—"],
     ["MIME type", manifest.mime_type || "—"],
@@ -541,7 +534,7 @@ function renderInspection(result, context = {}) {
       manifestIngredients(manifest).map(ingredientSummary).join("; ") ||
         "None claimed"
     ],
-    ["Created by", claimantKeyFromInspection(result) || "Unknown"],
+    ["Profile ID", claimantKeyFromInspection(result) || "Unknown"],
     ["Registered", claim.registered_at || "Unknown"],
     ["Registry status", verification.label || "Not verified through registry"],
     ["Trust level", verification.trust_tier || (claimantEvidence ? claimantEvidence.trust_tier : "Unknown")],
@@ -550,8 +543,8 @@ function renderInspection(result, context = {}) {
     ["Revoked", verification.revoked],
     ["Disputed", verification.disputed],
     ["Disputes on this media", claimDisputes.length],
-    ["Disputes on claimant media", claimantDisputes.length],
-    ["Claimant active claims", claimantEvidence ? claimantEvidence.active_claim_count : "Unknown"]
+    ["Disputes on profile media", claimantDisputes.length],
+    ["Profile active claims", claimantEvidence ? claimantEvidence.active_claim_count : "Unknown"]
   ]) {
     details.append(row(label, value));
   }
@@ -1067,6 +1060,24 @@ async function unlockIdentity() {
   rememberPassword();
 }
 
+async function requireUnlockedIdentity() {
+  identity = identity || savedIdentity();
+  if (!identity) {
+    throw new Error("No browser profile is stored.");
+  }
+  if (!identityPassword) {
+    const passcode = document.querySelector("#identity-passcode").value;
+    if (!passcode) {
+      setPage("identity");
+      throw new Error("Enter your profile passcode to show this profile.");
+    }
+    await unlockIdentity();
+    updateSession();
+    showSavedBrowserProfile();
+  }
+  return identity;
+}
+
 async function createIdentity() {
   identityPassword = document.querySelector("#identity-passcode").value;
   if (!identityPassword) {
@@ -1113,6 +1124,7 @@ async function ensureProfile() {
 }
 
 async function loadOwnProfile() {
+  await requireUnlockedIdentity();
   try {
     const profile = await registryJson(`/api/v1/profiles/${identity.key_id}`);
     const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
@@ -1120,7 +1132,7 @@ async function loadOwnProfile() {
   } catch (error) {
     renderObject("#public-profile-summary", "Public registry profile", [
       ["What this is", "The public record other people can look up."],
-      ["Profile key", identity.key_id],
+      ["Profile ID", identity.key_id],
       ["Registry status", "No public profile found yet"],
       ["Next step", "Press Continue to register this browser profile."]
     ]);
@@ -1147,9 +1159,10 @@ async function continueIdentity() {
     await createIdentity();
   }
   const profile = await ensureProfile();
+  const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
   updateSession();
   showSavedBrowserProfile();
-  renderProfile("#public-profile-summary", profile);
+  renderProfile("#public-profile-summary", profile, evidence);
   setPage("sign");
   message("Profile ready. Choose a file to sign.");
 }
@@ -1161,12 +1174,7 @@ document.querySelector("#continue-identity").onclick = () =>
 
 document.querySelector("#show-identity").onclick = () =>
   run(async () => {
-    identity =
-      identity || savedIdentity();
-    if (!identity) {
-      throw new Error("No browser profile is stored.");
-    }
-    showSavedBrowserProfile();
+    await requireUnlockedIdentity();
     await loadOwnProfile();
     message("Public registry profile shown below.");
   });
@@ -1270,7 +1278,7 @@ document.querySelector("#attest-third-party").onclick = () =>
     requireIdentity();
     const keyId = document.querySelector("#third-party-key-id").value.trim();
     if (!keyId) {
-      throw new Error("Enter the claimant key ID to attest.");
+      throw new Error("Enter the profile ID to attest.");
     }
     const payload = {
       target_key_id: keyId,
@@ -1473,16 +1481,12 @@ document.querySelector("#sign-content").onclick = () =>
     }
     let embeddedFilename = null;
     if (document.querySelector("#download-embedded-proof").checked) {
-      try {
-        embeddedFilename = await downloadEmbeddedProofCopy(
-          fileInput,
-          mimeType,
-          signedManifest,
-          keepNoncePrivate ? null : nonceBase64
-        );
-      } catch (error) {
-        console.warn(error);
-      }
+      embeddedFilename = await downloadEmbeddedProofCopy(
+        fileInput,
+        mimeType,
+        signedManifest,
+        keepNoncePrivate ? null : nonceBase64
+      );
     }
     let imageWatermarkDownloaded = null;
     if (
@@ -1591,16 +1595,12 @@ document.querySelector("#register-mutation").onclick = () =>
     document.querySelector("#dispute-claim-id").value = claim.claim_id;
     let embeddedFilename = null;
     if (document.querySelector("#mutation-download-embedded-proof").checked) {
-      try {
-        embeddedFilename = await downloadEmbeddedProofCopy(
-          fileInput,
-          mimeType,
-          signedManifest,
-          nonceBase64
-        );
-      } catch (error) {
-        console.warn(error);
-      }
+      embeddedFilename = await downloadEmbeddedProofCopy(
+        fileInput,
+        mimeType,
+        signedManifest,
+        nonceBase64
+      );
     }
     renderObject("#mutation-result", "Registered edit", [
       ["New claim ID", claim.claim_id],
@@ -1679,7 +1679,7 @@ document.querySelector("#lookup-profile").onclick = () =>
   run(async () => {
     const keyId = document.querySelector("#lookup-profile-key").value.trim();
     if (!keyId) {
-      throw new Error("Enter a profile key.");
+      throw new Error("Enter a profile ID.");
     }
     const profile = await registryJson(`/api/v1/profiles/${keyId}`);
     const evidence = await registryJson(`/api/v1/profiles/${keyId}/evidence`);

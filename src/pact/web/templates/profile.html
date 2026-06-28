@@ -6,12 +6,22 @@
   </head>
   <body>
     <h1>Profile</h1>
-    <p><strong>Key ID:</strong> {{ profile.key_id }}</p>
+    <p><strong>Profile ID:</strong> {{ profile.key_id }}</p>
     <p><strong>Display name:</strong> {{ profile.display_name or "—" }}</p>
     <p><strong>Created:</strong> {{ profile.created_at }}</p>
+    <p><strong>Auth level:</strong> {{ evidence.trust_tier }}</p>
     <p><strong>Verified domains:</strong> {{ evidence.verified_domains|join(", ") or "none" }}</p>
     <p><strong>Trust labels:</strong> {{ evidence.trust_labels|join(", ") }}</p>
     <p><strong>Active claims:</strong> {{ evidence.active_claim_count }}</p>
     <p><strong>Revoked claims:</strong> {{ evidence.revoked_claim_count }}</p>
+    <p><strong>Open disputes:</strong> {{ evidence.open_disputes }}</p>
+    <p><strong>Upheld disputes:</strong> {{ evidence.upheld_disputes }}</p>
+    <p><strong>Rejected disputes:</strong> {{ evidence.rejected_disputes }}</p>
+    <p><strong>Certificates:</strong> {{ evidence.certificate_count }}</p>
+    <p><strong>Key rotations:</strong> {{ evidence.rotation_count }}</p>
+    <details>
+      <summary>Raw profile data</summary>
+      <pre>{{ profile | tojson(indent=2) }}</pre>
+    </details>
   </body>
 </html>
