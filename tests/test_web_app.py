@@ -55,6 +55,27 @@ def make_signed_manifest(identity: ClaimantIdentity):
     return sign_manifest(manifest, identity)
 
 
+def make_private_signed_manifest(identity: ClaimantIdentity):
+    manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint="A" * 43,
+        content=b"hello",
+        mime_type="text/plain",
+        canonicalization=CanonicalizationProfile.TEXT_V1,
+        policy=Policy(
+            (
+                PolicyEntry(
+                    Permission.GENERATIVE_TRAINING,
+                    PermissionValue.NOT_ALLOWED,
+                ),
+            )
+        ),
+        nonce=b"\x01" * 32,
+        disclose_nonce=False,
+    )
+    return sign_manifest(manifest, identity)
+
+
 def make_client(
     tmp_path: Path,
     *,
@@ -297,6 +318,57 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "unauthenticated_device" in verify_page.text
     assert home.headers["X-Content-Type-Options"] == "nosniff"
     assert "Content-Security-Policy" in home.headers
+
+
+def test_web_avoidance_report_flow_requires_public_nonce(
+    tmp_path: Path,
+) -> None:
+    client, identity = make_client(tmp_path)
+    register_profile(client, identity)
+    public_claim = register_claim(
+        client, identity, make_signed_manifest(identity)
+    )
+
+    report_response = client.post(
+        "/api/v1/reports/avoidance",
+        json={
+            "claim_id": public_claim["claim_id"],
+            "observed_url": "https://example.com/repost",
+            "reason": "embedded_reference_removed",
+            "description": "Manifest appears stripped.",
+            "evidence": {
+                "kind": "hash_only",
+                "digest": "sha256-example",
+                "mime_type": "text/plain",
+            },
+        },
+    )
+    assert report_response.status_code == 200
+    report = report_response.json()
+    assert report["status"] == "submitted"
+    assert report["public_visibility"] == "pending_triage"
+
+    spread = client.get(
+        f"/api/v1/claims/{public_claim['claim_id']}/spread"
+    ).json()
+    assert spread["status"] == "reports_received"
+    assert spread["report_count"] == 1
+    assert spread["domain_count"] == 1
+
+    private_claim = register_claim(
+        client,
+        identity,
+        make_private_signed_manifest(identity),
+    )
+    rejected = client.post(
+        "/api/v1/reports/avoidance",
+        json={
+            "claim_id": private_claim["claim_id"],
+            "evidence": {"kind": "hash_only", "digest": "sha256-example"},
+        },
+    )
+    assert rejected.status_code == 400
+    assert "public content verification" in rejected.text
 
 
 def test_web_app_can_self_host_built_documentation(tmp_path: Path) -> None:

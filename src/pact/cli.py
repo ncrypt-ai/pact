@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import secrets
@@ -14,6 +15,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile
+from pact.crypto import base64url_encode
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.probes import (
     ProbeSet,
@@ -41,6 +43,7 @@ from pact.media import infer_mime_type
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
 from pact.registry.app import (
+    AvoidanceReportLabel,
     ChallengePurpose,
     MutationChallenge,
     MutationRequest,
@@ -207,6 +210,58 @@ def _request_json(
     )
     try:
         with urlopen(request, timeout=10) as response:
+            parsed = json.loads(response.read())
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise SystemExit(
+            f"{url} returned HTTP {error.code}: {detail}"
+        ) from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise SystemExit(
+            f"could not reach registry at {url}: {error}"
+        ) from error
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{url} did not return valid JSON") from error
+    if not isinstance(parsed, dict):
+        raise SystemExit(f"{url} must return a JSON object")
+    return cast(dict[str, object], parsed)
+
+
+def _request_file(
+    registry_url: str,
+    path: str,
+    *,
+    file_path: Path,
+    mime_type: str,
+) -> dict[str, object]:
+    url = f"{registry_url}{path}"
+    boundary = f"pact-{secrets.token_hex(16)}"
+    payload = bytearray()
+    payload.extend(f"--{boundary}\r\n".encode("ascii"))
+    payload.extend(
+        (
+            'Content-Disposition: form-data; name="mime_type"\r\n\r\n'
+            f"{mime_type}\r\n"
+        ).encode()
+    )
+    payload.extend(f"--{boundary}\r\n".encode("ascii"))
+    payload.extend(
+        (
+            'Content-Disposition: form-data; name="file"; '
+            f'filename="{file_path.name}"\r\n'
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode()
+    )
+    payload.extend(file_path.read_bytes())
+    payload.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+    request = Request(
+        url,
+        data=bytes(payload),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
             parsed = json.loads(response.read())
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
@@ -912,6 +967,69 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_recover(args: argparse.Namespace) -> int:
+    target = Path(args.input)
+    registry_url = _resolve_registry_url(args)
+    mime_type = cast(str | None, args.mime_type) or _infer_mime_type(target)
+    result = _request_file(
+        registry_url,
+        "/api/v1/recover",
+        file_path=target,
+        mime_type=mime_type,
+    )
+    print(_serialize_json(result))
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    target = Path(args.input)
+    evidence_path = Path(cast(str | None, args.evidence) or args.input)
+    digest = base64url_encode(
+        hashlib.sha256(evidence_path.read_bytes()).digest()
+    )
+    registry_url = _resolve_registry_url(args)
+    claim_id = _resolve_prompted_arg(
+        args,
+        "claim_id",
+        label="Claim ID to report",
+    )
+    reason = AvoidanceReportLabel(cast(str, args.reason))
+    payload: dict[str, object] = {
+        "claim_id": claim_id,
+        "observed_url": cast(str | None, args.where),
+        "reason": reason.value,
+        "description": cast(str | None, args.description),
+        "evidence": {
+            "kind": cast(str, args.evidence_kind),
+            "digest": digest,
+            "mime_type": _infer_mime_type(evidence_path),
+        },
+    }
+    if args.reverse_lookup_score is not None:
+        payload["reverse_lookup_score"] = cast(
+            float,
+            args.reverse_lookup_score,
+        )
+    result = _request_json(
+        registry_url,
+        "/api/v1/reports/avoidance",
+        payload=payload,
+    )
+    print(
+        _serialize_json(
+            {
+                "report_id": result["report_id"],
+                "claim_id": result["claim_id"],
+                "status": result["status"],
+                "public_visibility": result["public_visibility"],
+                "owner_notified": result["owner_notified"],
+                "reported_file": str(target),
+            }
+        )
+    )
+    return 0
+
+
 def _cmd_watermark_image(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     mime_type = cast(str | None, args.mime_type) or _infer_mime_type(
@@ -1490,6 +1608,70 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("--mime-type", help="MIME type for carrier parsing.")
     inspect.set_defaults(handler=_cmd_inspect)
+
+    recover = subparsers.add_parser(
+        "recover",
+        formatter_class=HelpFormatter,
+        help="Ask a registry for possible source claim recovery.",
+    )
+    recover.add_argument("input", help="Suspicious content file.")
+    recover.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    recover.add_argument("--mime-type", help="MIME type for recovery parsing.")
+    recover.set_defaults(handler=_cmd_recover)
+
+    report = subparsers.add_parser(
+        "report",
+        formatter_class=HelpFormatter,
+        help="Report possible provenance or fingerprint avoidance.",
+    )
+    report.add_argument("input", help="Suspicious content file.")
+    report.add_argument(
+        "--claim-id",
+        help="Public-verification claim ID this report is associated with.",
+    )
+    report.add_argument(
+        "--registry",
+        help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    report.add_argument(
+        "--where",
+        help="Observed URL where the suspicious content appeared.",
+    )
+    report.add_argument(
+        "--evidence",
+        help="Evidence file to hash. Defaults to the suspicious input file.",
+    )
+    report.add_argument(
+        "--evidence-kind",
+        default="submitted_file",
+        choices=(
+            "submitted_file",
+            "screenshot",
+            "url_snapshot",
+            "html_capture",
+            "hash_only",
+        ),
+        help="Kind of evidence being submitted.",
+    )
+    report.add_argument(
+        "--reason",
+        default=AvoidanceReportLabel.POSSIBLE_AVOIDANCE.value,
+        choices=tuple(label.value for label in AvoidanceReportLabel),
+        help="Typed report label.",
+    )
+    report.add_argument(
+        "--description",
+        help="Optional reporter explanation.",
+    )
+    report.add_argument(
+        "--reverse-lookup-score",
+        type=float,
+        help="Optional recovery score from a prior lookup, from 0 to 1.",
+    )
+    report.set_defaults(handler=_cmd_report)
 
     watermark = subparsers.add_parser(
         "watermark",

@@ -13,6 +13,19 @@
     <p><strong>Revoked at:</strong> {{ claim.revoked_at }}</p>
     <p><strong>Reason:</strong> {{ claim.revocation_reason }}</p>
     {% endif %}
+    <h2>Spread / Provenance Avoidance Reports</h2>
+    <p><strong>Status:</strong> {{ spread.status }}</p>
+    <p><strong>Reports received:</strong> {{ spread.report_count }}</p>
+    <p><strong>Domains observed:</strong> {{ spread.domain_count }}</p>
+    <p><strong>First seen:</strong> {{ spread.first_seen or "None" }}</p>
+    <p><strong>Last seen:</strong> {{ spread.last_seen or "None" }}</p>
+    <p><strong>Owner confirmation:</strong> {{ "confirmed" if spread.owner_confirmed else "pending or none" }}</p>
+    <p><strong>Highest evidence:</strong> {{ spread.highest_confidence or "none" }}</p>
+    {% if spread.report_count %}
+    <p>Users have submitted reports that content resembling this public-verification claim appears elsewhere without intact provenance metadata. Reports are not proof of infringement or misuse.</p>
+    {% else %}
+    <p>No public spread reports have been received for this claim.</p>
+    {% endif %}
     <h2>Manifest</h2>
     <pre>{{ claim.signed_manifest }}</pre>
   </body>

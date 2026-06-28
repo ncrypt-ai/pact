@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pact.registry.app import (
+        AvoidanceReport,
+        AvoidanceReportLabel,
+        AvoidanceReportStatus,
         ChallengePurpose,
         ClaimantProfile,
         ClaimVerificationReport,
@@ -20,6 +23,9 @@ if TYPE_CHECKING:
         RegistryCertificateAuthority,
         RegistryError,
         RegistryService,
+        ReportEvidence,
+        SpreadStatus,
+        SpreadSummary,
         TrustLabel,
         TrustTier,
         VerificationLabel,
@@ -40,6 +46,9 @@ if TYPE_CHECKING:
     )
 
 _EXPORTS = {
+    "AvoidanceReport": "pact.registry.app",
+    "AvoidanceReportLabel": "pact.registry.app",
+    "AvoidanceReportStatus": "pact.registry.app",
     "ChallengePurpose": "pact.registry.app",
     "ClaimantProfile": "pact.registry.app",
     "ClaimVerificationReport": "pact.registry.app",
@@ -53,6 +62,9 @@ _EXPORTS = {
     "RegistryCertificateAuthority": "pact.registry.app",
     "RegistryError": "pact.registry.app",
     "RegistryService": "pact.registry.app",
+    "ReportEvidence": "pact.registry.app",
+    "SpreadStatus": "pact.registry.app",
+    "SpreadSummary": "pact.registry.app",
     "TrustLabel": "pact.registry.app",
     "TrustTier": "pact.registry.app",
     "VerificationLabel": "pact.registry.app",

@@ -5,6 +5,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
@@ -33,6 +34,7 @@ from pact.inspection import inspect_content
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
 from pact.registry.app import (
+    AvoidanceReportLabel,
     ChallengePurpose,
     KeyRotationRequest,
     MutationRequest,
@@ -454,6 +456,10 @@ OPENAPI_TAGS = [
         "name": "Disputes",
         "description": "Public dispute records attached to claims.",
     },
+    {
+        "name": "Reports",
+        "description": "Possible provenance avoidance reports for public-verification claims.",
+    },
 ]
 
 
@@ -655,6 +661,32 @@ class RotationRequestModel(BaseModel):
             current_signature=self.current_signature,
             replacement_signature=self.replacement_signature,
         )
+
+
+class AvoidanceEvidenceModel(BaseModel):
+    kind: str = Field(
+        default="hash_only",
+        description="Evidence kind such as submitted_file, screenshot, url_snapshot, html_capture, or hash_only.",
+    )
+    digest: str = Field(description="Digest of the evidence object.")
+    mime_type: str | None = Field(default=None)
+
+
+class AvoidanceReportRequestModel(BaseModel):
+    claim_id: UUID
+    observed_url: str | None = Field(default=None)
+    observed_at: datetime | None = Field(default=None)
+    reason: AvoidanceReportLabel = Field(
+        default=AvoidanceReportLabel.POSSIBLE_AVOIDANCE
+    )
+    description: str | None = Field(default=None)
+    evidence: AvoidanceEvidenceModel
+    reverse_lookup_score: float | None = Field(default=None, ge=0, le=1)
+    reverse_lookup_evidence: list[dict[str, object]] = Field(
+        default_factory=list
+    )
+    reporter_key_id: str | None = Field(default=None)
+    reporter_type: str = Field(default="anonymous")
 
 
 def create_app(
@@ -1189,6 +1221,30 @@ def create_app(
             _raise_http_error(error)
         return {"disputes": jsonable_encoder(disputes)}
 
+    @app.get(
+        "/api/v1/claims/{claim_id}/reports",
+        tags=["Reports"],
+        summary="List possible provenance avoidance reports for a claim",
+    )
+    async def list_claim_reports(claim_id: UUID) -> dict[str, object]:
+        try:
+            reports = service.list_avoidance_reports(claim_id=claim_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return {"reports": jsonable_encoder(reports)}
+
+    @app.get(
+        "/api/v1/claims/{claim_id}/spread",
+        tags=["Reports"],
+        summary="Get public spread summary for a claim",
+    )
+    async def get_claim_spread(claim_id: UUID) -> dict[str, object]:
+        try:
+            spread = service.spread_summary(claim_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return spread.to_dict()
+
     @app.post(
         "/api/v1/claims/{claim_id}/revoke",
         tags=["Claims"],
@@ -1220,6 +1276,112 @@ def create_app(
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(claim)
+
+    @app.post(
+        "/api/v1/recover",
+        tags=["Reports"],
+        summary="Recover possible source claim candidates",
+    )
+    async def recover_source_candidates(
+        file: UploadFile = File(..., description="Suspicious content file."),
+        mime_type: Annotated[
+            str | None,
+            Form(description="Override MIME type."),
+        ] = None,
+    ) -> dict[str, object]:
+        try:
+            content = await file.read()
+            inspected = inspect_content(
+                content,
+                mime_type=_infer_upload_mime_type(file, mime_type),
+                registry_service=service,
+            )
+            claim = inspected.get("registry_claim")
+            matches: list[dict[str, object]] = []
+            claim_id_value = (
+                claim.get("claim_id") if isinstance(claim, dict) else None
+            )
+            if isinstance(claim_id_value, str):
+                claim_id = UUID(claim_id_value)
+                registered_claim = service.get_claim(claim_id)
+                reporting_enabled = service.claim_allows_public_reporting(
+                    registered_claim
+                )
+                matches.append(
+                    {
+                        "claim_id": str(claim_id),
+                        "recovery_label": "embedded_reference_recovered",
+                        "evidence_type": inspected.get("reference", {}),
+                        "score": None,
+                        "public_nonce_available": registered_claim.signed_manifest.manifest.content_binding.public_nonce
+                        is not None,
+                        "reporting_enabled": reporting_enabled,
+                        "report_url": None
+                        if not reporting_enabled
+                        else f"/claims/{claim_id}/report",
+                        "reporting_disabled_reason": None
+                        if reporting_enabled
+                        else "private_nonce_claim",
+                    }
+                )
+            return {
+                "embedded_reference": inspected.get("reference"),
+                "registry_verification": inspected.get(
+                    "registry_verification"
+                ),
+                "reverse_lookup": {"matches": matches},
+            }
+        except Exception as error:
+            _raise_http_error(error)
+            raise AssertionError("unreachable")
+
+    @app.post(
+        "/api/v1/reports/avoidance",
+        tags=["Reports"],
+        summary="Submit possible provenance avoidance report",
+    )
+    async def submit_avoidance_report(
+        request: Request,
+        body: AvoidanceReportRequestModel,
+    ) -> dict[str, object]:
+        enforce_identity_rate(
+            request,
+            body,
+            extra=(str(body.claim_id), body.reporter_key_id),
+        )
+        try:
+            report = service.submit_avoidance_report(
+                claim_id=body.claim_id,
+                evidence_type=body.evidence.kind,
+                evidence_digest=body.evidence.digest,
+                report_label=body.reason,
+                reporter_key_id=body.reporter_key_id,
+                reporter_type=body.reporter_type,
+                observed_url=body.observed_url,
+                observed_at=body.observed_at,
+                reverse_lookup_score=body.reverse_lookup_score,
+                reverse_lookup_evidence=tuple(body.reverse_lookup_evidence),
+                description=body.description,
+            )
+        except Exception as error:
+            _raise_http_error(error)
+        return {
+            **_json_dict(report),
+            "public_visibility": "pending_triage",
+            "owner_notified": True,
+        }
+
+    @app.get(
+        "/api/v1/reports/{report_id}",
+        tags=["Reports"],
+        summary="Get possible provenance avoidance report",
+    )
+    async def get_avoidance_report(report_id: UUID) -> dict[str, object]:
+        try:
+            report = service.get_avoidance_report(report_id)
+        except Exception as error:
+            _raise_http_error(error)
+        return _json_dict(report)
 
     @app.post(
         "/api/v1/rotations",
@@ -1453,6 +1615,7 @@ def create_app(
         try:
             claim = service.get_claim(claim_id)
             profile = service.get_profile(claim.claimant_key_id)
+            spread = service.spread_summary(claim_id)
         except Exception as error:
             _raise_http_error(error)
         return templates.TemplateResponse(
@@ -1461,6 +1624,7 @@ def create_app(
             {
                 "claim": jsonable_encoder(claim),
                 "profile": jsonable_encoder(profile),
+                "spread": spread.to_dict(),
                 "public_base_url": app.state.public_base_url,
             },
         )

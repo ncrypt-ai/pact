@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from pact import (
+    AvoidanceReportLabel,
     CanonicalizationProfile,
     ChallengePurpose,
     ClaimantIdentity,
@@ -20,6 +21,7 @@ from pact import (
     RegistryEventType,
     RegistryService,
     SignedManifest,
+    SpreadStatus,
     TrustLabel,
     TrustTier,
     VerificationLabel,
@@ -54,6 +56,29 @@ def make_signed_manifest(identity: ClaimantIdentity) -> SignedManifest:
             )
         ),
         nonce=b"\x01" * 32,
+    )
+    return sign_manifest(manifest, identity)
+
+
+def make_private_signed_manifest(
+    identity: ClaimantIdentity,
+) -> SignedManifest:
+    manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint="A" * 43,
+        content=b"private hello",
+        mime_type="text/plain",
+        canonicalization=CanonicalizationProfile.TEXT_V1,
+        policy=Policy(
+            (
+                PolicyEntry(
+                    Permission.GENERATIVE_TRAINING,
+                    PermissionValue.NOT_ALLOWED,
+                ),
+            )
+        ),
+        nonce=b"\x02" * 32,
+        disclose_nonce=False,
     )
     return sign_manifest(manifest, identity)
 
@@ -111,6 +136,27 @@ def register_claim(
     )
     service.register_claim(claim_request)
     return signed_manifest
+
+
+def register_signed_claim(
+    service: RegistryService,
+    identity: ClaimantIdentity,
+    signed_manifest: SignedManifest,
+) -> None:
+    claim_challenge = service.issue_challenge(
+        ChallengePurpose.CLAIM_REGISTRATION,
+        difficulty=4,
+        bound_key_id=identity.key_id,
+    )
+    claim_request = MutationRequest.create(
+        identity,
+        claim_challenge,
+        payload={
+            "signed_manifest_json": signed_manifest.to_json().decode("utf-8")
+        },
+        proof_of_work_solution=solve_pow(claim_challenge),
+    )
+    service.register_claim(claim_request)
 
 
 def test_merkle_root_requires_leaves() -> None:
@@ -453,6 +499,52 @@ def test_registry_claim_verification_reports_partial_content_match(
     assert report.verified is False
     assert report.claim_verified is False
     assert report.content_binding_valid is False
+
+
+def test_avoidance_reports_require_public_nonce_claim(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = register_claim(service, identity)
+
+    report = service.submit_avoidance_report(
+        claim_id=signed_manifest.manifest.claim_id,
+        evidence_type="submitted_file",
+        evidence_digest="sha256-example",
+        report_label=AvoidanceReportLabel.LIKELY_DERIVED_STRIPPED,
+        observed_url="https://example.com/repost",
+        reverse_lookup_score=0.87,
+        description="Looks cropped and stripped.",
+    )
+    spread = service.spread_summary(signed_manifest.manifest.claim_id)
+
+    assert report.status.value == "submitted"
+    assert report.observed_domain == "example.com"
+    assert spread.status is SpreadStatus.HIGH_CONFIDENCE_SPREAD
+    assert spread.report_count == 1
+    assert spread.domain_count == 1
+    assert spread.highest_confidence is (
+        AvoidanceReportLabel.LIKELY_DERIVED_STRIPPED
+    )
+
+
+def test_avoidance_reports_reject_private_nonce_claim(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path)
+    identity = ClaimantIdentity.generate(service.registry_url)
+    register_profile(service, identity)
+    signed_manifest = make_private_signed_manifest(identity)
+    register_signed_claim(service, identity, signed_manifest)
+
+    with pytest.raises(RegistryError, match="public content verification"):
+        service.submit_avoidance_report(
+            claim_id=signed_manifest.manifest.claim_id,
+            evidence_type="submitted_file",
+            evidence_digest="sha256-example",
+        )
 
 
 def test_registry_rejects_claim_payload_private_fields(

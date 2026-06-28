@@ -117,6 +117,9 @@ if TYPE_CHECKING:
         audit_signed_manifest_publication,
     )
     from pact.registry import (
+        AvoidanceReport,
+        AvoidanceReportLabel,
+        AvoidanceReportStatus,
         ChallengePurpose,
         ClaimantProfile,
         ClaimVerificationReport,
@@ -137,6 +140,9 @@ if TYPE_CHECKING:
         RegistryService,
         RegistryStore,
         RegistryStoreError,
+        ReportEvidence,
+        SpreadStatus,
+        SpreadSummary,
         SqliteRegistryStore,
         TrustLabel,
         TrustTier,
@@ -201,6 +207,9 @@ if TYPE_CHECKING:
     from pact.web import RateLimitConfig, create_app
 
 _EXPORTS = {
+    "AvoidanceReport": "pact.registry",
+    "AvoidanceReportLabel": "pact.registry",
+    "AvoidanceReportStatus": "pact.registry",
     "CanonicalizationProfile": "pact.canonical",
     "ContentCanonicalizationError": "pact.canonical",
     "canonical_json": "pact.canonical",
@@ -313,6 +322,9 @@ _EXPORTS = {
     "RegistryService": "pact.registry",
     "RegistryStore": "pact.registry",
     "RegistryStoreError": "pact.registry",
+    "ReportEvidence": "pact.registry",
+    "SpreadStatus": "pact.registry",
+    "SpreadSummary": "pact.registry",
     "SqliteRegistryStore": "pact.registry",
     "TrustLabel": "pact.registry",
     "TrustTier": "pact.registry",

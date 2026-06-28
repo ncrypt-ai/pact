@@ -33,6 +33,12 @@ class RegistryEventType(StrEnum):
     ACCOUNT_AUTHORIZED = "account_authorized"
     DISPUTE_OPENED = "dispute_opened"
     DISPUTE_RESOLVED = "dispute_resolved"
+    LOOKUP_SIGNALS_REGISTERED = "lookup_signals_registered"
+    AVOIDANCE_REPORT_SUBMITTED = "avoidance_report_submitted"
+    AVOIDANCE_REPORT_TRIAGED = "avoidance_report_triaged"
+    AVOIDANCE_REPORT_OWNER_CONFIRMED = "avoidance_report_owner_confirmed"
+    AVOIDANCE_REPORT_REJECTED = "avoidance_report_rejected"
+    AVOIDANCE_REPORT_PUBLICLY_LISTED = "avoidance_report_publicly_listed"
 
 
 class RegistryStore(Protocol):

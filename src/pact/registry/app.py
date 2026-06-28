@@ -59,6 +59,31 @@ def _optional_http_url(value: object, field_name: str) -> str | None:
     return stripped
 
 
+def _observed_domain(value: str | None) -> str | None:
+    if value is None:
+        return None
+    hostname = urlsplit(value).hostname
+    return None if hostname is None else hostname.rstrip(".").lower()
+
+
+def _highest_report_label(
+    reports: tuple["AvoidanceReport", ...] | list["AvoidanceReport"],
+) -> "AvoidanceReportLabel | None":
+    rank = {
+        AvoidanceReportLabel.INSUFFICIENT_EVIDENCE: 0,
+        AvoidanceReportLabel.FALSE_POSITIVE: 0,
+        AvoidanceReportLabel.POSSIBLE_AVOIDANCE: 1,
+        AvoidanceReportLabel.EMBEDDED_REFERENCE_REMOVED: 2,
+        AvoidanceReportLabel.FINGERPRINT_WEAKENED_OR_REMOVED: 2,
+        AvoidanceReportLabel.LIKELY_DERIVED_STRIPPED: 3,
+        AvoidanceReportLabel.EXACT_CONTENT_REPOST: 4,
+    }
+    labels = [report.report_label for report in reports]
+    if not labels:
+        return None
+    return max(labels, key=lambda label: rank[label])
+
+
 class ChallengePurpose(StrEnum):
     """Replay-challenge purpose labels."""
 
@@ -120,6 +145,49 @@ class VerificationLabel(StrEnum):
     DISPUTED = "disputed"
     REVOKED = "revoked"
     INCONCLUSIVE = "inconclusive"
+
+
+class AvoidanceReportLabel(StrEnum):
+    """Human/community evidence labels for possible provenance avoidance."""
+
+    POSSIBLE_AVOIDANCE = "possible_avoidance"
+    LIKELY_DERIVED_STRIPPED = "likely_derived_stripped"
+    EXACT_CONTENT_REPOST = "exact_content_repost"
+    EMBEDDED_REFERENCE_REMOVED = "embedded_reference_removed"
+    FINGERPRINT_WEAKENED_OR_REMOVED = "fingerprint_weakened_or_removed"
+    FALSE_POSITIVE = "false_positive"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class AvoidanceReportStatus(StrEnum):
+    """Lifecycle state for provenance avoidance reports."""
+
+    SUBMITTED = "submitted"
+    AUTO_TRIAGED = "auto_triaged"
+    OWNER_REVIEW_REQUESTED = "owner_review_requested"
+    OWNER_CONFIRMED = "owner_confirmed"
+    COMMUNITY_CORROBORATED = "community_corroborated"
+    REJECTED = "rejected"
+    ABUSE_FLAGGED = "abuse_flagged"
+
+
+class SpreadStatus(StrEnum):
+    """Public aggregate spread signal for one public-verification claim."""
+
+    NO_REPORTS = "no_reports"
+    REPORTS_RECEIVED = "reports_received"
+    MULTIPLE_SIGHTINGS = "multiple_sightings"
+    OWNER_CONFIRMED_SPREAD = "owner_confirmed_spread"
+    HIGH_CONFIDENCE_SPREAD = "high_confidence_spread"
+
+
+class OwnerReportAction(StrEnum):
+    """Owner review actions for reported possible avoidance."""
+
+    CONFIRM_DERIVED_UNAUTHORIZED = "confirm_derived_unauthorized"
+    MARK_AUTHORIZED_REUSE = "mark_authorized_reuse"
+    REJECT_NOT_RELATED = "reject_not_related"
+    ESCALATE_TO_DISPUTE = "escalate_to_dispute"
 
 
 def _utc_now() -> datetime:
@@ -847,6 +915,97 @@ class DisputeRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AvoidanceReport:
+    """Evidence intake for possible provenance or fingerprint avoidance."""
+
+    report_id: UUID
+    claim_id: UUID
+    reporter_key_id: str | None
+    reporter_type: str
+    observed_url: str | None
+    observed_domain: str | None
+    observed_at: datetime
+    submitted_at: datetime
+    evidence_type: str
+    evidence_digest: str
+    evidence_manifest_digest: str | None
+    report_label: AvoidanceReportLabel
+    status: AvoidanceReportStatus
+    reverse_lookup_score: float | None
+    reverse_lookup_evidence: tuple[dict[str, object], ...]
+    description: str | None
+    public_note: str | None
+    owner_visible: bool = True
+    public_visible: bool = False
+
+    def to_public_dict(self) -> dict[str, object]:
+        """Return the public-safe report summary."""
+
+        return {
+            "report_id": str(self.report_id),
+            "claim_id": str(self.claim_id),
+            "observed_domain": self.observed_domain,
+            "observed_at": _isoformat(self.observed_at),
+            "submitted_at": _isoformat(self.submitted_at),
+            "evidence_type": self.evidence_type,
+            "report_label": self.report_label.value,
+            "status": self.status.value,
+            "reverse_lookup_score": self.reverse_lookup_score,
+            "public_note": self.public_note,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReportEvidence:
+    """Stored evidence object metadata for an avoidance report."""
+
+    evidence_id: UUID
+    report_id: UUID
+    kind: str
+    digest: str
+    mime_type: str | None
+    storage_uri: str | None
+    redacted_storage_uri: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SpreadSummary:
+    """Public aggregate report state for one claim."""
+
+    claim_id: UUID
+    status: SpreadStatus
+    report_count: int
+    public_report_count: int
+    domain_count: int
+    first_seen: datetime | None
+    last_seen: datetime | None
+    owner_confirmed: bool
+    highest_confidence: AvoidanceReportLabel | None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-compatible spread summary."""
+
+        return {
+            "claim_id": str(self.claim_id),
+            "status": self.status.value,
+            "report_count": self.report_count,
+            "public_report_count": self.public_report_count,
+            "domain_count": self.domain_count,
+            "first_seen": None
+            if self.first_seen is None
+            else _isoformat(self.first_seen),
+            "last_seen": None
+            if self.last_seen is None
+            else _isoformat(self.last_seen),
+            "owner_confirmed": self.owner_confirmed,
+            "highest_confidence": None
+            if self.highest_confidence is None
+            else self.highest_confidence.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RegistrySnapshot:
     """Materialized public registry state derived from the event log."""
 
@@ -854,6 +1013,7 @@ class RegistrySnapshot:
     profiles: dict[str, ClaimantProfile]
     claims: dict[UUID, RegisteredClaim]
     disputes: dict[UUID, DisputeRecord]
+    avoidance_reports: dict[UUID, AvoidanceReport]
     certificate_counts: dict[str, int]
     rotation_counts: dict[str, int]
 
@@ -1059,6 +1219,7 @@ class RegistryService:
         profiles: dict[str, ClaimantProfile] = {}
         claims: dict[UUID, RegisteredClaim] = {}
         disputes: dict[UUID, DisputeRecord] = {}
+        avoidance_reports: dict[UUID, AvoidanceReport] = {}
         certificate_counts: dict[str, int] = {}
         rotation_counts: dict[str, int] = {}
         last_sequence = 0
@@ -1255,11 +1416,113 @@ class RegistryService:
                     resolved_by_key_id=cast(str, data["resolved_by_key_id"]),
                 )
 
+            elif (
+                event.event_type
+                is RegistryEventType.AVOIDANCE_REPORT_SUBMITTED
+            ):
+                report_id = UUID(cast(str, data["report_id"]))
+                observed_at = _parse_datetime(
+                    data.get("observed_at"),
+                    "observed_at",
+                )
+                score_value = data.get("reverse_lookup_score")
+                if score_value is not None and not isinstance(
+                    score_value, int | float
+                ):
+                    raise RegistryStoreError(
+                        "reverse_lookup_score must be numeric or null"
+                    )
+                evidence_value = data.get("reverse_lookup_evidence", [])
+                if not isinstance(evidence_value, list):
+                    raise RegistryStoreError(
+                        "reverse_lookup_evidence must be a list"
+                    )
+                avoidance_reports[report_id] = AvoidanceReport(
+                    report_id=report_id,
+                    claim_id=UUID(cast(str, data["claim_id"])),
+                    reporter_key_id=cast(
+                        str | None,
+                        data.get("reporter_key_id"),
+                    ),
+                    reporter_type=cast(str, data["reporter_type"]),
+                    observed_url=cast(str | None, data.get("observed_url")),
+                    observed_domain=cast(
+                        str | None,
+                        data.get("observed_domain"),
+                    ),
+                    observed_at=observed_at,
+                    submitted_at=self._event_time(event),
+                    evidence_type=cast(str, data["evidence_type"]),
+                    evidence_digest=cast(str, data["evidence_digest"]),
+                    evidence_manifest_digest=cast(
+                        str | None,
+                        data.get("evidence_manifest_digest"),
+                    ),
+                    report_label=AvoidanceReportLabel(
+                        cast(str, data["report_label"])
+                    ),
+                    status=AvoidanceReportStatus(cast(str, data["status"])),
+                    reverse_lookup_score=None
+                    if score_value is None
+                    else float(score_value),
+                    reverse_lookup_evidence=tuple(
+                        cast(dict[str, object], item)
+                        for item in evidence_value
+                        if isinstance(item, dict)
+                    ),
+                    description=cast(str | None, data.get("description")),
+                    public_note=cast(str | None, data.get("public_note")),
+                    owner_visible=bool(data.get("owner_visible", True)),
+                    public_visible=bool(data.get("public_visible", False)),
+                )
+
+            elif event.event_type in {
+                RegistryEventType.AVOIDANCE_REPORT_TRIAGED,
+                RegistryEventType.AVOIDANCE_REPORT_OWNER_CONFIRMED,
+                RegistryEventType.AVOIDANCE_REPORT_REJECTED,
+                RegistryEventType.AVOIDANCE_REPORT_PUBLICLY_LISTED,
+            }:
+                report_id = UUID(cast(str, data["report_id"]))
+                current = avoidance_reports[report_id]
+                status_value = data.get("status", current.status.value)
+                label_value = data.get(
+                    "report_label", current.report_label.value
+                )
+                avoidance_reports[report_id] = AvoidanceReport(
+                    report_id=current.report_id,
+                    claim_id=current.claim_id,
+                    reporter_key_id=current.reporter_key_id,
+                    reporter_type=current.reporter_type,
+                    observed_url=current.observed_url,
+                    observed_domain=current.observed_domain,
+                    observed_at=current.observed_at,
+                    submitted_at=current.submitted_at,
+                    evidence_type=current.evidence_type,
+                    evidence_digest=current.evidence_digest,
+                    evidence_manifest_digest=current.evidence_manifest_digest,
+                    report_label=AvoidanceReportLabel(cast(str, label_value)),
+                    status=AvoidanceReportStatus(cast(str, status_value)),
+                    reverse_lookup_score=current.reverse_lookup_score,
+                    reverse_lookup_evidence=current.reverse_lookup_evidence,
+                    description=current.description,
+                    public_note=cast(
+                        str | None,
+                        data.get("public_note", current.public_note),
+                    ),
+                    owner_visible=bool(
+                        data.get("owner_visible", current.owner_visible)
+                    ),
+                    public_visible=bool(
+                        data.get("public_visible", current.public_visible)
+                    ),
+                )
+
         return RegistrySnapshot(
             last_sequence=last_sequence,
             profiles=profiles,
             claims=claims,
             disputes=disputes,
+            avoidance_reports=avoidance_reports,
             certificate_counts=certificate_counts,
             rotation_counts=rotation_counts,
         )
@@ -1272,6 +1535,21 @@ class RegistryService:
 
     def _load_disputes(self) -> dict[UUID, DisputeRecord]:
         return self._current_snapshot().disputes
+
+    def _load_avoidance_reports(self) -> dict[UUID, AvoidanceReport]:
+        return self._current_snapshot().avoidance_reports
+
+    def claim_allows_public_reporting(
+        self,
+        claim: RegisteredClaim,
+    ) -> bool:
+        """Return whether a claim opted into public spread reporting."""
+
+        return (
+            claim.signed_manifest.manifest.content_binding.public_nonce
+            is not None
+            and claim.revoked_at is None
+        )
 
     def _consume_challenge(
         self,
@@ -1447,6 +1725,150 @@ class RegistryService:
             ]
 
         return tuple(disputes)
+
+    def get_avoidance_report(self, report_id: UUID) -> AvoidanceReport:
+        """Return one possible provenance avoidance report."""
+
+        reports = self._load_avoidance_reports()
+        try:
+            return reports[report_id]
+        except KeyError as error:
+            raise RegistryError("avoidance report does not exist") from error
+
+    def list_avoidance_reports(
+        self,
+        *,
+        claim_id: UUID | None = None,
+        public_only: bool = False,
+    ) -> tuple[AvoidanceReport, ...]:
+        """Return avoidance reports, optionally filtered by claim."""
+
+        reports = sorted(
+            self._load_avoidance_reports().values(),
+            key=lambda report: report.submitted_at,
+            reverse=True,
+        )
+        if claim_id is not None:
+            reports = [
+                report for report in reports if report.claim_id == claim_id
+            ]
+        if public_only:
+            reports = [report for report in reports if report.public_visible]
+        return tuple(reports)
+
+    def spread_summary(self, claim_id: UUID) -> SpreadSummary:
+        """Return public aggregate spread-report state for a claim."""
+
+        self.get_claim(claim_id)
+        reports = self.list_avoidance_reports(claim_id=claim_id)
+        domains = {
+            report.observed_domain
+            for report in reports
+            if report.observed_domain is not None
+        }
+        owner_confirmed = any(
+            report.status is AvoidanceReportStatus.OWNER_CONFIRMED
+            for report in reports
+        )
+        public_count = sum(1 for report in reports if report.public_visible)
+        highest = _highest_report_label(reports)
+        if not reports:
+            status = SpreadStatus.NO_REPORTS
+        elif owner_confirmed:
+            status = SpreadStatus.OWNER_CONFIRMED_SPREAD
+        elif highest in {
+            AvoidanceReportLabel.LIKELY_DERIVED_STRIPPED,
+            AvoidanceReportLabel.EXACT_CONTENT_REPOST,
+        }:
+            status = SpreadStatus.HIGH_CONFIDENCE_SPREAD
+        elif len(reports) > 1 or len(domains) > 1:
+            status = SpreadStatus.MULTIPLE_SIGHTINGS
+        else:
+            status = SpreadStatus.REPORTS_RECEIVED
+        seen_dates = [report.observed_at for report in reports]
+        return SpreadSummary(
+            claim_id=claim_id,
+            status=status,
+            report_count=len(reports),
+            public_report_count=public_count,
+            domain_count=len(domains),
+            first_seen=min(seen_dates) if seen_dates else None,
+            last_seen=max(seen_dates) if seen_dates else None,
+            owner_confirmed=owner_confirmed,
+            highest_confidence=highest,
+        )
+
+    def submit_avoidance_report(
+        self,
+        *,
+        claim_id: UUID,
+        evidence_type: str,
+        evidence_digest: str,
+        report_label: AvoidanceReportLabel = AvoidanceReportLabel.POSSIBLE_AVOIDANCE,
+        reporter_key_id: str | None = None,
+        reporter_type: str = "anonymous",
+        observed_url: str | None = None,
+        observed_at: datetime | None = None,
+        evidence_manifest_digest: str | None = None,
+        reverse_lookup_score: float | None = None,
+        reverse_lookup_evidence: tuple[dict[str, object], ...] = (),
+        description: str | None = None,
+        public_note: str | None = None,
+    ) -> AvoidanceReport:
+        """Record possible provenance/fingerprint avoidance for a public claim."""
+
+        claim = self.get_claim(claim_id)
+        if not self.claim_allows_public_reporting(claim):
+            raise RegistryError(
+                "avoidance reports are only available for claims with public "
+                "content verification enabled"
+            )
+        evidence_type = evidence_type.strip()
+        evidence_digest = evidence_digest.strip()
+        if not evidence_type:
+            raise RegistryError("evidence_type must be a nonempty string")
+        if not evidence_digest:
+            raise RegistryError("evidence_digest must be a nonempty string")
+        if reporter_key_id is not None and not reporter_key_id.strip():
+            raise RegistryError("reporter_key_id must be nonempty when set")
+        reporter_type = reporter_type.strip() or "anonymous"
+        observed_url = _optional_http_url(observed_url, "observed_url")
+        description = None if description is None else description.strip()
+        if description == "":
+            description = None
+        public_note = None if public_note is None else public_note.strip()
+        if public_note == "":
+            public_note = None
+        if reverse_lookup_score is not None and not (
+            0 <= reverse_lookup_score <= 1
+        ):
+            raise RegistryError("reverse_lookup_score must be between 0 and 1")
+        report_id = uuid4()
+        self._append_event(
+            RegistryEventType.AVOIDANCE_REPORT_SUBMITTED,
+            reporter_key_id,
+            {
+                "report_id": str(report_id),
+                "claim_id": str(claim_id),
+                "reporter_key_id": reporter_key_id,
+                "reporter_type": reporter_type,
+                "observed_url": observed_url,
+                "observed_domain": _observed_domain(observed_url),
+                "observed_at": _isoformat(observed_at or _utc_now()),
+                "evidence_type": evidence_type,
+                "evidence_digest": evidence_digest,
+                "evidence_manifest_digest": evidence_manifest_digest,
+                "report_label": report_label.value,
+                "status": AvoidanceReportStatus.SUBMITTED.value,
+                "reverse_lookup_score": reverse_lookup_score,
+                "reverse_lookup_evidence": list(reverse_lookup_evidence),
+                "description": description,
+                "public_note": public_note,
+                "owner_visible": True,
+                "public_visible": False,
+            },
+        )
+        return self.get_avoidance_report(report_id)
 
     def register_profile(self, request: MutationRequest) -> ClaimantProfile:
         """Register a new pseudonymous claimant profile."""

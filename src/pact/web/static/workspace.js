@@ -560,7 +560,42 @@ function renderInspection(result, context = {}) {
     }
     element.append(disputes);
   }
+  const claimId = claimIdFromInspection(result);
+  if (claimId && verification.public_nonce_available) {
+    const reportButton = document.createElement("button");
+    reportButton.type = "button";
+    reportButton.className = "secondary-action";
+    reportButton.textContent = "Report possible provenance avoidance";
+    reportButton.onclick = () => submitAvoidanceReport(result, claimId);
+    element.append(reportButton);
+  } else if (claimId && verification.public_nonce_available === false) {
+    element.append(callout("Reporting disabled: this claim uses private content verification."));
+  }
   console.log(result);
+}
+
+async function submitAvoidanceReport(result, claimId) {
+  const observedUrl = window.prompt("Where did you see it? URL or blank:") || "";
+  const description = window.prompt("What looks suspicious?") || "";
+  if (!description.trim() && !observedUrl.trim()) {
+    throw new Error("Add a URL or a short description before reporting.");
+  }
+  const response = await registryJson("/api/v1/reports/avoidance", {
+    method: "POST",
+    body: JSON.stringify({
+      claim_id: claimId,
+      observed_url: observedUrl.trim() || null,
+      reason: "possible_avoidance",
+      description: description.trim() || null,
+      evidence: {
+        kind: "hash_only",
+        digest: result.input ? result.input.sha256 : "unknown",
+        mime_type: result.input ? result.input.mime_type : null
+      }
+    })
+  });
+  const element = resultElement("#inspect-result");
+  element.append(callout(`Report submitted: ${response.report_id}`));
 }
 
 function policySummary(policy) {
