@@ -555,9 +555,11 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert 'data-page="sign"' in workspace.text
     assert 'data-page="mutations"' in workspace.text
     assert "Display name (optional)" in workspace.text
+    assert 'id="identity-display-name-field"' in workspace.text
+    assert 'id="identity-guidance"' in workspace.text
     assert "Passcode" in workspace.text
     assert "PACT will not create a passcode" in workspace.text
-    assert "Continue" in workspace.text
+    assert "Create profile" in workspace.text
     assert "Recovery and account options" in workspace.text
     assert "Log out" in workspace.text
     assert "Saved browser profile" in workspace.text

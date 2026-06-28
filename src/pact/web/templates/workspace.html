@@ -42,6 +42,9 @@
           browser. Your public registry profile is the public record other
           people can look up after you register.
         </p>
+        <p id="identity-guidance" class="bottom-line">
+          Create a browser profile, or unlock the saved profile on this device.
+        </p>
         <form id="identity-form">
           <input
             id="identity-username"
@@ -49,7 +52,7 @@
             autocomplete="username"
             value="pact-browser-vault"
           >
-          <label>
+          <label id="identity-display-name-field">
             Display name (optional)
             <input id="identity-display-name" autocomplete="name" placeholder="Leave blank to stay pseudonymous">
           </label>
@@ -63,7 +66,7 @@
           </p>
         </form>
         <div class="actions">
-          <button type="button" id="continue-identity" class="primary-action">Continue</button>
+          <button type="button" id="continue-identity" class="primary-action">Create profile</button>
           <button type="button" id="logout-identity" hidden>Log out</button>
         </div>
         <p class="small">

@@ -85,17 +85,38 @@ function updateMutationOptions() {
 }
 
 function updateSession() {
-  const authenticated = Boolean(identity);
-  sessionStatus.textContent = authenticated
+  const hasProfile = Boolean(identity || savedIdentity());
+  const unlocked = Boolean(identity && identityPassword);
+  sessionStatus.textContent = hasProfile
     ? identityPassword
       ? "Profile ready."
       : "Saved profile found."
     : "No profile loaded.";
-  document.querySelector("#logout-identity").hidden = !authenticated;
+  document.querySelector("#logout-identity").hidden = !hasProfile;
   for (const button of pageButtons()) {
     if (button.dataset.pageButton !== "identity") {
-      button.disabled = !authenticated;
+      button.disabled = !unlocked;
     }
+  }
+  updateIdentityControls();
+}
+
+function updateIdentityControls() {
+  const hasProfile = Boolean(identity || savedIdentity());
+  const unlocked = Boolean(identity && identityPassword);
+  const displayNameField = document.querySelector("#identity-display-name-field");
+  const guidance = document.querySelector("#identity-guidance");
+  const continueButton = document.querySelector("#continue-identity");
+  displayNameField.hidden = hasProfile;
+  if (hasProfile && !unlocked) {
+    continueButton.textContent = "Unlock saved profile";
+    guidance.textContent = "Saved profile is locked. Enter its passcode, then press Unlock saved profile.";
+  } else if (hasProfile) {
+    continueButton.textContent = "Continue to signing";
+    guidance.textContent = "Profile is unlocked for this session.";
+  } else {
+    continueButton.textContent = "Create profile";
+    guidance.textContent = "No browser profile is saved here. Choose a passcode, optionally add a display name, then press Create profile.";
   }
 }
 
@@ -113,6 +134,10 @@ function showSavedBrowserProfile() {
     [
       "Status",
       identityPassword ? "Unlocked for this session" : "Locked. Enter passcode to use it."
+    ],
+    [
+      "Next action",
+      identityPassword ? "Continue to signing." : "Enter passcode and press Unlock saved profile."
     ]
   ]);
 }
@@ -1125,10 +1150,10 @@ async function createIdentity() {
   rememberPassword();
 }
 
-async function ensureProfile() {
-  const displayName = document
-    .querySelector("#identity-display-name")
-    .value.trim();
+async function ensureProfile({ allowDisplayName = true } = {}) {
+  const displayName = allowDisplayName
+    ? document.querySelector("#identity-display-name").value.trim()
+    : "";
   const response = await fetch(`${registryUrl()}/api/v1/profiles/${identity.key_id}`);
   if (response.ok) {
     const profile = await response.json();
@@ -1169,7 +1194,7 @@ async function loadOwnProfile() {
       ["What this is", "The public record other people can look up."],
       ["Profile ID", identity.key_id],
       ["Registry status", "No public profile found yet"],
-      ["Next step", "Press Continue to register this browser profile."]
+      ["Next step", "Press Continue to signing to register this browser profile."]
     ]);
   }
 }
@@ -1188,18 +1213,23 @@ async function publishSignedManifest(manifestJson) {
 
 async function continueIdentity() {
   identity = identity || savedIdentity();
-  if (identity) {
+  const hadSavedProfile = Boolean(identity);
+  if (hadSavedProfile) {
     await unlockIdentity();
   } else {
     await createIdentity();
   }
-  const profile = await ensureProfile();
+  const profile = await ensureProfile({ allowDisplayName: !hadSavedProfile });
   const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
   updateSession();
   showSavedBrowserProfile();
   renderProfile("#public-profile-summary", profile, evidence);
   setPage("sign");
-  message("Profile ready. Choose a file to sign.");
+  message(
+    hadSavedProfile
+      ? "Saved profile unlocked. Choose a file to sign."
+      : "Profile created. Choose a file to sign."
+  );
 }
 
 document.querySelector("#continue-identity").onclick = () =>
@@ -1430,7 +1460,7 @@ document.querySelector("#logout-identity").onclick = () =>
     showSavedBrowserProfile();
     clearElement(document.querySelector("#public-profile-summary"));
     setPage("identity");
-    message("Profile locked on this browser. Enter your passcode and press Continue to use it again.");
+    message("Profile locked on this browser. Enter your passcode and press Unlock saved profile to use it again.");
   });
 
 document.querySelector("#sign-content").onclick = () =>
@@ -1847,7 +1877,7 @@ setPage(identity && localStorage.getItem(passcodeStorageKey) ? "sign" : "identit
 if (identity && localStorage.getItem(passcodeStorageKey)) {
   run(async () => {
     await unlockIdentity();
-    await ensureProfile();
+    await ensureProfile({ allowDisplayName: false });
     showSavedBrowserProfile();
     await loadOwnProfile();
     setPage("sign");
@@ -1856,7 +1886,7 @@ if (identity && localStorage.getItem(passcodeStorageKey)) {
 } else {
   message(
     identity
-      ? "Saved profile found. Enter your passcode and continue."
+      ? "Saved profile found. Enter your passcode and press Unlock saved profile."
       : "Create your profile to begin."
   );
 }
