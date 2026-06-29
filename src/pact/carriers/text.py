@@ -28,10 +28,16 @@ if TYPE_CHECKING:
     )
 
 _VISIBLE_HEADER = "-----BEGIN PACT MANIFEST-----\n"
-_VISIBLE_FOOTER = "\n-----END PACT MANIFEST-----\n\n"
+_VISIBLE_FOOTER = "\n-----END PACT MANIFEST-----\n"
+_VISIBLE_LEGAL_NOTICE = (
+    "PACT NOTICE: This embedded proof is provenance and usage-rights metadata. "
+    "It is not legal advice, does not transfer copyright or license rights, "
+    "and should be reviewed with the surrounding content and applicable law."
+)
 _VISIBLE_PATTERN = re.compile(
     r"\A-----BEGIN PACT MANIFEST-----\n(?P<manifest>\{.*\})\n"
-    r"-----END PACT MANIFEST-----\n\n",
+    r"-----END PACT MANIFEST-----\n"
+    r"(?:(?:PACT NOTICE: .*)\n)?\n",
     re.DOTALL,
 )
 
@@ -314,6 +320,13 @@ def _strip_visible_block(text: str) -> tuple[str, SignedManifest | None]:
     return text[match.end() :], manifest
 
 
+def _strip_legal_notice(text: str) -> str:
+    prefix = _VISIBLE_LEGAL_NOTICE + "\n\n"
+    if text.startswith(prefix):
+        return text[len(prefix) :]
+    return text
+
+
 def embed_text_carrier(
     content: bytes | str,
     signed: SignedManifest,
@@ -360,19 +373,26 @@ def embed_text_carrier(
     canonical_content = _canonical_text_bytes(content)
     body = canonical_content.decode("utf-8")
     manifest_json = signed.to_json().decode("utf-8")
+    visible_block = (
+        _VISIBLE_HEADER
+        + manifest_json
+        + _VISIBLE_FOOTER
+        + _VISIBLE_LEGAL_NOTICE
+        + "\n\n"
+    )
     if mode is CarrierMode.VISIBLE:
-        result = _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body
+        result = visible_block + body
     elif mode is CarrierMode.INVISIBLE:
         locator = InvisibleLocator.create(
             signed.manifest, nonce
         ).to_zero_width()
-        result = body + locator
+        result = _VISIBLE_LEGAL_NOTICE + "\n\n" + body + locator
     else:
         locator = InvisibleLocator.create(
             signed.manifest, nonce
         ).to_zero_width()
         result = (
-            _VISIBLE_HEADER + manifest_json + _VISIBLE_FOOTER + body + locator
+            visible_block + body + locator
         )
     return result.encode("utf-8")
 
@@ -383,6 +403,7 @@ def extract_text_carrier(value: bytes | str) -> TextCarrierExtraction:
     text = _canonical_text_bytes(value).decode("utf-8")
     without_locator, locator = _strip_locator(text)
     content, signed_manifest = _strip_visible_block(without_locator)
+    content = _strip_legal_notice(content)
     if signed_manifest is not None and locator is not None:
         mode = CarrierMode.BOTH
     elif signed_manifest is not None:

@@ -91,6 +91,7 @@ def test_visible_text_carrier_round_trip() -> None:
     )
     extraction = extract_text_carrier(embedded)
 
+    assert b"PACT NOTICE:" in embedded
     assert extraction.mode is CarrierMode.VISIBLE
     assert extraction.content == CANONICAL_CONTENT
     assert extraction.signed_manifest == signed
@@ -108,6 +109,7 @@ def test_invisible_text_carrier_round_trip() -> None:
     )
     extraction = extract_text_carrier(embedded)
 
+    assert b"PACT NOTICE:" in embedded
     assert extraction.mode is CarrierMode.INVISIBLE
     assert extraction.content == CANONICAL_CONTENT
     assert extraction.signed_manifest is None
