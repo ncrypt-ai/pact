@@ -29,6 +29,7 @@ from pact.crypto import (
 )
 from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
+from pact.oprf import device_oprf_server_scalar, evaluate_device_oprf
 from pact.privacy import PrivacyAuditError, audit_registry_claim_payload
 from pact.registry.store import (
     RegistryEvent,
@@ -1183,6 +1184,22 @@ class RegistryService:
         )
 
         return challenge
+
+    def evaluate_device_binding_oprf(
+        self,
+        blinded_point: Mapping[str, object],
+    ) -> dict[str, str]:
+        """Evaluate a blinded device-binding OPRF point."""
+
+        server_scalar = device_oprf_server_scalar(
+            registry_url=self.registry_url,
+            registry_root_fingerprint=self.certificate_authority.root_fingerprint,
+            server_secret=self.certificate_authority.intermediate_private_key_pem,
+        )
+        return evaluate_device_oprf(
+            blinded_point,
+            server_scalar=server_scalar,
+        )
 
     def _event_time(self, event: RegistryEvent) -> datetime:
         return event.occurred_at.astimezone(UTC)

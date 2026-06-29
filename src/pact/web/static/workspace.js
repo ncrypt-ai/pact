@@ -6,6 +6,17 @@ const identityStorageKey = "pact.identity";
 const identitiesStorageKey = "pact.identities";
 const selectedIdentityStorageKey = "pact.selectedIdentity";
 const passcodeStorageKey = "pact.passcode";
+const deviceBindingSecretPrefix = "pact.deviceBindingSecret.";
+const webAuthnDeviceCredentialPrefix = "pact.webAuthnDeviceCredential.";
+// Public NIST P-256/secp256r1 domain parameters, not secret material.
+const P256_P = BigInt("0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff");
+const P256_A = P256_P - 3n;
+const P256_B = BigInt("0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b");
+const P256_N = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
+const P256_G = {
+  x: BigInt("0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"),
+  y: BigInt("0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+};
 function parseStoredJson(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key) || "null") || fallback;
@@ -907,6 +918,157 @@ function base64Url(bytes) {
     .replace(/=+$/g, "");
 }
 
+function base64UrlToBytes(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/")
+    + "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function concatBytes(...chunks) {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+async function sha256Bytes(value) {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+async function hmacSha256Bytes(keyBytes, messageBytes) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, messageBytes));
+}
+
+function mod(value, modulus) {
+  const result = value % modulus;
+  return result >= 0n ? result : result + modulus;
+}
+
+function modInv(value, modulus) {
+  let current = mod(value, modulus);
+  let next = modulus;
+  let currentCoeff = 1n;
+  let nextCoeff = 0n;
+  while (next !== 0n) {
+    const quotient = current / next;
+    [current, next] = [next, current - quotient * next];
+    [currentCoeff, nextCoeff] = [
+      nextCoeff,
+      currentCoeff - quotient * nextCoeff
+    ];
+  }
+  if (current !== 1n) {
+    throw new Error("Invalid OPRF scalar.");
+  }
+  return mod(currentCoeff, modulus);
+}
+
+function p256PointAdd(left, right) {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  if (left.x === right.x && mod(left.y + right.y, P256_P) === 0n) {
+    return null;
+  }
+  const slope = left.x === right.x && left.y === right.y
+    ? mod((3n * left.x * left.x + P256_A) * modInv(2n * left.y, P256_P), P256_P)
+    : mod((right.y - left.y) * modInv(right.x - left.x, P256_P), P256_P);
+  const x = mod(slope * slope - left.x - right.x, P256_P);
+  const y = mod(slope * (left.x - x) - left.y, P256_P);
+  return { x, y };
+}
+
+function p256PointMultiply(scalar, point) {
+  let factor = mod(scalar, P256_N);
+  let result = null;
+  let addend = point;
+  while (factor > 0n) {
+    if (factor & 1n) {
+      result = p256PointAdd(result, addend);
+    }
+    addend = p256PointAdd(addend, addend);
+    factor >>= 1n;
+  }
+  if (!result) {
+    throw new Error("Invalid OPRF point.");
+  }
+  return result;
+}
+
+function bytesToBigInt(bytes) {
+  let value = 0n;
+  for (const byte of bytes) {
+    value = (value << 8n) + BigInt(byte);
+  }
+  return value;
+}
+
+function bigIntToBytes(value, length = 32) {
+  const output = new Uint8Array(length);
+  let current = value;
+  for (let index = length - 1; index >= 0; index -= 1) {
+    output[index] = Number(current & 0xffn);
+    current >>= 8n;
+  }
+  return output;
+}
+
+function scalarFromBytes(bytes) {
+  return bytesToBigInt(bytes) % (P256_N - 1n) + 1n;
+}
+
+function randomScalar() {
+  const bytes = new Uint8Array(32);
+  let scalar = 0n;
+  while (scalar === 0n || scalar >= P256_N) {
+    crypto.getRandomValues(bytes);
+    scalar = bytesToBigInt(bytes);
+  }
+  return scalar;
+}
+
+function p256PointToWire(point) {
+  return {
+    x: base64Url(bigIntToBytes(point.x)),
+    y: base64Url(bigIntToBytes(point.y))
+  };
+}
+
+function p256PointFromWire(value) {
+  return {
+    x: bytesToBigInt(base64UrlToBytes(value.x)),
+    y: bytesToBigInt(base64UrlToBytes(value.y))
+  };
+}
+
+function encodeP256Point(point) {
+  return concatBytes(
+    new Uint8Array([4]),
+    bigIntToBytes(point.x),
+    bigIntToBytes(point.y)
+  );
+}
+
 function canonicalDomainPayload(domain) {
   return JSON.stringify({
     claimant_key_id: requireIdentity().key_id,
@@ -1177,8 +1339,8 @@ async function challenge(purpose, boundKeyId = null) {
   });
 }
 
-async function browserFingerprint() {
-  const values = {
+function browserFingerprintValues() {
+  return {
     userAgent: navigator.userAgent,
     platform: navigator.platform,
     languages: navigator.languages,
@@ -1192,13 +1354,143 @@ async function browserFingerprint() {
       devicePixelRatio
     ]
   };
-  const encoded = new TextEncoder().encode(
-    `${registryUrl()}:${JSON.stringify(values)}`
+}
+
+async function browserFingerprintMaterial() {
+  return base64Url(await sha256Bytes(JSON.stringify(browserFingerprintValues())));
+}
+
+async function webAuthnPrfSecret(registryRootFingerprint) {
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    return null;
+  }
+  const credentialKey = `${webAuthnDeviceCredentialPrefix}${registryRootFingerprint}`;
+  const salt = await sha256Bytes(
+    `PACT WebAuthn PRF device binding v1:${registryRootFingerprint}`
   );
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  const savedCredential = localStorage.getItem(credentialKey);
+  try {
+    if (savedCredential) {
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          allowCredentials: [{
+            type: "public-key",
+            id: base64UrlToBytes(savedCredential)
+          }],
+          userVerification: "preferred",
+          extensions: {
+            prf: {
+              eval: { first: salt }
+            }
+          }
+        }
+      });
+      const first = assertion?.getClientExtensionResults?.()
+        ?.prf?.results?.first;
+      return first ? new Uint8Array(first) : null;
+    }
+    const userId = crypto.getRandomValues(new Uint8Array(32));
+    const credential = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: "PACT" },
+        user: {
+          id: userId,
+          name: "PACT device binding",
+          displayName: "PACT device binding"
+        },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        authenticatorSelection: {
+          residentKey: "preferred",
+          userVerification: "preferred"
+        },
+        extensions: {
+          prf: {
+            eval: { first: salt }
+          }
+        }
+      }
+    });
+    const first = credential?.getClientExtensionResults?.()
+      ?.prf?.results?.first;
+    if (!first) {
+      return null;
+    }
+    localStorage.setItem(credentialKey, base64Url(new Uint8Array(credential.rawId)));
+    return new Uint8Array(first);
+  } catch {
+    return null;
+  }
+}
+
+async function passcodeLocalSecret(registryRootFingerprint) {
+  return await hmacSha256Bytes(
+    new TextEncoder().encode(password()),
+    new TextEncoder().encode(`PACT passcode device binding v1:${registryRootFingerprint}`)
+  );
+}
+
+async function fallbackLocalSecret(registryRootFingerprint) {
+  const registry = registryUrl().replace(/\/+$/g, "");
+  const secretKey = `${deviceBindingSecretPrefix}${registry}`;
+  let secret = localStorage.getItem(secretKey);
+  if (!secret) {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    secret = base64Url(bytes);
+    localStorage.setItem(secretKey, secret);
+  }
+  return await hmacSha256Bytes(
+    base64UrlToBytes(secret),
+    new TextEncoder().encode(`PACT fallback device binding v1:${registryRootFingerprint}`)
+  );
+}
+
+async function localDeviceBindingSecret(registryRootFingerprint) {
+  const webAuthnSecret = await webAuthnPrfSecret(registryRootFingerprint);
+  if (webAuthnSecret) {
+    return webAuthnSecret;
+  }
+  try {
+    return await passcodeLocalSecret(registryRootFingerprint);
+  } catch {
+    return await fallbackLocalSecret(registryRootFingerprint);
+  }
+}
+
+async function deviceBindingOprfToken(localInput) {
+  const inputScalar = scalarFromBytes(await sha256Bytes(localInput));
+  const blind = randomScalar();
+  const blinded = p256PointMultiply(
+    mod(inputScalar * blind, P256_N),
+    P256_G
+  );
+  const evaluated = p256PointFromWire(
+    await registryJson("/api/v1/device-bindings/oprf", {
+      method: "POST",
+      body: JSON.stringify(p256PointToWire(blinded))
+    })
+  );
+  const unblinded = p256PointMultiply(modInv(blind, P256_N), evaluated);
+  const digest = await sha256Bytes(encodeP256Point(unblinded));
+  return `pact-device-binding-v2.${base64Url(digest)}`;
+}
+
+async function browserFingerprint() {
+  const registry = await registryJson("/api/v1/registry");
+  const rootFingerprint = registry.root_fingerprint;
+  if (!rootFingerprint) {
+    throw new Error("Registry did not return a root fingerprint.");
+  }
+  const localSecret = await localDeviceBindingSecret(rootFingerprint);
+  const localInput = await hmacSha256Bytes(
+    localSecret,
+    new TextEncoder().encode(
+      `PACT device binding input v1\0${rootFingerprint}\0${await browserFingerprintMaterial()}`
+    )
+  );
+  return await deviceBindingOprfToken(localInput);
 }
 
 async function signedMutation(purpose, payload, boundKeyId = null) {

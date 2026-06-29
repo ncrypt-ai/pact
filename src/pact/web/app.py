@@ -33,6 +33,7 @@ from pact.crypto import jwk_thumbprint
 from pact.inspection import inspect_content
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
+from pact.oprf import OprfError
 from pact.registry.app import (
     AvoidanceReportLabel,
     ChallengePurpose,
@@ -481,7 +482,24 @@ def _registry_info(service: RegistryService) -> dict[str, object]:
 
 
 def _json_dict(value: object) -> dict[str, object]:
-    return cast(dict[str, object], jsonable_encoder(value))
+    return cast(dict[str, object], _public_jsonable(value))
+
+
+def _public_jsonable(value: object) -> object:
+    encoded = jsonable_encoder(value)
+    return _drop_private_public_fields(encoded)
+
+
+def _drop_private_public_fields(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _drop_private_public_fields(item)
+            for key, item in value.items()
+            if key not in {"device_fingerprint"}
+        }
+    if isinstance(value, list):
+        return [_drop_private_public_fields(item) for item in value]
+    return value
 
 
 def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
@@ -547,6 +565,17 @@ class ChallengeRequestModel(BaseModel):
         le=255,
         description="Required leading zero bits for the proof-of-work solution.",
         examples=[12],
+    )
+
+
+class DeviceBindingOprfRequestModel(BaseModel):
+    x: str = Field(
+        description="Base64url P-256 x coordinate of the blinded point.",
+        examples=["base64url-coordinate"],
+    )
+    y: str = Field(
+        description="Base64url P-256 y coordinate of the blinded point.",
+        examples=["base64url-coordinate"],
     )
 
 
@@ -1030,6 +1059,25 @@ def create_app(
             difficulty=body.difficulty,
         )
         return _json_dict(challenge.to_dict())
+
+    @app.post(
+        "/api/v1/device-bindings/oprf",
+        tags=["Profiles"],
+        summary="Evaluate a blinded device-binding OPRF point",
+        description=(
+            "Evaluate a client-blinded point used to derive a private, "
+            "registry-scoped device binding token."
+        ),
+    )
+    async def device_binding_oprf(
+        request: Request,
+        body: DeviceBindingOprfRequestModel,
+    ) -> dict[str, str]:
+        enforce_identity_rate(request, body)
+        try:
+            return service.evaluate_device_binding_oprf(body.model_dump())
+        except (OprfError, RegistryError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.post(
         "/api/v1/profiles",
@@ -1607,7 +1655,7 @@ def create_app(
             request,
             "profile.html",
             {
-                "profile": jsonable_encoder(profile),
+                "profile": _public_jsonable(profile),
                 "evidence": jsonable_encoder(evidence),
                 "public_base_url": app.state.public_base_url,
             },
@@ -1626,7 +1674,7 @@ def create_app(
             "claim.html",
             {
                 "claim": jsonable_encoder(claim),
-                "profile": jsonable_encoder(profile),
+                "profile": _public_jsonable(profile),
                 "spread": spread.to_dict(),
                 "public_base_url": app.state.public_base_url,
             },
@@ -1648,7 +1696,7 @@ def create_app(
             "verify_claim.html",
             {
                 "claim": jsonable_encoder(claim),
-                "profile": jsonable_encoder(profile),
+                "profile": _public_jsonable(profile),
                 "verification": jsonable_encoder(verification),
             },
         )

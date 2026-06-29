@@ -40,6 +40,7 @@ from pact.manifest import (
     verify_manifest,
 )
 from pact.media import infer_mime_type
+from pact.oprf import OprfError, device_binding_oprf_token
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
 from pact.registry.app import (
@@ -369,6 +370,35 @@ def _identity_store(
 
 def _device_binding_store() -> LocalDeviceBindingStore:
     return LocalDeviceBindingStore()
+
+
+def _registry_device_binding_token(
+    registry_url: str,
+    binding_store: LocalDeviceBindingStore,
+) -> str:
+    info = _registry_info(registry_url)
+    root_fingerprint = info.get("root_fingerprint")
+    if not isinstance(root_fingerprint, str):
+        raise SystemExit(
+            f"{registry_url}/api/v1/registry did not include root_fingerprint"
+        )
+    local_input = binding_store.private_binding_input(
+        registry_url,
+        root_fingerprint,
+    )
+    try:
+        return device_binding_oprf_token(
+            local_input=local_input,
+            evaluator=lambda point: _request_json(
+                registry_url,
+                "/api/v1/device-bindings/oprf",
+                payload=dict(point),
+            ),
+        )
+    except OprfError as error:
+        raise SystemExit(
+            f"registry device binding OPRF failed: {error}"
+        ) from error
 
 
 def _device_binding_error(error: DeviceBindingError) -> SystemExit:
@@ -759,12 +789,16 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
     identity = _load_identity(args)
+    binding_store = _device_binding_store()
     try:
-        binding = _device_binding_store().bind_imported_identity(identity)
+        binding_store.bind_imported_identity(identity)
     except DeviceBindingError as error:
         raise _device_binding_error(error) from error
     payload: dict[str, object] = {
-        "device_fingerprint": binding.device_fingerprint,
+        "device_fingerprint": _registry_device_binding_token(
+            identity.registry_url,
+            binding_store,
+        ),
     }
     display_name = cast(str | None, args.display_name)
     if display_name:

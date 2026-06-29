@@ -207,6 +207,13 @@ def default_routes() -> tuple[RouteConfig, ...]:
             "issue_challenge",
         ),
         RouteConfig(
+            "device_binding_oprf",
+            "POST",
+            "/api/v1/device-bindings/oprf",
+            RouteAuth.PUBLIC,
+            "device_binding_oprf",
+        ),
+        RouteConfig(
             "register_profile",
             "POST",
             "/api/v1/profiles",

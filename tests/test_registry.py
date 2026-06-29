@@ -30,6 +30,7 @@ from pact import (
     merkle_root,
     sign_manifest,
 )
+from pact.oprf import device_binding_input, device_binding_oprf_token
 from pact.registry.store import SqliteRegistryStore
 
 
@@ -114,6 +115,40 @@ def register_profile(
         proof_of_work_solution=solve_pow(challenge),
     )
     service.register_profile(request)
+
+
+def test_device_binding_oprf_token_is_deterministic_and_registry_scoped(
+    tmp_path: Path,
+) -> None:
+    service, _admin_identity = make_service(tmp_path / "one")
+    other_service, _other_admin = make_service(tmp_path / "two")
+    local_input = device_binding_input(
+        local_secret=b"local-secret",
+        registry_root_fingerprint=service.certificate_authority.root_fingerprint,
+        device_fingerprint="local-browser-fingerprint",
+    )
+    other_input = device_binding_input(
+        local_secret=b"local-secret",
+        registry_root_fingerprint=other_service.certificate_authority.root_fingerprint,
+        device_fingerprint="local-browser-fingerprint",
+    )
+
+    first = device_binding_oprf_token(
+        local_input=local_input,
+        evaluator=service.evaluate_device_binding_oprf,
+    )
+    second = device_binding_oprf_token(
+        local_input=local_input,
+        evaluator=service.evaluate_device_binding_oprf,
+    )
+    other = device_binding_oprf_token(
+        local_input=other_input,
+        evaluator=other_service.evaluate_device_binding_oprf,
+    )
+
+    assert first == second
+    assert first.startswith("pact-device-binding-v2.")
+    assert other != first
 
 
 def register_claim(

@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from pact.crypto import jwk_thumbprint, public_jwk
+from pact.oprf import device_binding_input
 
 
 class IdentityError(ValueError):
@@ -179,6 +180,19 @@ class LocalDeviceBindingStore:
             normalized.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
+
+    def private_binding_input(
+        self,
+        registry_url: str,
+        registry_root_fingerprint: str,
+    ) -> bytes:
+        """Return local private input for the registry OPRF token."""
+
+        return device_binding_input(
+            local_secret=_hardware_fingerprint_material(),
+            registry_root_fingerprint=registry_root_fingerprint,
+            device_fingerprint=self.fingerprint(registry_url),
+        )
 
     def load(self, registry_url: str) -> DeviceIdentityBinding | None:
         """Load the local binding for a registry, if present."""

@@ -24,6 +24,7 @@ from pact import (
     sign_manifest,
 )
 from pact.metadata import PACKAGE_VERSION
+from pact.oprf import P256_BASE_POINT, p256_point_to_wire
 from pact.registry import MutationChallenge
 from pact.web import RateLimitConfig, create_app
 
@@ -133,6 +134,33 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
             "signature": request.signature,
         },
     ).raise_for_status()
+
+
+def test_device_binding_oprf_endpoint_returns_evaluated_point(
+    tmp_path: Path,
+) -> None:
+    client, _identity = make_client(tmp_path)
+    point = p256_point_to_wire(P256_BASE_POINT)
+
+    response = client.post("/api/v1/device-bindings/oprf", json=point)
+
+    assert response.status_code == 200
+    evaluated = response.json()
+    assert set(evaluated) == {"x", "y"}
+    assert evaluated != point
+
+
+def test_device_binding_oprf_endpoint_rejects_invalid_points(
+    tmp_path: Path,
+) -> None:
+    client, _identity = make_client(tmp_path)
+
+    response = client.post(
+        "/api/v1/device-bindings/oprf",
+        json={"x": "bad", "y": "bad"},
+    )
+
+    assert response.status_code == 400
 
 
 def register_claim(
@@ -310,6 +338,7 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "PACT Registry" in home.text
     profile_page = client.get(f"/profiles/{identity.key_id}")
     assert identity.key_id in profile_page.text
+    assert "device_fingerprint" not in profile_page.text
     claim_page = client.get(f"/claims/{claim['claim_id']}")
     assert claim["claim_id"] in claim_page.text
     verify_page = client.get(f"/verify/claim/{claim['claim_id']}")
@@ -434,6 +463,7 @@ def test_web_updates_profile_display_name(tmp_path: Path) -> None:
     assert profile["display_name"] == "Alice Updated"
     loaded = client.get(f"/api/v1/profiles/{identity.key_id}").json()
     assert loaded["display_name"] == "Alice Updated"
+    assert "device_fingerprint" not in loaded
 
 
 def test_openapi_schema_includes_actionable_examples(tmp_path: Path) -> None:

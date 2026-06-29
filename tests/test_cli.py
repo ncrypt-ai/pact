@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import pact.cli as cli
 from pact import (
     CanonicalizationProfile,
     ClaimantIdentity,
@@ -19,6 +20,7 @@ from pact import (
 )
 from pact.cli import build_parser, main
 from pact.metadata import PACKAGE_VERSION
+from pact.oprf import evaluate_device_oprf
 
 
 @pytest.fixture(autouse=True)
@@ -320,6 +322,45 @@ def test_cli_identity_rotate_preserves_device_fingerprint(
     assert rotated["previous_key_id"] == created["key_id"]
     assert rotated["replacement_key_id"] != created["key_id"]
     assert rotated["device_fingerprint"] == created["device_fingerprint"]
+
+
+def test_cli_registry_device_binding_token_uses_blinded_oprf(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    registry = "https://registry.example"
+    identity = ClaimantIdentity.generate(registry)
+    store = cli.LocalDeviceBindingStore(tmp_path / "bindings")
+    store.bind_new_identity(identity)
+    blinded_requests: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_registry_info",
+        lambda _registry_url: {"root_fingerprint": "A" * 43},
+    )
+
+    def fake_request_json(
+        registry_url: str,
+        path: str,
+        *,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        assert registry_url == registry
+        assert path == "/api/v1/device-bindings/oprf"
+        assert payload is not None
+        blinded_requests.append(payload)
+        return dict(evaluate_device_oprf(payload, server_scalar=7))
+
+    monkeypatch.setattr(cli, "_request_json", fake_request_json)
+
+    first = cli._registry_device_binding_token(registry, store)
+    second = cli._registry_device_binding_token(registry, store)
+
+    assert first == second
+    assert first.startswith("pact-device-binding-v2.")
+    assert blinded_requests[0] != blinded_requests[1]
+    assert store.fingerprint(registry) not in json.dumps(blinded_requests)
 
 
 def test_cli_web_command_bootstraps_local_app(
