@@ -13,6 +13,7 @@ from pact import (
     PrivacyAuditError,
     PrivacySeverity,
     audit_public_json_payload,
+    audit_registry_claim_payload,
     audit_signed_manifest_publication,
     sign_manifest,
 )
@@ -89,3 +90,22 @@ def test_public_payload_privacy_audit_rejects_private_material() -> None:
     assert report.passed is False
     with pytest.raises(PrivacyAuditError, match="private local material"):
         report.require_passed()
+
+
+def test_registry_claim_payload_rejects_plaintext_fields() -> None:
+    signed, content, nonce = make_signed_manifest()
+
+    report = audit_registry_claim_payload(
+        {
+            "signed_manifest_json": signed.to_json().decode("utf-8"),
+            "plaintext": content.decode("utf-8"),
+        },
+        content=content,
+        nonce=nonce,
+    )
+
+    assert report.passed is False
+    assert any(
+        finding.code == "unexpected_registry_claim_field"
+        for finding in report.findings
+    )
