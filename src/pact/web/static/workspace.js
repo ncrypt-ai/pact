@@ -618,10 +618,15 @@ async function inspectionContext(result) {
     context.claimDisputes = disputes.disputes || [];
   }
   if (claimantKey) {
-    const evidence = await registryJson(`/api/v1/profiles/${claimantKey}/evidence`);
-    const disputes = await registryJson(`/api/v1/profiles/${claimantKey}/disputes`);
-    context.claimantEvidence = evidence;
-    context.claimantDisputes = disputes.disputes || [];
+    try {
+      const evidence = await registryJson(`/api/v1/profiles/${claimantKey}/evidence`);
+      const disputes = await registryJson(`/api/v1/profiles/${claimantKey}/disputes`);
+      context.claimantEvidence = evidence;
+      context.claimantDisputes = disputes.disputes || [];
+    } catch {
+      context.claimantEvidence = null;
+      context.claimantDisputes = [];
+    }
   }
   return context;
 }
