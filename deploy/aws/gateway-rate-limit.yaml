@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: PACT rate limiting for externally managed API Gateway stages and load balancers.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: pact-registry
+  ApiGatewayStageArn:
+    Type: String
+    Default: ""
+    Description: Optional API Gateway stage ARN to associate with the WAF WebACL.
+  LoadBalancerArn:
+    Type: String
+    Default: ""
+    Description: Optional Application Load Balancer ARN to associate with the WAF WebACL.
+  RateLimitPerFiveMinutes:
+    Type: Number
+    Default: 1500
+    MinValue: 100
+    Description: Maximum requests per source IP per five-minute WAF window.
+  MutationPathRateLimitPerFiveMinutes:
+    Type: Number
+    Default: 300
+    MinValue: 100
+    Description: Maximum mutation-route requests per source IP per five-minute WAF window.
+
+Conditions:
+  HasApiGatewayStageArn: !Not [!Equals [!Ref ApiGatewayStageArn, ""]]
+  HasLoadBalancerArn: !Not [!Equals [!Ref LoadBalancerArn, ""]]
+
+Resources:
+  RegistryRateLimitWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${NamePrefix}-rate-limit"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${NamePrefix}-rate-limit"
+        SampledRequestsEnabled: true
+      Rules:
+        - Name: mutation-route-rate-limit
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref MutationPathRateLimitPerFiveMinutes
+              AggregateKeyType: IP
+              ScopeDownStatement:
+                OrStatement:
+                  Statements:
+                    - ByteMatchStatement:
+                        SearchString: "/api/v1/profiles"
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                        PositionalConstraint: STARTS_WITH
+                    - ByteMatchStatement:
+                        SearchString: "/api/v1/claims"
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                        PositionalConstraint: STARTS_WITH
+                    - ByteMatchStatement:
+                        SearchString: "/api/v1/rotations"
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                        PositionalConstraint: STARTS_WITH
+                    - ByteMatchStatement:
+                        SearchString: "/api/v1/domains"
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                        PositionalConstraint: STARTS_WITH
+                    - ByteMatchStatement:
+                        SearchString: "/api/v1/disputes"
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                        PositionalConstraint: STARTS_WITH
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${NamePrefix}-mutation-route-rate-limit"
+            SampledRequestsEnabled: true
+        - Name: global-rate-limit
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref RateLimitPerFiveMinutes
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${NamePrefix}-global-rate-limit"
+            SampledRequestsEnabled: true
+        - Name: aws-managed-common
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${NamePrefix}-aws-managed-common"
+            SampledRequestsEnabled: true
+        - Name: aws-managed-known-bad-inputs
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${NamePrefix}-aws-managed-known-bad-inputs"
+            SampledRequestsEnabled: true
+
+  ApiGatewayWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: HasApiGatewayStageArn
+    Properties:
+      ResourceArn: !Ref ApiGatewayStageArn
+      WebACLArn: !GetAtt RegistryRateLimitWebAcl.Arn
+
+  LoadBalancerWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: HasLoadBalancerArn
+    Properties:
+      ResourceArn: !Ref LoadBalancerArn
+      WebACLArn: !GetAtt RegistryRateLimitWebAcl.Arn
+
+Outputs:
+  WebAclArn:
+    Description: WAF WebACL ARN associated with the provided gateway/load balancer resources.
+    Value: !GetAtt RegistryRateLimitWebAcl.Arn
+  WebAclId:
+    Description: WAF WebACL ID.
+    Value: !GetAtt RegistryRateLimitWebAcl.Id

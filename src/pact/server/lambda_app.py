@@ -54,6 +54,8 @@ def _handler():
         service,
         public_base_url=config.public_base_url,
         local_mode=False,
+        allowed_hosts=config.security.allowed_hosts,
+        cors_allowed_origins=config.security.cors_origins,
         logging_config=config.logging,
     )
     return mangum_module.Mangum(app)

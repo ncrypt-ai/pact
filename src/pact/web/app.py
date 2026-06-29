@@ -696,6 +696,7 @@ def create_app(
     registry_url: str | None = None,
     local_mode: bool = False,
     enable_workspace: bool = False,
+    allowed_hosts: tuple[str, ...] = (),
     cors_allowed_origins: tuple[str, ...] = (),
     docs_directory: str | Path | None = None,
     rate_limit_config: RateLimitConfig | None = None,
@@ -713,9 +714,11 @@ def create_app(
     )
     if normalized_registry_url is None:
         raise ValueError("registry_url is required when service is omitted")
-    allowed_hosts = [parsed_public_url.hostname or "localhost"]
+    trusted_hosts = list(allowed_hosts) or [
+        parsed_public_url.hostname or "localhost"
+    ]
     if local_mode:
-        allowed_hosts.extend(["127.0.0.1", "localhost"])
+        trusted_hosts.extend(["127.0.0.1", "localhost"])
     app = FastAPI(
         title="PACT Registry",
         version=PACKAGE_VERSION,
@@ -725,7 +728,7 @@ def create_app(
         openapi_url="/api/openapi.json",
         openapi_tags=OPENAPI_TAGS,
         middleware=[
-            Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts),
+            Middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts),
         ],
     )
     app.state.registry_service = service

@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: PACT registry Lambda runtime for externally managed API Gateway, Cognito, and load balancer.
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: ""
+    Description: Optional fixed Lambda function name.
+  RegistryUrl:
+    Type: String
+    Description: Canonical registry API URL exposed through your gateway or load balancer.
+  PublicBaseUrl:
+    Type: String
+    Description: Public base URL used in proof pages and generated links.
+  PostgresDsn:
+    Type: String
+    NoEcho: true
+    Description: Existing Postgres DSN for registry event storage.
+  RootCertificatePem:
+    Type: String
+    NoEcho: true
+    Description: Registry root certificate PEM with newlines escaped as \n when passed on the CLI.
+  IntermediateCertificatePem:
+    Type: String
+    NoEcho: true
+    Description: Registry intermediate certificate PEM with newlines escaped as \n when passed on the CLI.
+  IntermediatePrivateKeyPem:
+    Type: String
+    NoEcho: true
+    Description: Registry intermediate private key PEM with newlines escaped as \n when passed on the CLI.
+  AllowedHosts:
+    Type: String
+    Default: ""
+    Description: Optional comma-separated host allow-list for forwarded host headers.
+  CorsOrigins:
+    Type: String
+    Default: ""
+    Description: Optional comma-separated CORS origins.
+  CommitSha:
+    Type: String
+    Default: ""
+    Description: Optional deployed commit SHA exposed by /api/v1/server/info.
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues:
+      - DEBUG
+      - INFO
+      - WARNING
+      - ERROR
+      - CRITICAL
+  Timeout:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 900
+  MemorySize:
+    Type: Number
+    Default: 1024
+    MinValue: 128
+    MaxValue: 10240
+  ReservedConcurrency:
+    Type: Number
+    Default: 0
+    Description: Set to 0 to omit a reserved concurrency limit.
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Optional private subnet IDs when Postgres is reachable only inside a VPC.
+  VpcSecurityGroupIds:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: Optional security group IDs for VPC-enabled Lambda networking.
+  ApiGatewaySourceArn:
+    Type: String
+    Default: ""
+    Description: Optional execute-api source ARN allowed to invoke the function.
+  LoadBalancerTargetGroupArn:
+    Type: String
+    Default: ""
+    Description: Optional ALB target group ARN allowed to invoke the function.
+
+Conditions:
+  HasFunctionName: !Not [!Equals [!Ref FunctionName, ""]]
+  HasCommitSha: !Not [!Equals [!Ref CommitSha, ""]]
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, 0]]
+  HasVpcConfig: !Not [!Equals [!Join ["", !Ref VpcSubnetIds], ""]]
+  HasApiGatewaySourceArn: !Not [!Equals [!Ref ApiGatewaySourceArn, ""]]
+  HasLoadBalancerTargetGroupArn: !Not [!Equals [!Ref LoadBalancerTargetGroupArn, ""]]
+
+Resources:
+  RegistryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ../..
+      Dockerfile: services/lambdas/registry/Dockerfile
+    Properties:
+      FunctionName: !If [HasFunctionName, !Ref FunctionName, !Ref AWS::NoValue]
+      PackageType: Image
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrency
+        - !Ref ReservedConcurrency
+        - !Ref AWS::NoValue
+      VpcConfig: !If
+        - HasVpcConfig
+        - SecurityGroupIds: !Ref VpcSecurityGroupIds
+          SubnetIds: !Ref VpcSubnetIds
+        - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          PACT_DEPLOYMENT_MODE: aws_lambda
+          PACT_STORE_BACKEND: postgres
+          PACT_AUTH_PROVIDER: cognito
+          PACT_REGISTRY_URL: !Ref RegistryUrl
+          PACT_PUBLIC_BASE_URL: !Ref PublicBaseUrl
+          PACT_POSTGRES_DSN: !Ref PostgresDsn
+          PACT_AWS_REGION: !Ref AWS::Region
+          PACT_ALLOWED_HOSTS: !Ref AllowedHosts
+          PACT_CORS_ORIGINS: !Ref CorsOrigins
+          PACT_LOG_LEVEL: !Ref LogLevel
+          PACT_LOG_FORMAT: json
+          PACT_COMMIT_SHA: !If [HasCommitSha, !Ref CommitSha, !Ref AWS::NoValue]
+          PACT_ROOT_CERTIFICATE_PEM: !Ref RootCertificatePem
+          PACT_INTERMEDIATE_CERTIFICATE_PEM: !Ref IntermediateCertificatePem
+          PACT_INTERMEDIATE_PRIVATE_KEY_PEM: !Ref IntermediatePrivateKeyPem
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - AWSLambdaVPCAccessExecutionRole
+
+  RegistryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${RegistryFunction}"
+      RetentionInDays: 30
+
+  ApiGatewayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasApiGatewaySourceArn
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RegistryFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Ref ApiGatewaySourceArn
+
+  LoadBalancerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasLoadBalancerTargetGroupArn
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RegistryFunction
+      Principal: elasticloadbalancing.amazonaws.com
+      SourceArn: !Ref LoadBalancerTargetGroupArn
+
+Outputs:
+  RegistryFunctionName:
+    Description: Lambda function name to integrate with existing API Gateway or ALB.
+    Value: !Ref RegistryFunction
+  RegistryFunctionArn:
+    Description: Lambda function ARN.
+    Value: !GetAtt RegistryFunction.Arn
+  RegistryFunctionInvokeArn:
+    Description: Lambda invoke ARN for API Gateway integrations.
+    Value: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RegistryFunction.Arn}/invocations"
