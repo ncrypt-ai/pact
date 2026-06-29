@@ -68,6 +68,10 @@ def solve_pow(challenge) -> int:
     return solution
 
 
+def device_token(identity: ClaimantIdentity) -> str:
+    return f"pact-device-binding-v2.{identity.key_id}"
+
+
 def make_png_bytes() -> bytes:
     image = Image.new("RGB", (64, 64), "white")
     for x in range(64):
@@ -124,7 +128,7 @@ def register_profile(
         challenge,
         payload={
             "display_name": "Alice",
-            "device_fingerprint": f"test-device-{identity.key_id}",
+            "device_fingerprint": device_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge),
     )

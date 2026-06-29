@@ -36,6 +36,10 @@ def solve_pow(challenge) -> int:
     return solution
 
 
+def device_token(identity: ClaimantIdentity) -> str:
+    return f"pact-device-binding-v2.{identity.key_id}"
+
+
 def make_signed_manifest(identity: ClaimantIdentity):
     manifest = Manifest.create(
         identity=identity,
@@ -120,7 +124,7 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
         challenge_object,
         payload={
             "display_name": "Alice",
-            "device_fingerprint": f"test-device-{identity.key_id}",
+            "device_fingerprint": device_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge_object),
     )
@@ -699,7 +703,7 @@ def test_api_rate_limit_uses_claimant_identity_across_ips(
             "claimant_public_jwk": identity.public_jwk,
             "proof_of_work_solution": 0,
             "payload": {
-                "device_fingerprint": f"test-device-{identity.key_id}"
+                "device_fingerprint": device_token(identity)
             },
             "signature": "invalid",
         }

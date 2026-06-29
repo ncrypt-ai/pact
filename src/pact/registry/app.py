@@ -21,6 +21,7 @@ from cryptography.x509.oid import NameOID
 
 from pact.canonical import JsonValue, canonical_json
 from pact.crypto import (
+    base64url_decode,
     base64url_encode,
     jwk_thumbprint,
     public_key_from_jwk,
@@ -38,6 +39,8 @@ from pact.registry.store import (
     RegistryStoreError,
 )
 from pact.watermarks.base import TrustMarkLocator
+
+_DEVICE_BINDING_TOKEN_PREFIX = "pact-device-binding-v2."
 
 
 class RegistryError(ValueError):
@@ -83,6 +86,25 @@ def _highest_report_label(
     if not labels:
         return None
     return max(labels, key=lambda label: rank[label])
+
+
+def _validated_device_binding_token(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise RegistryError("device_fingerprint must be a nonempty string")
+    if not value.startswith(_DEVICE_BINDING_TOKEN_PREFIX):
+        raise RegistryError(
+            "device_fingerprint must be a pact-device-binding-v2 token"
+        )
+    try:
+        base64url_decode(
+            value.removeprefix(_DEVICE_BINDING_TOKEN_PREFIX),
+            length=32,
+        )
+    except ValueError as error:
+        raise RegistryError(
+            "device_fingerprint token digest must be 32 bytes of base64url"
+        ) from error
+    return value
 
 
 class ChallengePurpose(StrEnum):
@@ -875,13 +897,13 @@ class ClaimantProfile:
     key_id: str
     public_jwk: dict[str, str]
     created_at: datetime
+    device_fingerprint: str
     display_name: str | None = None
     replacement_key_id: str | None = None
     verified_domains: tuple[str, ...] = ()
     hosted_account: bool = False
     third_party_attested: bool = False
     documented_rights: bool = False
-    device_fingerprint: str | None = None
 
 
 HostedAccountVerifier = Callable[[str, Mapping[str, object]], bool]
@@ -1265,8 +1287,7 @@ class RegistryService:
                     documented_rights=bool(
                         data.get("documented_rights", False)
                     ),
-                    device_fingerprint=cast(
-                        str | None,
+                    device_fingerprint=_validated_device_binding_token(
                         data.get("device_fingerprint"),
                     ),
                 )
@@ -1897,9 +1918,9 @@ class RegistryService:
         profiles = self._load_profiles()
         if request.claimant_key_id in profiles:
             raise RegistryError("claimant profile already exists")
-        device_fingerprint = request.payload.get("device_fingerprint")
-        if not isinstance(device_fingerprint, str) or not device_fingerprint:
-            raise RegistryError("device_fingerprint must be a nonempty string")
+        device_fingerprint = _validated_device_binding_token(
+            request.payload.get("device_fingerprint")
+        )
         if any(
             profile.device_fingerprint == device_fingerprint
             for profile in profiles.values()
@@ -2368,6 +2389,7 @@ class RegistryService:
                 for dispute in claimant_disputes
             ),
             hosted_account=profile.hosted_account,
+            device_continuity=bool(profile.device_fingerprint),
             third_party_attested=profile.third_party_attested,
             documented_rights=profile.documented_rights,
         )
