@@ -198,7 +198,7 @@ class ExternalManifestReference:
     visible_notice: str
 
     def to_dict(self) -> dict[str, str]:
-        """Return the bootstrap metadata as a JSON-compatible mapping."""
+        """Serialize bootstrap metadata for an external manifest."""
 
         return {
             "asset_mime_type": self.asset_mime_type,
@@ -212,37 +212,37 @@ class ExternalManifestReference:
         }
 
     def to_json(self) -> bytes:
-        """Return canonical JSON bytes for the external-manifest reference."""
+        """Canonical JSON bytes for the external-manifest reference."""
 
         return canonical_json(self.to_dict())
 
 
 def c2pa_supported_reader_mime_types() -> tuple[str, ...]:
-    """Return MIME types the installed SDK can read."""
+    """MIME types the installed SDK can read."""
 
     return tuple(sorted(_SUPPORTED_READER_MIME_TYPES))
 
 
 def c2pa_supported_builder_mime_types() -> tuple[str, ...]:
-    """Return MIME types the installed SDK can embed."""
+    """MIME types the installed SDK can embed."""
 
     return tuple(sorted(_SUPPORTED_BUILDER_MIME_TYPES))
 
 
 def c2pa_supported_embedded_image_mime_types() -> tuple[str, ...]:
-    """Return image MIME types supported for embedded C2PA writing."""
+    """Image MIME types supported for embedded C2PA writing."""
 
     return _EMBEDDED_IMAGE_MIME_TYPES
 
 
 def c2pa_pdf_embedding_supported() -> bool:
-    """Return whether this package can embed C2PA manifest stores into PDFs."""
+    """Whether this package can embed C2PA manifest stores into PDFs."""
 
     return True
 
 
 def c2pa_supported_embedded_document_mime_types() -> tuple[str, ...]:
-    """Return document/container formats this package can embed into."""
+    """Document/container formats this package can embed into."""
 
     return tuple(sorted({"application/pdf", *_ZIP_BASED_MIME_TYPES}))
 

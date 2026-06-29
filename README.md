@@ -11,7 +11,7 @@ person or organization wants to say:
 - this policy says how the claimant wants the work handled
 - this registry has or has not seen, revoked, disputed, or attested to the claim
 
-PACT is not an AI detector, copyright oracle, or proof that something is true.
+PACT is not an AI detector, copyright decision engine, or proof that something is true.
 It keeps those questions separate so applications can show users exactly what
 was verified and what was not.
 
@@ -19,6 +19,8 @@ was verified and what was not.
 
 - Registry-scoped P-256 identities with OS keyring or encrypted-file storage.
 - Signed PACT Manifest v1 JSON using RFC 8785 canonicalization and ES256.
+- Machine-readable training policy entries, including
+  `pact.no_commercial_training`.
 - Text, HTML, XML, C2PA, document, and image soft-binding carrier helpers.
 - Privacy checks that reject raw content, private nonces, prompts, probe text,
   and provider responses before registry publication.
@@ -186,8 +188,10 @@ browser workspace unless you are integrating directly with the API.
 - Carrier formats and C2PA notes: `docs/carriers.rst`
 - Manifest format: `docs/manifest.rst`
 - Security model: `docs/security.rst`
+- Technological protection measure specification: `docs/tpm.rst`
 - Server and AWS deployment: `docs/server.rst`
 - Legal and policy notes: `docs/legal.rst`
+- Terms notice template: `TERMS.md`
 - API reference: `docs/api.rst`
 
 Build docs locally:
@@ -210,10 +214,10 @@ uv run sphinx-build -W -b html docs docs/_build/html
 uv build
 ```
 
-Contributions may use LLM assistance, but not unreviewed or exclusively
-LLM-authored work. See `CONTRIBUTING.md`.
+Contributors may use LLM assistance, but every submitted change needs human
+review, testing, and ownership by the contributor. See `CONTRIBUTING.md`.
 
 ## Status and license
 
-PACT is pre-alpha. The format and carrier schemes need independent review
-before being treated as stable. Apache-2.0. See `LICENSE` and `NOTICE`.
+PACT is pre-alpha. Treat the format and carrier schemes as reviewable drafts,
+not stable standards. Apache-2.0. See `LICENSE` and `NOTICE`.

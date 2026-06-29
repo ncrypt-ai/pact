@@ -49,7 +49,7 @@ class CognitoAuthorizerConfig:
     issuer: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible Cognito authorizer config."""
+        """Serialize Cognito authorizer settings."""
 
         result = {
             "user_pool_id": self.user_pool_id,
@@ -71,7 +71,7 @@ class SecurityProfile:
     cognito: CognitoAuthorizerConfig | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible security profile."""
+        """Serialize deployment security settings."""
 
         return {
             "auth_provider": self.auth_provider.value,
@@ -95,7 +95,7 @@ class RouteConfig:
     permission: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible route config."""
+        """Serialize one route entry from the public route map."""
 
         return {
             "name": self.name,
@@ -150,7 +150,7 @@ class RuntimeConfig:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible runtime config."""
+        """Serialize runtime settings safe for diagnostics."""
 
         return {
             "registry_url": self.registry_url,

@@ -24,9 +24,17 @@ from pact import (
     sign_manifest,
 )
 from pact.metadata import PACKAGE_VERSION
-from pact.oprf import P256_BASE_POINT, p256_point_to_wire
+from pact.oprf import (
+    P256_BASE_POINT,
+    format_device_binding_token,
+    p256_point_to_wire,
+)
 from pact.registry import MutationChallenge
 from pact.web import RateLimitConfig, create_app
+
+
+def device_binding_token(identity: ClaimantIdentity) -> str:
+    return format_device_binding_token(identity.key_id)
 
 
 def solve_pow(challenge) -> int:
@@ -34,10 +42,6 @@ def solve_pow(challenge) -> int:
     while not challenge.verify_solution(solution):
         solution += 1
     return solution
-
-
-def device_token(identity: ClaimantIdentity) -> str:
-    return f"pact-device-binding-v2.{identity.key_id}"
 
 
 def make_signed_manifest(identity: ClaimantIdentity):
@@ -124,7 +128,7 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
         challenge_object,
         payload={
             "display_name": "Alice",
-            "device_fingerprint": device_token(identity),
+            "device_fingerprint": device_binding_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge_object),
     )
@@ -703,7 +707,7 @@ def test_api_rate_limit_uses_claimant_identity_across_ips(
             "claimant_public_jwk": identity.public_jwk,
             "proof_of_work_solution": 0,
             "payload": {
-                "device_fingerprint": device_token(identity)
+                "device_fingerprint": device_binding_token(identity)
             },
             "signature": "invalid",
         }

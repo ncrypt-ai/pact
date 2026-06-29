@@ -1,7 +1,7 @@
 Carriers
 ========
 
-PACT now provides text, HTML, and XML carrier helpers for ``pact.text.v1``
+PACT provides text, HTML, and XML carrier helpers for ``pact.text.v1``
 manifests.
 
 Plain text
@@ -76,7 +76,7 @@ configuration, structured records, legal text, or medical/safety text.
    )
    assert result.embeddings
 
-The ``experimental`` text carrier mode now composes the normal text carrier
+The ``experimental`` text carrier mode composes the normal text carrier
 with one or more selected plugins:
 
 .. code-block:: python
@@ -169,8 +169,8 @@ by the official C2PA SDK.
 PDF, DOCX, and external manifests
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PACT now has real container writers for formats where the official Python SDK
-can read credentials but cannot author them directly:
+PACT includes container writers for formats where the official Python SDK can
+read credentials but cannot author them directly:
 
 - PDF uses an embedded file stream with ``/AFRelationship /C2PA_Manifest`` and
   a catalog ``/AF`` entry.
@@ -178,7 +178,7 @@ can read credentials but cannot author them directly:
   ``META-INF/content_credential.c2pa`` stored without compression.
 
 Those helpers embed a manifest store that has already been signed elsewhere.
-PACT now also exposes a hybrid signer path for unsupported document formats:
+PACT also exposes a hybrid signer path for unsupported document formats:
 
 - for ZIP-based formats such as DOCX, it uses the official builder in
   ``no_embed`` mode and bypasses only the Python wrapper's format allow-list;

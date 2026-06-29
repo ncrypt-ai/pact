@@ -26,11 +26,16 @@ from pact import (
     sign_manifest,
     verify_image_soft_binding,
 )
+from pact.oprf import format_device_binding_token
 from pact.registry.app import RegisteredClaim
 from pact.watermarks.base import ImageWatermarkBackend
 
 ROOT_FINGERPRINT = "A" * 43
 CLAIM_ID = UUID("018f7f79-7b42-7c00-8000-000000000123")
+
+
+def device_binding_token(identity: ClaimantIdentity) -> str:
+    return format_device_binding_token(identity.key_id)
 
 
 class StubBackend(ImageWatermarkBackend):
@@ -66,10 +71,6 @@ def solve_pow(challenge) -> int:
     while not challenge.verify_solution(solution):
         solution += 1
     return solution
-
-
-def device_token(identity: ClaimantIdentity) -> str:
-    return f"pact-device-binding-v2.{identity.key_id}"
 
 
 def make_png_bytes() -> bytes:
@@ -128,7 +129,7 @@ def register_profile(
         challenge,
         payload={
             "display_name": "Alice",
-            "device_fingerprint": device_token(identity),
+            "device_fingerprint": device_binding_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge),
     )

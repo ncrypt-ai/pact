@@ -40,7 +40,7 @@ class InspectionSource:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible source summary."""
+        """Serialize source metadata without content bytes."""
 
         return asdict(self)
 
@@ -57,7 +57,7 @@ class ExtractedReference:
     details: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible reference summary."""
+        """Serialize the recovered manifest or claim reference."""
 
         return {
             "carrier": self.carrier,

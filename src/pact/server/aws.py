@@ -19,7 +19,7 @@ class AwsLambdaRoute:
     cognito_scope: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible AWS route description."""
+        """Serialize route metadata for AWS integrations."""
 
         return {
             "name": self.name,

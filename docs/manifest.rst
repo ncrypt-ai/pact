@@ -25,7 +25,8 @@ members:
        "policy": {
          "label": "cawg.training-mining",
          "entries": {
-           "cawg.ai_generative_training": {"use": "notAllowed"}
+           "cawg.ai_generative_training": {"use": "notAllowed"},
+           "pact.no_commercial_training": {"use": "notAllowed"}
          }
        },
        "claim_meanings": ["signed_by", "training_restriction"],
@@ -78,6 +79,12 @@ The four CAWG keys use their standard names. PACT extensions use the
 ``pact.`` prefix. Python uses ``not_allowed`` while the serialized CAWG value
 is ``notAllowed``. A constrained entry requires explanatory text and can
 include an absolute HTTP(S) licensing URL.
+
+PACT uses ``pact.no_commercial_training`` as an explicit machine-readable
+restriction marker for commercial training. It is intentionally separate from
+the broader ``cawg.ai_generative_training`` key so registries, crawlers, and
+training pipeline operators can detect the protected scope without inferring it
+from prose.
 
 Parsing
 -------

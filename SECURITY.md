@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest released version. PACT is currently
-pre-alpha, so public APIs, deployment templates, and carrier details may still
+Security fixes are provided for the latest released version. PACT is pre-alpha,
+so public APIs, deployment templates, and carrier details may still
 change when a security issue requires it.
 
 ## Reporting a vulnerability

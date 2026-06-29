@@ -151,7 +151,7 @@ class InvisibleLocator:
         return self.public_nonce
 
     def to_dict(self) -> dict[str, object]:
-        """Return the locator payload as a JSON-compatible mapping."""
+        """Serialize the locator payload."""
 
         result = self._unsigned_dict()
         result["checksum"] = self.checksum
@@ -186,7 +186,7 @@ class InvisibleLocator:
 
     @classmethod
     def create(cls, manifest: Manifest, public_nonce: bytes | None) -> Self:
-        """Create a locator from a manifest and optional disclosed nonce."""
+        """Build a locator for a manifest and optional disclosed nonce."""
 
         unsigned: dict[str, object] = {
             "version": "1",
@@ -206,7 +206,7 @@ class InvisibleLocator:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> Self:
-        """Parse a locator payload from its JSON-compatible mapping."""
+        """Load a locator payload."""
 
         expected = {
             "version",

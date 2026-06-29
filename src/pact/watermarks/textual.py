@@ -22,7 +22,7 @@ class TextWatermarkPipelineResult:
     embeddings: tuple[TextWatermarkEmbedding, ...]
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible pipeline summary."""
+        """Summarize the plugin pipeline output."""
 
         return {
             "transformed_content": self.transformed_content,

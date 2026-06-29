@@ -59,6 +59,10 @@ def _policy_from_json(value: str | None, fallback: str) -> Policy:
                 Permission.GENERATIVE_TRAINING,
                 permission_value,
             ),
+            PolicyEntry(
+                Permission.NO_COMMERCIAL_TRAINING,
+                permission_value,
+            ),
         )
     )
 

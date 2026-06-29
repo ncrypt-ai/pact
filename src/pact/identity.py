@@ -155,7 +155,7 @@ class DeviceIdentityBinding:
     key_id: str
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible binding record."""
+        """Serialize the local device-to-identity binding."""
 
         return asdict(self)
 

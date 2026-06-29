@@ -19,6 +19,7 @@ Start Here
 - :doc:`Carrier formats <carriers>`
 - :doc:`Manifest format <manifest>`
 - :doc:`Security model <security>`
+- :doc:`Technological protection measure specification <tpm>`
 - :doc:`Server deployments <server>`
 - :doc:`Legal and policy notes <legal>`
 - :doc:`API reference <api>`
@@ -39,6 +40,7 @@ Build Documentation Locally
    carriers
    manifest
    security
+   tpm
    server
    legal
    api

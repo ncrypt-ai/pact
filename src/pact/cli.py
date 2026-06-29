@@ -449,6 +449,10 @@ def _default_policy(_name: str) -> Policy:
             PolicyEntry(
                 Permission.GENERATIVE_TRAINING, PermissionValue.NOT_ALLOWED
             ),
+            PolicyEntry(
+                Permission.NO_COMMERCIAL_TRAINING,
+                PermissionValue.NOT_ALLOWED,
+            ),
         )
     )
 

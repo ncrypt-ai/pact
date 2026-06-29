@@ -30,12 +30,16 @@ from pact import (
     merkle_root,
     sign_manifest,
 )
-from pact.oprf import device_binding_input, device_binding_oprf_token
+from pact.oprf import (
+    device_binding_input,
+    device_binding_oprf_token,
+    format_device_binding_token,
+)
 from pact.registry.store import SqliteRegistryStore
 
 
-def device_token(identity: ClaimantIdentity) -> str:
-    return f"pact-device-binding-v2.{identity.key_id}"
+def device_binding_token(identity: ClaimantIdentity) -> str:
+    return format_device_binding_token(identity.key_id)
 
 
 def solve_pow(challenge) -> int:
@@ -114,7 +118,7 @@ def register_profile(
         challenge,
         payload={
             "display_name": "Alice",
-            "device_fingerprint": device_token(identity),
+            "device_fingerprint": device_binding_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge),
     )
@@ -346,7 +350,7 @@ def test_profile_registration_cannot_self_assert_hosted_account(
         payload={
             "display_name": "Alice",
             "hosted_account": True,
-            "device_fingerprint": device_token(identity),
+            "device_fingerprint": device_binding_token(identity),
         },
         proof_of_work_solution=solve_pow(challenge),
     )
@@ -662,7 +666,7 @@ def test_registry_rejects_replayed_challenge(tmp_path: Path) -> None:
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={"device_fingerprint": device_token(identity)},
+        payload={"device_fingerprint": device_binding_token(identity)},
         proof_of_work_solution=solve_pow(challenge),
     )
 
@@ -684,7 +688,7 @@ def test_registry_consumes_challenge_on_failed_verification(
     bad_request = MutationRequest.create(
         wrong_identity,
         challenge,
-        payload={"device_fingerprint": device_token(wrong_identity)},
+        payload={"device_fingerprint": device_binding_token(wrong_identity)},
         proof_of_work_solution=solve_pow(challenge),
     )
     bad_request = MutationRequest(
@@ -700,7 +704,7 @@ def test_registry_consumes_challenge_on_failed_verification(
     good_request = MutationRequest.create(
         identity,
         challenge,
-        payload={"device_fingerprint": device_token(identity)},
+        payload={"device_fingerprint": device_binding_token(identity)},
         proof_of_work_solution=solve_pow(challenge),
     )
 
@@ -715,7 +719,7 @@ def test_registry_rejects_duplicate_device_fingerprint(tmp_path: Path) -> None:
     service, _admin_identity = make_service(tmp_path)
     first = ClaimantIdentity.generate(service.registry_url)
     second = ClaimantIdentity.generate(service.registry_url)
-    fingerprint = device_token(first)
+    fingerprint = device_binding_token(first)
 
     for identity in (first, second):
         challenge = service.issue_challenge(
@@ -871,7 +875,7 @@ def test_registry_challenge_survives_service_restart_with_sqlite(
     request = MutationRequest.create(
         identity,
         challenge,
-        payload={"device_fingerprint": device_token(identity)},
+        payload={"device_fingerprint": device_binding_token(identity)},
         proof_of_work_solution=solve_pow(challenge),
     )
 
@@ -909,7 +913,7 @@ def test_registry_snapshot_observes_external_sqlite_writes(
     first_request = MutationRequest.create(
         first_identity,
         first_challenge,
-        payload={"device_fingerprint": device_token(first_identity)},
+        payload={"device_fingerprint": device_binding_token(first_identity)},
         proof_of_work_solution=solve_pow(first_challenge),
     )
     service_a.register_profile(first_request)
@@ -928,7 +932,7 @@ def test_registry_snapshot_observes_external_sqlite_writes(
         second_identity,
         second_challenge,
         payload={
-            "device_fingerprint": device_token(second_identity)
+            "device_fingerprint": device_binding_token(second_identity)
         },
         proof_of_work_solution=solve_pow(second_challenge),
     )

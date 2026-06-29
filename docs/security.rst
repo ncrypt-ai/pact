@@ -29,7 +29,7 @@ matches, and registry verification into one evidence report. The score is an
 explanation aid, not a legal or technical assertion that a provider trained on
 specific material.
 
-Trust tiers currently distinguish unauthenticated device continuity, hosted
+Trust tiers distinguish unauthenticated device continuity, hosted
 account status, domain verification, and third-party attestation. Claimant
 certificates are registry-issued key material and do not raise trust tier.
 Verification labels are evidence-based. ``content_claim_verified`` means the
@@ -76,7 +76,7 @@ device difficult while avoiding a reusable cross-registry tracking identifier.
 
 Exported identities must be protected with a high-entropy password and moved
 over a trusted channel. ``ClaimantIdentity.rotate`` creates a new key for the
-same registry, and the registry core now supports old/new co-signed rotation
+same registry, and the registry core supports old/new co-signed rotation
 requests so a rotation can be published as an append-only registry event.
 
 Registry privacy boundary
@@ -143,16 +143,16 @@ binding, disputes, revocation, and C2PA validation.
 Current scope
 -------------
 
-This implementation now provides a registry-core library layer, certificate
-authority material generation, a FastAPI HTTP/API surface, HTML proof pages,
-and a CLI entrypoint. It can also embed an already-built C2PA manifest store
+PACT provides a registry-core library layer, certificate authority material
+generation, a FastAPI HTTP/API surface, HTML proof pages, and a CLI entrypoint.
+It can also embed an already-built C2PA manifest store
 into PDF and ZIP-based document containers, but it still does not generate
 new spec-compliant C2PA manifest stores for PDF or OOXML through a first-class
 official writer API. Instead, it uses the official CAI signer path in detached
 mode and then applies official embeddable-manifest formatting plus local
 container patching. Public-key trust and registry-root trust remain caller
-decisions. The format and carrier schemes must receive an independent
-cryptographic review before being declared stable.
+decisions. The format and carrier schemes should receive independent
+cryptographic review before they are treated as stable.
 
 CA handling
 -----------

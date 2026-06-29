@@ -1,13 +1,13 @@
 Quickstart
 ==========
 
-PACT currently provides library APIs for registry-scoped claimant identities,
+PACT provides library APIs for registry-scoped claimant identities,
 policies, signed manifests, local verification, text/HTML/XML carrier
 embedding, an initial C2PA integration layer for supported image and
 document containers, and a registry-core library layer with replay
 challenges, append-only event storage, certificates, rotations, revocations,
-and disputes. It also now ships a CLI entrypoint plus FastAPI-based public
-API and proof-page surfaces for hosted and loopback-local deployment.
+and disputes. It also ships a CLI entrypoint plus FastAPI-based public API and
+proof-page surfaces for hosted and loopback-local deployment.
 
 Create and sign a manifest
 --------------------------
@@ -39,6 +39,10 @@ content carrier or private evidence package, not in the registry manifest.
        (
            PolicyEntry(
                Permission.GENERATIVE_TRAINING,
+               PermissionValue.NOT_ALLOWED,
+           ),
+           PolicyEntry(
+               Permission.NO_COMMERCIAL_TRAINING,
                PermissionValue.NOT_ALLOWED,
            ),
        )
@@ -417,7 +421,7 @@ media, it tries supported text, HTML, XML, image watermark, C2PA image/PDF, and
 ZIP-based document carriers, then resolves registered claims when the active
 registry has the referenced claim.
 
-The CLI currently exposes:
+The CLI exposes:
 
 - ``pact identity init|show|export|import|rotate``
 - ``pact sign``

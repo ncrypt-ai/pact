@@ -53,7 +53,7 @@ class RegistryStore(Protocol):
         ...
 
     def latest_sequence(self) -> int:
-        """Return the highest persisted registry event sequence."""
+        """Highest persisted registry event sequence."""
         ...
 
     def append(
@@ -157,7 +157,7 @@ class RegistryEvent:
     data: dict[str, object]
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible event payload."""
+        """Serialize one registry event."""
 
         return {
             "sequence": self.sequence,
@@ -169,7 +169,7 @@ class RegistryEvent:
         }
 
     def canonical_bytes(self) -> bytes:
-        """Return the canonical bytes covered by batch hashing."""
+        """Canonical bytes covered by batch hashing."""
 
         return canonical_json(self.to_dict())
 
@@ -223,7 +223,7 @@ class RegistryBatch:
     created_at: datetime
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible batch payload."""
+        """Serialize one registry batch."""
 
         return {
             "batch_id": str(self.batch_id),
@@ -361,7 +361,7 @@ class FileRegistryStore:
         return tuple(result)
 
     def latest_sequence(self) -> int:
-        """Return the highest persisted registry event sequence."""
+        """Highest persisted registry event sequence."""
 
         events = self.list_events()
         if not events:
@@ -529,7 +529,7 @@ class SqliteRegistryStore:
         )
 
     def latest_sequence(self) -> int:
-        """Return the highest persisted registry event sequence."""
+        """Highest persisted registry event sequence."""
 
         row = self.connection.execute(
             "SELECT COALESCE(MAX(sequence), 0) FROM registry_events"
@@ -742,7 +742,7 @@ class PostgresRegistryStore:
         )
 
     def latest_sequence(self) -> int:
-        """Return the highest persisted registry event sequence."""
+        """Highest persisted registry event sequence."""
 
         row = self.connection.execute(
             "SELECT COALESCE(MAX(sequence), 0) FROM registry_events"

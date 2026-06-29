@@ -17,6 +17,7 @@ P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 P256_GX = 0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296
 P256_GY = 0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5
 P256_BASE_POINT = (P256_GX, P256_GY)
+DEVICE_BINDING_TOKEN_PREFIX = "pact-device-binding-v2."
 
 P256Point = tuple[int, int] | None
 OprfEvaluator = Callable[[dict[str, str]], Mapping[str, object]]
@@ -24,6 +25,17 @@ OprfEvaluator = Callable[[dict[str, str]], Mapping[str, object]]
 
 class OprfError(ValueError):
     """Raised when OPRF point input or output is invalid."""
+
+
+def format_device_binding_token(digest: bytes | str) -> str:
+    """Format a 32-byte digest as a device-binding token."""
+
+    if isinstance(digest, bytes):
+        digest_text = base64url_encode(digest)
+    else:
+        base64url_decode(digest, length=32)
+        digest_text = digest
+    return f"{DEVICE_BINDING_TOKEN_PREFIX}{digest_text}"
 
 
 def _mod_inv(value: int, modulus: int) -> int:
@@ -192,4 +204,4 @@ def device_binding_oprf_token(
     digest = hashlib.sha256(
         b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
     ).digest()
-    return f"pact-device-binding-v2.{base64url_encode(digest)}"
+    return format_device_binding_token(digest)

@@ -94,6 +94,7 @@ const policyPermissions = [
   ["cawg.ai_generative_training", "Generative AI training"],
   ["cawg.ai_training", "Non-generative AI training"],
   ["pact.commercial_training", "Commercial training"],
+  ["pact.no_commercial_training", "No commercial training"],
   ["pact.noncommercial_training", "Noncommercial training"],
   ["pact.fine_tuning", "Fine tuning"],
   ["pact.embedding", "Embeddings"],
@@ -776,6 +777,8 @@ function policySummary(policy) {
     ].filter(Boolean).join(", ");
   }
   const training =
+    policy["pact.no_commercial_training"] ||
+    policy["pact.commercial_training"] ||
     policy["cawg.ai_generative_training"] ||
     policy["cawg.ai_training"] ||
     policy["cawg.data_mining"];

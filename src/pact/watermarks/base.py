@@ -71,7 +71,7 @@ class TrustMarkLocator:
 
     @classmethod
     def from_payload_bytes(cls, payload: bytes) -> TrustMarkLocator:
-        """Parse and validate a raw 96-bit watermark payload."""
+        """Decode the compact 96-bit TrustMark payload."""
 
         if len(payload) != _TRUSTMARK_PAYLOAD_BYTES:
             raise WatermarkError("TrustMark payloads must be exactly 96 bits")
@@ -87,7 +87,7 @@ class TrustMarkLocator:
 
     @classmethod
     def from_payload_bits(cls, payload_bits: str) -> TrustMarkLocator:
-        """Parse and validate a TrustMark binary payload string."""
+        """Decode a binary-string TrustMark payload."""
 
         if len(payload_bits) != _TRUSTMARK_PAYLOAD_BYTES * 8:
             raise WatermarkError("TrustMark payloads must be exactly 96 bits")
@@ -101,7 +101,7 @@ class TrustMarkLocator:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> TrustMarkLocator:
-        """Parse a JSON-compatible locator payload."""
+        """Load a locator from persisted metadata."""
 
         version = value.get("version")
         lookup_tag = value.get("lookup_tag")
@@ -114,7 +114,7 @@ class TrustMarkLocator:
         return cls(base64url_decode(lookup_tag, length=10), version=version)
 
     def to_payload_bytes(self) -> bytes:
-        """Return the raw 96-bit payload for image embedding."""
+        """Raw 96-bit payload used by image watermark backends."""
 
         body = bytes([self.version]) + self.lookup_tag
         checksum = hashlib.sha256(_TRUSTMARK_CHECKSUM_CONTEXT + body).digest()[
@@ -123,12 +123,12 @@ class TrustMarkLocator:
         return body + checksum
 
     def to_payload_bits(self) -> str:
-        """Return the raw 96-bit payload as a binary string."""
+        """Binary-string form of the TrustMark payload."""
 
         return "".join(f"{byte:08b}" for byte in self.to_payload_bytes())
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible locator representation."""
+        """Serialize locator metadata."""
 
         return {
             "version": self.version,
@@ -139,7 +139,7 @@ class TrustMarkLocator:
     def matches_claim(
         self, claim_id: UUID, registry_root_fingerprint: str
     ) -> bool:
-        """Return whether this locator belongs to the provided claim."""
+        """Check the locator against a claim and registry root."""
 
         expected = type(self).create(claim_id, registry_root_fingerprint)
         return self.lookup_tag == expected.lookup_tag
@@ -155,7 +155,7 @@ class ImageWatermark:
     watermark_id: str = TRUSTMARK_WATERMARK_ID
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible embedded watermark summary."""
+        """Summarize the embedded image watermark."""
 
         return {
             "mime_type": self.mime_type,
@@ -174,7 +174,7 @@ class DecodedImageWatermark:
     decoder_version: int | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible decoded watermark summary."""
+        """Summarize the decoded watermark."""
 
         return {
             "detected": self.detected,
@@ -220,7 +220,7 @@ class TextWatermarkRecord:
     metadata: dict[str, object]
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible embedding record."""
+        """Serialize the watermark record."""
 
         return {
             "method_id": self.method_id,
@@ -241,7 +241,7 @@ class TextWatermarkDetection:
     details: dict[str, object]
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible detection report."""
+        """Serialize detection measurements."""
 
         return {
             "method_id": self.method_id,
@@ -265,7 +265,7 @@ class TextWatermarkQualityReport:
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible quality report."""
+        """Serialize the review report for a transform."""
 
         return {
             "method_id": self.method_id,
@@ -286,7 +286,7 @@ class TextWatermarkEmbedding:
     quality_report: TextWatermarkQualityReport
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible embedding summary."""
+        """Serialize transformed content and review artifacts."""
 
         return {
             "transformed_content": self.transformed_content,
@@ -356,14 +356,14 @@ _MEDICAL_SAFETY_HINTS = (
 
 
 def secret_digest(secret: bytes | str) -> str:
-    """Return a short stable digest for an experimental watermark secret."""
+    """Short stable digest for an experimental watermark secret."""
 
     raw = secret.encode("utf-8") if isinstance(secret, str) else secret
     return base64url_encode(hashlib.sha256(raw).digest()[:12])
 
 
 def secret_bytes(secret: bytes | str) -> bytes:
-    """Return the secret as raw bytes."""
+    """Normalize a text or byte secret to bytes."""
 
     return secret.encode("utf-8") if isinstance(secret, str) else secret
 
@@ -371,7 +371,7 @@ def secret_bytes(secret: bytes | str) -> bytes:
 def assess_text_watermark_eligibility(
     content: str,
 ) -> TextWatermarkEligibility:
-    """Return whether content is safe for experimental text transforms."""
+    """Check whether content is safe for experimental text transforms."""
 
     lowered = content.lower()
     reasons: list[str] = []
@@ -436,7 +436,7 @@ def require_text_watermark_safety(
 
 
 def text_unified_diff(original: str, transformed: str) -> str:
-    """Return a unified diff for review."""
+    """Unified diff shown before accepting a transform."""
 
     return "\n".join(
         difflib.unified_diff(
@@ -456,7 +456,7 @@ def build_quality_report(
     *,
     warnings: tuple[str, ...] = (),
 ) -> TextWatermarkQualityReport:
-    """Build a standard quality report for one transform."""
+    """Create the review report shared by text watermark plugins."""
 
     diff = text_unified_diff(original, transformed)
     changed_lines = sum(
@@ -488,7 +488,7 @@ def split_sentences(content: str) -> list[str]:
 
 
 def sentence_offsets(content: str) -> list[tuple[int, int]]:
-    """Return sentence spans inside the original content."""
+    """Sentence spans inside the original content."""
 
     return [match.span() for match in _SENTENCE_PATTERN.finditer(content)]
 
@@ -496,7 +496,7 @@ def sentence_offsets(content: str) -> list[tuple[int, int]]:
 def index_is_locked(
     index: int, locked_spans: tuple[tuple[int, int], ...]
 ) -> bool:
-    """Return whether one character index is inside a locked span."""
+    """Check whether a character index is inside a locked span."""
 
     return any(start <= index < end for start, end in locked_spans)
 
@@ -504,7 +504,7 @@ def index_is_locked(
 def sentence_selected(
     secret: bytes | str, sentence_index: int, stride: int
 ) -> bool:
-    """Return whether a sentence is selected for keyed watermarking."""
+    """Keyed sentence-selection predicate for statistical watermarks."""
 
     raw = secret_bytes(secret) + sentence_index.to_bytes(4, "big")
     return (

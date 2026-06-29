@@ -6,6 +6,11 @@ work, whether a license is valid, whether training occurred, or whether a use is
 legal. Treat PACT output as provenance and evidence metadata that can support a
 review, not as legal advice.
 
+PACT has not yet received formal legal review, a court endorsement, or
+regulatory approval. Operators and users should have counsel review the exact
+workflow, policy language, and jurisdiction before relying on PACT in a legal
+process.
+
 Plain-language notice
 ---------------------
 
@@ -35,16 +40,63 @@ Applications should display policy results with context:
 - what registry evidence exists
 - whether the claim is disputed, revoked, or only partially verified
 
+Manifest removal and rights metadata
+------------------------------------
+
+Removing a PACT manifest is not just a technical event. In the United States,
+the Digital Millennium Copyright Act includes rules for copyright management
+information. 17 U.S.C. Section 1202 prohibits, among other things, knowingly
+removing or altering copyright management information without authority when the
+person knows, or has reasonable grounds to know, that doing so will induce,
+enable, facilitate, or conceal infringement. Civil remedies are described in
+17 U.S.C. Section 1203.
+
+References:
+
+- 17 U.S.C. Section 1202: https://www.law.cornell.edu/uscode/text/17/1202
+- 17 U.S.C. Section 1203: https://www.law.cornell.edu/uscode/text/17/1203
+
+PACT manifests are designed to carry information that can identify a work,
+identify a claimant, point to a registry claim, and express terms or conditions
+for use. That kind of metadata may be relevant to copyright management
+information analysis. If someone strips the manifest or locator and then uses
+the work in a way that violates the manifest's rights-related requests, the
+removal may be evidence that they tried to get around rights and provenance
+information.
+
+Technological protection measure notice
+---------------------------------------
+
+PACT is documented as a system that can be deployed as a technological
+protection measure when operators preserve signed manifests, policy metadata,
+watermarks, locators, and registry proofs. The technical specification is in
+:doc:`tpm`, and the plain-language notice template is in ``TERMS.md``.
+
+17 U.S.C. Section 1201 addresses circumvention of technological measures and
+trafficking in circumvention tools. It also includes definitions, limitations,
+and exceptions, so operators should not treat the notice template as a
+substitute for legal review.
+
+This does not mean every policy violation is automatically copyright
+infringement, or that every removed manifest automatically creates liability.
+The legal question depends on the work, the rights involved, the user's
+authority, the policy language, the later use, and the knowledge or reasonable
+grounds required by the statute. The practical point is still important:
+applications and operators should treat manifest removal as a serious
+rights-management and provenance signal, especially when followed by conduct the
+manifest prohibited.
+
 C2PA context
 ------------
 
 PACT supports C2PA because many real files and tools use it for content
 credentials. The official C2PA project is at https://c2pa.org/.
 
-PACT does not treat C2PA as magic trust. A C2PA credential can help carry
-metadata through an image, PDF, document, or text workflow, but it does not by
-itself prove authorship, ownership, originality, or legal permission. Those
-questions need registry evidence, claimant context, and sometimes human review.
+PACT does not treat C2PA validation as the whole trust decision. A C2PA
+credential can help carry metadata through an image, PDF, document, or text
+workflow, but it does not by itself prove authorship, ownership, originality,
+or legal permission. Those questions need registry evidence, claimant context,
+and sometimes human review.
 
 For broader context, these critiques are worth reading:
 

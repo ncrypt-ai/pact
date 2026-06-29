@@ -36,6 +36,10 @@ def make_policy() -> Policy:
                 Permission.GENERATIVE_TRAINING,
                 PermissionValue.NOT_ALLOWED,
             ),
+            PolicyEntry(
+                Permission.NO_COMMERCIAL_TRAINING,
+                PermissionValue.NOT_ALLOWED,
+            ),
         )
     )
 
@@ -137,7 +141,10 @@ def test_manifest_create_and_round_trip() -> None:
     assert manifest.claimant_key_id == identity.key_id
     assert manifest.to_dict()["policy"] == {
         "label": "cawg.training-mining",
-        "entries": {"cawg.ai_generative_training": {"use": "notAllowed"}},
+        "entries": {
+            "cawg.ai_generative_training": {"use": "notAllowed"},
+            "pact.no_commercial_training": {"use": "notAllowed"},
+        },
     }
     assert manifest.to_dict()["claim_meanings"] == [
         "signed_by",

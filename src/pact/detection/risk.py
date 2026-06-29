@@ -35,7 +35,7 @@ class EvidenceSignal:
     details: dict[str, object]
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible signal."""
+        """Serialize one evidence signal."""
 
         return {
             "kind": self.kind,
@@ -57,7 +57,7 @@ class TrainingUseRiskReport:
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible report."""
+        """Serialize the combined risk report."""
 
         return {
             "risk_level": self.risk_level.value,

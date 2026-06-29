@@ -30,7 +30,11 @@ from pact.crypto import (
 )
 from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
-from pact.oprf import device_oprf_server_scalar, evaluate_device_oprf
+from pact.oprf import (
+    DEVICE_BINDING_TOKEN_PREFIX,
+    device_oprf_server_scalar,
+    evaluate_device_oprf,
+)
 from pact.privacy import PrivacyAuditError, audit_registry_claim_payload
 from pact.registry.store import (
     RegistryEvent,
@@ -39,8 +43,6 @@ from pact.registry.store import (
     RegistryStoreError,
 )
 from pact.watermarks.base import TrustMarkLocator
-
-_DEVICE_BINDING_TOKEN_PREFIX = "pact-device-binding-v2."
 
 
 class RegistryError(ValueError):
@@ -91,13 +93,13 @@ def _highest_report_label(
 def _validated_device_binding_token(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise RegistryError("device_fingerprint must be a nonempty string")
-    if not value.startswith(_DEVICE_BINDING_TOKEN_PREFIX):
+    if not value.startswith(DEVICE_BINDING_TOKEN_PREFIX):
         raise RegistryError(
             "device_fingerprint must be a pact-device-binding-v2 token"
         )
     try:
         base64url_decode(
-            value.removeprefix(_DEVICE_BINDING_TOKEN_PREFIX),
+            value.removeprefix(DEVICE_BINDING_TOKEN_PREFIX),
             length=32,
         )
     except ValueError as error:
@@ -502,7 +504,7 @@ class MutationChallenge:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible challenge payload."""
+        """Serialize the challenge issued to a claimant."""
 
         result: dict[str, object] = {
             "registry_url": self.registry_url,
@@ -518,7 +520,7 @@ class MutationChallenge:
         return result
 
     def canonical_bytes(self) -> bytes:
-        """Return the canonical bytes covered by the client signature."""
+        """Canonical bytes covered by the client signature."""
 
         return canonical_json(self.to_dict())
 
@@ -1007,7 +1009,7 @@ class SpreadSummary:
     highest_confidence: AvoidanceReportLabel | None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible spread summary."""
+        """Serialize public spread-report state."""
 
         return {
             "claim_id": str(self.claim_id),
@@ -1132,7 +1134,7 @@ class ClaimVerificationReport:
         }
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible verification report."""
+        """Serialize the registry verification report."""
 
         return {
             "claim_id": str(self.claim_id),
@@ -1581,7 +1583,7 @@ class RegistryService:
         self,
         claim: RegisteredClaim,
     ) -> bool:
-        """Return whether a claim opted into public spread reporting."""
+        """Check whether a claim opted into public spread reporting."""
 
         return (
             claim.signed_manifest.manifest.content_binding.public_nonce
