@@ -1969,6 +1969,8 @@ document.querySelector("#sign-content").onclick = () =>
     nonceBase64 = result.nonce_b64;
     const keepNoncePrivate = document.querySelector("#keep-nonce-private").checked;
     download(`${stem}.proof.json`, signedManifest);
+    const signedFilename = selectedFileName(fileInput, ".pact-signed");
+    downloadBase64(signedFilename, content, mimeType);
     if (keepNoncePrivate) {
       downloadBase64(`${stem}.nonce`, nonceBase64);
     }
@@ -2018,7 +2020,12 @@ document.querySelector("#sign-content").onclick = () =>
           ? "Public: proof JSON contains the content check key"
           : "Private: nonce file required"
       ],
-      ["Downloaded", keepNoncePrivate ? `${stem}.proof.json and ${stem}.nonce` : `${stem}.proof.json`],
+      [
+        "Downloaded",
+        keepNoncePrivate
+          ? `${stem}.proof.json, ${signedFilename}, and ${stem}.nonce`
+          : `${stem}.proof.json and ${signedFilename}`
+      ],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"],
       ["Watermarked image", imageWatermarkDownloaded || "Not downloaded"],
       ["Published", claim ? "Yes" : "No"],
@@ -2089,6 +2096,8 @@ document.querySelector("#register-mutation").onclick = () =>
     nonceBase64 = result.nonce_b64;
     const stem = selectedFileStem(fileInput);
     download(`${stem}.proof.json`, signedManifest);
+    const signedFilename = selectedFileName(fileInput, ".pact-signed");
+    downloadBase64(signedFilename, await readFileBase64(file), mimeType);
     const claim = await publishSignedManifest(signedManifest);
     document.querySelector("#revoke-claim-id").value = claim.claim_id;
     document.querySelector("#dispute-claim-id").value = claim.claim_id;
@@ -2108,7 +2117,7 @@ document.querySelector("#register-mutation").onclick = () =>
       ["Edit action", actionSummary(action)],
       ["Source ingredient", ingredientSummary(ingredient)],
       ["Content verification", "Public: proof JSON contains the content check key"],
-      ["Downloaded", `${stem}.proof.json`],
+      ["Downloaded", `${stem}.proof.json and ${signedFilename}`],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"]
     ]);
     message("Edited file signed and published as a new claim.");
