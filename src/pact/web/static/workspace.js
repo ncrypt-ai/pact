@@ -3,13 +3,77 @@ const sessionStatus = document.querySelector("#session-status");
 const worker = new Worker("/static/pyodide-worker.js");
 const pending = new Map();
 const identityStorageKey = "pact.identity";
+const identitiesStorageKey = "pact.identities";
+const selectedIdentityStorageKey = "pact.selectedIdentity";
 const passcodeStorageKey = "pact.passcode";
+function parseStoredJson(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function identityLabel(record) {
+  const name = record.display_name || record.key_id || "Unregistered profile";
+  const key = record.key_id ? `${record.key_id.slice(0, 12)}...` : "pending";
+  return `${name} (${key})`;
+}
+
+function savedIdentities() {
+  const stored = parseStoredJson(identitiesStorageKey, []);
+  const identities = Array.isArray(stored) ? stored.filter(Boolean) : [];
+  const legacy = parseStoredJson(identityStorageKey, null);
+  if (legacy && !identities.some((item) => item.key_id === legacy.key_id)) {
+    identities.unshift(legacy);
+    saveIdentities(identities);
+  }
+  return identities;
+}
+
+function saveIdentities(identities) {
+  localStorage.setItem(identitiesStorageKey, JSON.stringify(identities));
+}
+
+function selectedIdentityKey() {
+  return localStorage.getItem(selectedIdentityStorageKey);
+}
+
 function savedIdentity() {
-  return JSON.parse(localStorage.getItem(identityStorageKey) || "null");
+  const identities = savedIdentities();
+  if (!identities.length) {
+    return null;
+  }
+  const selectedKey = selectedIdentityKey();
+  if (selectedKey) {
+    const selected = identities.find((item) => item.key_id === selectedKey);
+    if (selected) {
+      return selected;
+    }
+  }
+  return identities[0];
+}
+
+function saveIdentity(record) {
+  const identities = savedIdentities();
+  const index = identities.findIndex((item) => item.key_id === record.key_id);
+  if (index === -1) {
+    identities.unshift(record);
+  } else {
+    identities[index] = { ...identities[index], ...record };
+  }
+  saveIdentities(identities);
+  localStorage.setItem(selectedIdentityStorageKey, record.key_id);
+  localStorage.setItem(identityStorageKey, JSON.stringify(record));
+}
+
+function forgetSavedPasscode() {
+  localStorage.removeItem(passcodeStorageKey);
 }
 
 let identity = savedIdentity();
 let identityPassword = null;
+let creatingIdentity = !identity;
 let signedManifest = null;
 let nonceBase64 = null;
 
@@ -85,12 +149,15 @@ function updateMutationOptions() {
 }
 
 function updateSession() {
-  const hasProfile = Boolean(identity || savedIdentity());
+  const profiles = savedIdentities();
+  const hasProfile = !creatingIdentity && Boolean(identity || savedIdentity());
   const unlocked = Boolean(identity && identityPassword);
   sessionStatus.textContent = hasProfile
     ? identityPassword
-      ? "Profile ready."
-      : "Saved profile found."
+      ? `Signed in as ${identityLabel(identity)}.`
+      : profiles.length > 1
+        ? "Choose a saved profile and enter its passcode."
+        : "Saved profile found."
     : "No profile loaded.";
   document.querySelector("#logout-identity").hidden = !hasProfile;
   for (const button of pageButtons()) {
@@ -102,26 +169,50 @@ function updateSession() {
 }
 
 function updateIdentityControls() {
-  const hasProfile = Boolean(identity || savedIdentity());
+  const profiles = savedIdentities();
+  const hasProfile = !creatingIdentity && Boolean(identity || savedIdentity());
   const unlocked = Boolean(identity && identityPassword);
+  const selectorField = document.querySelector("#saved-profiles-field");
+  const selector = document.querySelector("#identity-selector");
   const displayNameField = document.querySelector("#identity-display-name-field");
   const guidance = document.querySelector("#identity-guidance");
+  const passcodeHint = document.querySelector("#identity-passcode-hint");
   const continueButton = document.querySelector("#continue-identity");
+  const newButton = document.querySelector("#new-identity");
+
+  selectorField.hidden = profiles.length === 0 || creatingIdentity;
+  selector.replaceChildren();
+  for (const record of profiles) {
+    const option = document.createElement("option");
+    option.value = record.key_id;
+    option.textContent = identityLabel(record);
+    option.selected = identity && record.key_id === identity.key_id;
+    selector.append(option);
+  }
+
   displayNameField.hidden = hasProfile;
+  newButton.hidden = profiles.length === 0;
   if (hasProfile && !unlocked) {
     continueButton.textContent = "Unlock saved profile";
-    guidance.textContent = "Saved profile is locked. Enter its passcode, then press Unlock saved profile.";
+    passcodeHint.textContent = "Required to decrypt the selected saved profile before PACT can show private profile information, sign files, register edits, or download a recovery file.";
+    guidance.textContent = profiles.length > 1
+      ? "Choose the profile you want to use, enter its passcode, then press Unlock saved profile."
+      : "Saved profile is locked. Enter its passcode, then press Unlock saved profile.";
   } else if (hasProfile) {
     continueButton.textContent = "Continue to signing";
-    guidance.textContent = "Profile is unlocked for this session.";
+    passcodeHint.textContent = "This profile is already unlocked in this tab.";
+    guidance.textContent = `Profile is unlocked for this tab session: ${identityLabel(identity)}.`;
   } else {
     continueButton.textContent = "Create profile";
-    guidance.textContent = "No browser profile is saved here. Choose a passcode, optionally add a display name, then press Create profile.";
+    passcodeHint.textContent = "Required to encrypt this browser profile. PACT cannot recover it for you.";
+    guidance.textContent = profiles.length
+      ? "Create a new browser profile, or choose a saved profile above to unlock it."
+      : "No browser profile is saved here. Choose a passcode, optionally add a display name, then press Create profile.";
   }
 }
 
 function showSavedBrowserProfile() {
-  const current = identity || savedIdentity();
+  const current = creatingIdentity ? null : identity || savedIdentity();
   if (!current) {
     clearElement(document.querySelector("#browser-profile-summary"));
     return;
@@ -133,7 +224,7 @@ function showSavedBrowserProfile() {
     ["Registry", current.registry_url],
     [
       "Status",
-      identityPassword ? "Unlocked for this session" : "Locked. Enter passcode to use it."
+      identityPassword ? "Unlocked for this tab session" : "Locked. Enter passcode to use it."
     ],
     [
       "Next action",
@@ -245,19 +336,20 @@ function requireIdentity() {
 function password() {
   const value =
     identityPassword ||
-    localStorage.getItem(passcodeStorageKey) ||
     document.querySelector("#identity-passcode").value ||
     document.querySelector("#identity-import-password").value;
   if (!value) {
     setPage("identity");
-    throw new Error("Enter your profile passcode.");
+    throw new Error(
+      "Enter the passcode for the selected saved profile to unlock its private signing key."
+    );
   }
   return value;
 }
 
 function rememberPassword() {
   identityPassword = password();
-  localStorage.setItem(passcodeStorageKey, identityPassword);
+  forgetSavedPasscode();
   updateSession();
 }
 
@@ -294,6 +386,26 @@ function validationError(element, text) {
     element.focus();
   }
   throw new Error(text);
+}
+
+function selectIdentity(keyId) {
+  const selected = savedIdentities().find((item) => item.key_id === keyId);
+  if (!selected) {
+    return;
+  }
+  identity = selected;
+  identityPassword = null;
+  creatingIdentity = false;
+  localStorage.setItem(selectedIdentityStorageKey, selected.key_id);
+  localStorage.setItem(identityStorageKey, JSON.stringify(selected));
+  document.querySelector("#identity-passcode").value = "";
+  clearElement(document.querySelector("#public-profile-summary"));
+  updateSession();
+  showSavedBrowserProfile();
+  setPage("identity");
+  message(
+    `Selected ${identityLabel(selected)}. Enter this profile's passcode to unlock private profile information.`
+  );
 }
 
 function message(text, level = "info") {
@@ -1116,12 +1228,13 @@ async function unlockIdentity() {
     key_id: publicIdentity.key_id,
     public_jwk: publicIdentity.public_jwk
   };
-  localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+  saveIdentity(identity);
+  creatingIdentity = false;
   rememberPassword();
 }
 
 async function requireUnlockedIdentity() {
-  identity = identity || savedIdentity();
+  identity = creatingIdentity ? null : identity || savedIdentity();
   if (!identity) {
     throw new Error("No browser profile is stored.");
   }
@@ -1129,7 +1242,9 @@ async function requireUnlockedIdentity() {
     const passcode = document.querySelector("#identity-passcode").value;
     if (!passcode) {
       setPage("identity");
-      throw new Error("Enter your profile passcode to show this profile.");
+      throw new Error(
+        "Enter this saved profile's passcode to unlock its private signing key before showing private profile information."
+      );
     }
     await unlockIdentity();
     updateSession();
@@ -1146,7 +1261,8 @@ async function createIdentity() {
   identity = JSON.parse(
     await callPython("create_identity", [registryUrl(), identityPassword])
   );
-  localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+  saveIdentity(identity);
+  creatingIdentity = false;
   rememberPassword();
 }
 
@@ -1188,6 +1304,12 @@ async function loadOwnProfile() {
   try {
     const profile = await registryJson(`/api/v1/profiles/${identity.key_id}`);
     const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
+    identity = {
+      ...identity,
+      display_name: profile.display_name || identity.display_name || null
+    };
+    saveIdentity(identity);
+    updateSession();
     renderProfile("#public-profile-summary", profile, evidence);
   } catch (error) {
     renderObject("#public-profile-summary", "Public registry profile", [
@@ -1212,7 +1334,7 @@ async function publishSignedManifest(manifestJson) {
 }
 
 async function continueIdentity() {
-  identity = identity || savedIdentity();
+  identity = creatingIdentity ? null : identity || savedIdentity();
   const hadSavedProfile = Boolean(identity);
   if (hadSavedProfile) {
     await unlockIdentity();
@@ -1221,6 +1343,11 @@ async function continueIdentity() {
   }
   const profile = await ensureProfile({ allowDisplayName: !hadSavedProfile });
   const evidence = await registryJson(`/api/v1/profiles/${identity.key_id}/evidence`);
+  identity = {
+    ...identity,
+    display_name: profile.display_name || identity.display_name || null
+  };
+  saveIdentity(identity);
   updateSession();
   showSavedBrowserProfile();
   renderProfile("#public-profile-summary", profile, evidence);
@@ -1235,6 +1362,22 @@ async function continueIdentity() {
 document.querySelector("#continue-identity").onclick = () =>
   run(async () => {
     await continueIdentity();
+  });
+
+document.querySelector("#identity-selector").onchange = (event) =>
+  selectIdentity(event.target.value);
+
+document.querySelector("#new-identity").onclick = () =>
+  run(async () => {
+    creatingIdentity = true;
+    identity = null;
+    identityPassword = null;
+    document.querySelector("#identity-passcode").value = "";
+    document.querySelector("#identity-display-name").value = "";
+    clearElement(document.querySelector("#browser-profile-summary"));
+    clearElement(document.querySelector("#public-profile-summary"));
+    updateSession();
+    message("Choose a passcode for the new browser profile.");
   });
 
 document.querySelector("#show-identity").onclick = () =>
@@ -1371,15 +1514,12 @@ document.querySelector("#attest-third-party").onclick = () =>
 
 document.querySelector("#export-identity").onclick = () =>
   run(async () => {
-    if (!identity) {
-      throw new Error("No browser profile is stored.");
-    }
+    await requireUnlockedIdentity();
     download(
       "pact-profile-recovery.json",
       JSON.stringify(
         {
-          ...identity,
-          passcode: localStorage.getItem(passcodeStorageKey)
+          ...identity
         },
         null,
         2
@@ -1392,7 +1532,6 @@ document.querySelector("#identity-import").onchange = (event) =>
   run(async () => {
     const imported = await readImportFile(event.target.files[0]);
     if (imported.passcode) {
-      localStorage.setItem(passcodeStorageKey, imported.passcode);
       identityPassword = imported.passcode;
     }
     const publicIdentity = JSON.parse(await callPython("import_identity", [
@@ -1407,7 +1546,8 @@ document.querySelector("#identity-import").onchange = (event) =>
       public_jwk: publicIdentity.public_jwk
     };
     rememberPassword();
-    localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+    saveIdentity(identity);
+    creatingIdentity = false;
     updateSession();
     showSavedBrowserProfile();
     await loadOwnProfile();
@@ -1446,7 +1586,7 @@ document.querySelector("#rotate-key").onclick = () =>
       public_jwk: replacement.public_jwk,
       encrypted_pkcs8_b64: replacement.encrypted_pkcs8_b64
     };
-    localStorage.setItem(identityStorageKey, JSON.stringify(identity));
+    saveIdentity(identity);
     await loadOwnProfile();
     message("Signing key rotated. Future claims will use the new key.");
   });
@@ -1454,13 +1594,15 @@ document.querySelector("#rotate-key").onclick = () =>
 document.querySelector("#logout-identity").onclick = () =>
   run(async () => {
     identityPassword = null;
-    localStorage.removeItem(passcodeStorageKey);
+    forgetSavedPasscode();
     identity = savedIdentity();
+    creatingIdentity = !identity;
+    document.querySelector("#identity-passcode").value = "";
     updateSession();
     showSavedBrowserProfile();
     clearElement(document.querySelector("#public-profile-summary"));
     setPage("identity");
-    message("Profile locked on this browser. Enter your passcode and press Unlock saved profile to use it again.");
+    message("Profile locked on this browser. Enter the selected profile's passcode to unlock it again.");
   });
 
 document.querySelector("#sign-content").onclick = () =>
@@ -1873,20 +2015,10 @@ updateSession();
 showSavedBrowserProfile();
 updateSigningOptions();
 updateMutationOptions();
-setPage(identity && localStorage.getItem(passcodeStorageKey) ? "sign" : "identity");
-if (identity && localStorage.getItem(passcodeStorageKey)) {
-  run(async () => {
-    await unlockIdentity();
-    await ensureProfile({ allowDisplayName: false });
-    showSavedBrowserProfile();
-    await loadOwnProfile();
-    setPage("sign");
-    message("Profile restored. Choose a file to sign.");
-  });
-} else {
-  message(
-    identity
-      ? "Saved profile found. Enter your passcode and press Unlock saved profile."
-      : "Create your profile to begin."
-  );
-}
+setPage("identity");
+forgetSavedPasscode();
+message(
+  identity
+    ? "Saved profile found. Enter the selected profile's passcode to unlock private profile information."
+    : "Create your profile to begin."
+);

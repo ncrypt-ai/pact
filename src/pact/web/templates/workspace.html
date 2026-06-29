@@ -52,6 +52,10 @@
             autocomplete="username"
             value="pact-browser-vault"
           >
+          <label id="saved-profiles-field">
+            Saved profile
+            <select id="identity-selector"></select>
+          </label>
           <label id="identity-display-name-field">
             Display name (optional)
             <input id="identity-display-name" autocomplete="name" placeholder="Leave blank to stay pseudonymous">
@@ -60,6 +64,7 @@
             Passcode
             <input id="identity-passcode" type="password" autocomplete="current-password" required>
           </label>
+          <p id="identity-passcode-hint" class="small"></p>
           <p class="small">
             PACT will not create a passcode for you. If you lose it, you may
             not be able to use this signing profile again.
@@ -67,6 +72,7 @@
         </form>
         <div class="actions">
           <button type="button" id="continue-identity" class="primary-action">Create profile</button>
+          <button type="button" id="new-identity">Create another profile</button>
           <button type="button" id="logout-identity" hidden>Log out</button>
         </div>
         <p class="small">
