@@ -25,6 +25,11 @@ The zero-width locator contains:
 It is a redundancy carrier, not a signature. The signed manifest remains the
 authoritative proof object.
 
+Visible plain-text proof blocks include a short PACT notice explaining that the
+embedded proof is provenance and usage-rights metadata, not legal advice or a
+rights transfer. Extraction strips that notice before returning the content body
+so content verification remains stable.
+
 .. code-block:: python
 
    import secrets
@@ -121,6 +126,17 @@ C2PA
 ----
 
 PACT provides a dedicated C2PA integration layer.
+
+Recommended background:
+
+- official C2PA project: https://c2pa.org/
+- C2PA overview and critique: https://lowentropy.net/posts/c2pa/
+- Hacker Factor VIDA discussion: https://www.hackerfactor.com/blog/index.php?/archives/1028-VIDA-The-Simple-Life.html
+
+PACT uses C2PA as a practical carrier for content credentials. It does not
+treat C2PA validation as proof of authorship, ownership, or legal permission.
+PACT verification keeps container credentials, registry state, content binding,
+revocation, disputes, and trust labels separate.
 
 Supported image formats
 ~~~~~~~~~~~~~~~~~~~~~~~

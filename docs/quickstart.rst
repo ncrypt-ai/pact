@@ -254,13 +254,18 @@ profile evidence:
        challenge,
        payload={
            "display_name": "Alice",
-           "device_fingerprint": "registry-scoped-device-fingerprint",
+           "device_fingerprint": "pact-device-binding-v2.base64url-sha256-token",
        },
        proof_of_work_solution=0,  # supply a solved proof-of-work value
    )
    profile = service.register_profile(request)
 
    assert profile.key_id == identity.key_id
+
+In normal CLI and browser workflows, PACT derives the device-binding token for
+you. Direct API callers must provide a ``pact-device-binding-v2`` token signed
+inside the profile-registration mutation. The registry rejects profiles without
+that minimum unauthenticated-device proof.
 
 Run the hosted registry/API service
 -----------------------------------
@@ -302,6 +307,7 @@ This serves:
 - ``/api/v1/server/info``
 - ``/api/v1/inspect``
 - ``/api/v1/challenges``
+- ``/api/v1/device-bindings/oprf``
 - ``/api/v1/profiles/{key_id}``
 - ``/api/v1/profiles/{key_id}/evidence``
 - ``/api/v1/claims/{claim_id}``

@@ -37,3 +37,21 @@ and this project adheres to
   inspection, and service startup.
 - Registry bootstrap hardening so explicit registry initialization writes an
   encrypted offline root key while serving uses only online CA material.
+- AWS Lambda/SAM deployment templates and cfn-lint validation tooling for
+  compute-only deployments behind existing API Gateway, ALB, and Cognito
+  infrastructure.
+- Gateway and load-balancer WAF rate-limit template for AWS deployments.
+- Private ``pact-device-binding-v2`` profile tokens derived through a
+  registry-scoped OPRF flow for browser and CLI profile registration.
+- Legal and policy documentation covering PACT notices, private claims, C2PA
+  context, and deployment operator responsibilities.
+
+### Changed
+
+- Browser-published claims now download both the proof JSON and the signed file
+  copy.
+- Public profile responses and proof pages omit stored device-binding tokens.
+- Plain-text carriers now include a visible PACT notice while preserving
+  content extraction and verification behavior.
+- Profile registration now requires a signed v2 device-binding token for the
+  baseline ``unauthenticated_device`` tier.

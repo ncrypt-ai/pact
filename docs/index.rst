@@ -20,6 +20,7 @@ Start Here
 - :doc:`Manifest format <manifest>`
 - :doc:`Security model <security>`
 - :doc:`Server deployments <server>`
+- :doc:`Legal and policy notes <legal>`
 - :doc:`API reference <api>`
 
 Build Documentation Locally
@@ -39,4 +40,5 @@ Build Documentation Locally
    manifest
    security
    server
+   legal
    api

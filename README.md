@@ -2,77 +2,54 @@
 
 Policy Authenticated Content Token.
 
-PACT is policy-bound content for machine-readable rights enforcement. It is a
-Python toolkit for signing content claims, attaching those claims to files, and
-checking them against registry evidence.
+PACT is a toolkit for signing content claims, attaching those claims to files,
+and checking them against registry evidence. It is built for workflows where a
+person or organization wants to say:
 
-PACT is not a detector for whether content is real, fake, edited, or AI
-generated. It is a way to make specific claims about content explicit,
-portable, and verifiable.
+- this key signed this claim
+- this claim is bound to this exact content, when the verifier has the content
+- this policy says how the claimant wants the work handled
+- this registry has or has not seen, revoked, disputed, or attested to the claim
 
-## What it does
+PACT is not an AI detector, copyright oracle, or proof that something is true.
+It keeps those questions separate so applications can show users exactly what
+was verified and what was not.
 
-PACT gives developers primitives for answering narrower questions:
+## What is included
 
-- which registry-scoped key signed this claim
-- which content commitment the claim is bound to
-- which policy assertions the claimant attached to the work
-- whether a registry has seen, revoked, disputed, or attested to the claim
+- Registry-scoped P-256 identities with OS keyring or encrypted-file storage.
+- Signed PACT Manifest v1 JSON using RFC 8785 canonicalization and ES256.
+- Text, HTML, XML, C2PA, document, and image soft-binding carrier helpers.
+- Privacy checks that reject raw content, private nonces, prompts, probe text,
+  and provider responses before registry publication.
+- A FastAPI registry with profiles, claims, revocation, disputes, key rotation,
+  public proof pages, and a browser workspace.
+- A `pact` CLI for identity, signing, verification, inspection, privacy audits,
+  watermarking, probes, and local registry operation.
+- AWS Lambda/SAM templates for deploying the same monolith behind an existing
+  API Gateway, load balancer, and Cognito authorizer.
 
-The current implementation includes:
+## How to think about trust
 
-- P-256 claimant identities with OS keyring or encrypted-file storage
-- RFC 8785 canonical JSON manifests with ES256 signatures
-- text, HTML, and XML carriers
-- C2PA helpers for supported image, PDF, DOCX, and text workflows
-- append-only registry services with replay challenges, proof-of-work,
-  certificate issuance, key rotation, revocation, disputes, and verification
-  labels
-- a FastAPI registry app and `pact` CLI
-- optional image watermark, text watermark, privacy-audit, and training-use
-  probe tooling
-
-## Trust model
-
-PACT treats C2PA as an interoperability layer and evidence carrier, not as the
-source of trust.
-
-A valid PACT manifest proves:
-
-- a registry-scoped claimant key signed the manifest
-- when content and nonce are supplied, the content commitment matches
+A valid PACT claim means a registry-scoped key signed a manifest. If the verifier
+has the content and nonce, PACT can also check that the content matches the
+signed commitment.
 
 It does not prove:
 
-- that the content is real
-- that the claimant is a unique human
-- that the claimant authored or owns the content
-- that the attached policy is legally enforceable
-- that a readable C2PA asset is trustworthy by itself
+- the content is real, unedited, or AI-generated
+- the claimant is a unique person
+- the claimant authored or owns the content
+- the policy is legally enforceable
+- a readable C2PA asset is trustworthy by itself
 
-The point is to avoid collapsing different questions into one result. Signing,
-authorship, ownership, policy intent, registry state, revocation, disputes, and
-container-level credentials are separate signals.
-
-PACT is designed to avoid these failure modes:
-
-- treating a valid signature as proof of authorship or ownership
-- treating a readable C2PA asset as proof of trust
-- presenting provenance as an AI-content detector
-- relying on opaque central services instead of explicit registry state
-- publishing raw content, private nonces, prompts, or private evidence to the registry
-- silently weakening key storage or verification for convenience
-
-## Version and releases
-
-- Package: `pact`
-- Current version: defined once in `pyproject.toml` and exposed as package
-  metadata
-- Status: pre-alpha
-- Python: `>=3.11`
-- Release notes: `CHANGELOG.md`
-
-Tagged releases should match the package version in `pyproject.toml`.
+PACT uses C2PA as an interoperability layer and evidence carrier. For C2PA
+background, start with the official project at <https://c2pa.org/>. For useful
+skeptical context, see <https://lowentropy.net/posts/c2pa/> and Hacker Factor's
+VIDA discussion at
+<https://www.hackerfactor.com/blog/index.php?/archives/1028-VIDA-The-Simple-Life.html>.
+PACT's stance is practical: use C2PA where it helps move metadata through real
+files, but do not treat a container credential as the whole trust decision.
 
 ## Install
 
@@ -80,17 +57,17 @@ Tagged releases should match the package version in `pyproject.toml`.
 uv sync --locked
 ```
 
-Optional extras:
+Useful extras:
 
 ```bash
-uv sync --locked --extra c2pa
 uv sync --locked --extra server
 uv sync --locked --extra web
+uv sync --locked --extra c2pa
 uv sync --locked --extra image-watermark
 uv sync --locked --extra aws
 ```
 
-## Quick start
+## Quick CLI flow
 
 Create an identity:
 
@@ -101,10 +78,10 @@ pact identity init \
   --identity-password 'change-this'
 ```
 
-Show the public JWK:
+Register the profile with the registry:
 
 ```bash
-pact identity show \
+pact registry register-profile \
   --registry https://registry.example \
   --identity-file ./.pact/identity.pem \
   --identity-password 'change-this'
@@ -119,96 +96,104 @@ pact sign ./work.txt \
   --identity-password 'change-this'
 ```
 
-Register the identity and claim:
+Publish the signed manifest:
 
 ```bash
-pact registry register-profile \
-  --registry https://registry.example \
-  --identity-file ./.pact/identity.pem \
-  --identity-password 'change-this'
-
 pact registry register-claim ./work.manifest.json \
   --registry https://registry.example \
   --identity-file ./.pact/identity.pem \
   --identity-password 'change-this'
 ```
 
-Verify the manifest. By default, the proof includes the public content
-verification nonce, so the original content file is enough:
+Verify it later:
 
 ```bash
-pact verify ./work.manifest.json \
-  --content ./work.txt
+pact verify ./work.manifest.json --content ./work.txt
 ```
 
-Use `pact sign --private-nonce` when you want claim verification to be public
-but content verification to require a separately shared `.nonce` file.
+Use `pact sign --private-nonce` when the claim should be public but exact
+content verification should require a separately shared nonce file.
 
-Inspect a manifest or raw carrier file:
+## Local registry and web workspace
+
+Start a local registry and browser workspace:
 
 ```bash
-pact inspect ./work.txt
+pact registry init \
+  --registry http://127.0.0.1:8000 \
+  --data-dir ./.pact-dev \
+  --root-key-password 'store-this-offline'
+
+pact registry serve \
+  --registry http://127.0.0.1:8000 \
+  --data-dir ./.pact-dev \
+  --public-base-url http://127.0.0.1:8000 \
+  --database ./.pact-dev/registry.sqlite3 \
+  --enable-workspace
 ```
 
-Inspection accepts signed manifest JSON or raw media. For supported carriers it
-looks for embedded PACT manifests, zero-width claim locators, image watermark
-locators, and C2PA references, then resolves registered claims when a registry
-is available.
+Open `http://127.0.0.1:8000/pact`.
 
-Run the local registry/web app:
+The browser workspace keeps signing local. Publishing sends signed manifest JSON
+to the registry, not the raw file. Browser/device fingerprinting is used for
+baseline device continuity, but the registry receives only a private,
+registry-scoped device-binding token derived through a blinded OPRF flow.
+
+## AWS deployment shape
+
+The AWS templates intentionally do not create your API Gateway, Cognito
+authorizer, DNS, certificates, or load balancer. They create the Lambda compute
+piece and optional invoke permissions so an existing gateway or load balancer
+can call the same FastAPI app used by the monolith.
 
 ```bash
-pact web --data-dir ./.pact-dev --port 8000 --database ./.pact-dev/registry.sqlite3
+uv run cfn-lint deploy/aws/registry-compute.sam.yaml deploy/aws/gateway-rate-limit.yaml
+sam build --template-file deploy/aws/registry-compute.sam.yaml
+sam deploy --guided --template-file .aws-sam/build/template.yaml
 ```
 
-Run only the browser workspace against a remote registry:
+Use `deploy/aws/gateway-rate-limit.yaml` to attach AWS WAF rate limits to your
+existing API Gateway stage ARN, ALB ARN, or both. See `docs/server.rst` for the
+parameter list and deployment checklist.
+
+## HTTP examples
+
+Fetch registry metadata:
 
 ```bash
-pact web --remote-registry https://registry.example --port 8000
+curl https://registry.example/api/v1/registry
 ```
 
-## Library example
+Inspect a proof or carrier:
 
-```python
-import secrets
+```bash
+curl -F file=@work.txt -F mime_type=text/plain \
+  https://registry.example/api/v1/inspect
+```
 
-from pact import (
-    CanonicalizationProfile,
-    ClaimantIdentity,
-    Manifest,
-    Permission,
-    PermissionValue,
-    Policy,
-    PolicyEntry,
-    base64url_encode,
-    sign_manifest,
-    verify_manifest,
-)
+Fetch a public claim:
 
-content = b"An original work.\n"
-nonce = secrets.token_bytes(32)
-identity = ClaimantIdentity.generate("https://registry.example")
-policy = Policy(
-    (
-        PolicyEntry(
-            Permission.GENERATIVE_TRAINING,
-            PermissionValue.NOT_ALLOWED,
-        ),
-    )
-)
+```bash
+curl https://registry.example/api/v1/claims/018f7f79-7b42-7c00-8000-000000000001
+```
 
-manifest = Manifest.create(
-    identity=identity,
-    registry_root_fingerprint=base64url_encode(bytes(32)),
-    content=content,
-    mime_type="text/plain",
-    canonicalization=CanonicalizationProfile.TEXT_V1,
-    policy=policy,
-    nonce=nonce,
-)
-signed = sign_manifest(manifest, identity)
-report = verify_manifest(signed, identity.public_jwk, content)
-assert report.valid
+State-changing operations use signed mutation requests. Prefer the CLI or
+browser workspace unless you are integrating directly with the API.
+
+## Documentation
+
+- Quickstart: `docs/quickstart.rst`
+- Carrier formats and C2PA notes: `docs/carriers.rst`
+- Manifest format: `docs/manifest.rst`
+- Security model: `docs/security.rst`
+- Server and AWS deployment: `docs/server.rst`
+- Legal and policy notes: `docs/legal.rst`
+- API reference: `docs/api.rst`
+
+Build docs locally:
+
+```bash
+uv run sphinx-build -W -b html docs docs/_build/html
 ```
 
 ## Development
@@ -219,14 +204,16 @@ Run the repo checks:
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
-uv run coverage run -m pytest
-uv run coverage report
+uv run python -m pytest tests -q
+uv run cfn-lint deploy/aws/registry-compute.sam.yaml deploy/aws/gateway-rate-limit.yaml
 uv run sphinx-build -W -b html docs docs/_build/html
 uv build
 ```
 
-Docs live in `docs/`. The local API and proof-page app is in `src/pact/web/`.
+Contributions may use LLM assistance, but not unreviewed or exclusively
+LLM-authored work. See `CONTRIBUTING.md`.
 
-## License
+## Status and license
 
-Apache-2.0. See `LICENSE` and `NOTICE`.
+PACT is pre-alpha. The format and carrier schemes need independent review
+before being treated as stable. Apache-2.0. See `LICENSE` and `NOTICE`.

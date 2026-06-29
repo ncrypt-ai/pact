@@ -103,15 +103,17 @@ AWS serverless runtime
 
 The AWS deployment model uses:
 
-- API Gateway routes backed by Lambda functions;
-- Cognito authorization for non-public routes;
+- one Lambda container running the same FastAPI app as the monolith;
+- externally managed API Gateway, Cognito, and load balancer resources;
+- externally managed gateway/load-balancer rate limiting through AWS WAF;
 - Postgres for registry events and batches;
 - environment-driven runtime configuration.
 
 ``default_routes`` is the open-source route and permission map. It marks
-public routes, claimant-signed mutation routes, and admin routes. The
-``aws_lambda_routes`` helper converts that map into Lambda names and Cognito
-scopes such as ``pact/claims:write`` and ``pact/disputes:resolve``.
+public routes, claimant-signed mutation routes, and admin routes. Existing API
+Gateway deployments should route ``ANY /`` and ``ANY /{proxy+}`` to the Lambda
+integration so FastAPI remains the source of truth for the monolith and AWS
+surfaces.
 
 The running web app exposes the same route map at
 ``/api/v1/server/routes`` so operators and clients can discover the public
@@ -140,21 +142,91 @@ the ``pact[aws]`` optional dependencies and these environment variables:
    PACT_ROOT_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_PRIVATE_KEY_PEM=...
+   PACT_ALLOWED_HOSTS=registry.example
+   PACT_CORS_ORIGINS=https://workspace.example
+   PACT_COMMIT_SHA=...
 
 The repository includes a Lambda container package at
-``services/lambdas/registry/Dockerfile`` and a SAM template at
-``deploy/aws/registry.sam.yaml``. The template maps every public URL to the
-registry Lambda, keeps read-only proof pages public, and applies Cognito scopes
-to mutation routes.
+``services/lambdas/registry/Dockerfile`` and a compute-only SAM template at
+``deploy/aws/registry-compute.sam.yaml``. That template creates the Lambda
+runtime and optional invoke permissions for an existing API Gateway or ALB. It
+does not create API Gateway, Cognito, DNS, certificates, or the load balancer.
+
+Use ``deploy/aws/gateway-rate-limit.yaml`` to attach a regional WAF WebACL to
+an existing API Gateway stage ARN, an existing ALB ARN, or both. It includes a
+global IP rate limit, a lower mutation-route IP rate limit, and AWS managed
+common and known-bad-input rule groups. This is required for AWS Lambda
+deployments because the in-process limiter is only a defense-in-depth fallback
+and does not coordinate across concurrent Lambda execution environments.
 
 Build and deploy from the repository root:
 
 .. code-block:: bash
 
-   sam build --template-file deploy/aws/registry.sam.yaml
-   sam deploy --guided
+   sam build --template-file deploy/aws/registry-compute.sam.yaml
+   sam deploy --guided --template-file .aws-sam/build/template.yaml
 
-The SAM deployment expects an existing Postgres DSN and Cognito user pool. The
-template keeps those values as parameters so operators can wire in RDS, Aurora
-Serverless, or another managed Postgres endpoint without changing application
-code.
+Then configure the existing gateway/load balancer to invoke the
+``RegistryFunctionArn`` output. For API Gateway, grant the template an
+``ApiGatewaySourceArn`` such as ``arn:aws:execute-api:REGION:ACCOUNT:API/*/*/*``
+or add equivalent invoke permission yourself. For ALB Lambda targets, pass the
+target group ARN as ``LoadBalancerTargetGroupArn`` or add equivalent invoke
+permission yourself.
+
+The SAM deployment expects an existing Postgres DSN and existing certificate
+material. The template keeps those values as parameters so operators can wire
+in RDS, Aurora Serverless, or another managed Postgres endpoint without
+changing application code.
+
+Deployment checklist
+~~~~~~~~~~~~~~~~~~~~
+
+Before treating a registry as public, confirm:
+
+- the API Gateway or ALB forwards ``ANY /`` and ``ANY /{proxy+}`` to the Lambda;
+- the Cognito authorizer, if used, matches the route scopes from
+  ``/api/v1/server/routes``;
+- public routes are intentionally public, including registry metadata,
+  inspection, challenges, proof pages, and the device-binding OPRF endpoint;
+- mutation routes require signed mutation requests and, where applicable,
+  gateway authorization;
+- AWS WAF rate limiting is attached to the API Gateway stage ARN, ALB ARN, or
+  both;
+- CORS origins and allowed hosts are exact deployment values, not wildcards;
+- upload and request logs do not retain private claim content unnecessarily;
+- registry CA material comes from your secret manager and is not baked into an
+  image or template;
+- database backups, retention, and dispute handling are documented for users.
+
+Validation commands:
+
+.. code-block:: bash
+
+   uv run cfn-lint deploy/aws/registry-compute.sam.yaml deploy/aws/gateway-rate-limit.yaml
+   uv run python -m pytest tests -q
+   uv run sphinx-build -W -b html docs docs/_build/html
+
+Privacy and publication boundary
+--------------------------------
+
+The browser workspace signs content locally and sends only signed manifest
+JSON to the registry. It does not upload raw plaintext or binary file content
+when publishing a claim. Browser/device fingerprinting is used only as a local
+device-continuity signal. Before registration, the browser derives
+``HMAC(local_secret, registry_root_fingerprint || browser_fingerprint)`` and
+uses a blinded OPRF request to obtain a private, registry-scoped
+``pact-device-binding-v2`` token. WebAuthn PRF is the preferred browser local
+secret source when available; the profile passcode is the normal fallback. The
+CLI uses the same token format while keeping raw hardware-derived material
+local.
+
+Every claimant profile must include this token to qualify for the baseline
+``unauthenticated_device`` tier. It is not an elevated trust label and it is not
+proof of a unique person. It is the minimum device-continuity proof the registry
+accepts for a profile.
+
+Public profile responses and proof pages omit the stored token.
+
+Plain-text carrier embeddings include a PACT legal notice in the visible proof
+block. Carrier extraction strips that notice before returning the signed
+content body, so verification continues to cover the user-selected content.

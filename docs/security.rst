@@ -41,8 +41,8 @@ content check needs a private nonce. ``content_mismatch``,
 ``invalid_claim_signature``, ``disputed``, ``revoked``, and
 ``inconclusive`` report the corresponding weaker or negative outcomes.
 
-Key storage
------------
+Identity and device continuity
+------------------------------
 
 Claimant keys use P-256 and are generated separately for each registry. The
 preferred local store is the operating-system credential store. The explicit
@@ -50,19 +50,29 @@ fallback writes password-encrypted PKCS#8 PEM atomically with mode ``0600``.
 PACT does not silently fall back from an unavailable OS credential store to
 an unencrypted file.
 
-Local identity creation is also bound to a registry-scoped device fingerprint.
-The current CLI derives that fingerprint from harder-to-change local signals,
-including machine identifiers, platform UUIDs, disk or volume identifiers, MAC
-node data, host names, OS version, architecture, and local user name. The raw
-signals are not persisted in the identity binding file. Instead, PACT stores a
-SHA-256/HMAC-derived registry-scoped fingerprint and the claimant key currently
-bound to it.
+Every registered claimant profile must include a signed
+``pact-device-binding-v2`` token. This is the proof required for the baseline
+``unauthenticated_device`` tier. The token does not grant elevated privileges,
+but the registry will not accept a profile without it.
 
-This is spam resistance, not proof of a unique person. A determined user with
-administrator access can still change hardware identifiers, run virtual
-machines, reinstall the OS, or delete local state. The goal is to make casual
-duplicate identity creation on the same device difficult while allowing normal
-key rotation to preserve the same underlying device binding.
+The CLI keeps local continuity state so one local device is normally bound to
+one claimant identity per registry. It derives local fingerprint material from
+harder-to-change local signals, but raw hardware and host values are not sent to
+the registry.
+
+The browser keeps the same privacy boundary. It uses WebAuthn PRF output as the
+preferred local secret when the browser and authenticator support it. Otherwise
+it falls back to the profile passcode and, only when no passcode is available,
+a local random secret. It combines that local secret with local browser
+fingerprint material and the registry-root fingerprint, then blinds the input
+before asking the registry's OPRF endpoint to evaluate it. The registry sees the
+blinded point and the final registry-scoped token, not raw browser traits.
+
+This is spam resistance and device continuity, not proof of a unique person. A
+determined user with administrator access can still change hardware identifiers,
+run virtual machines, reinstall the OS, use another browser profile, or delete
+local state. The goal is to make casual duplicate identity creation on the same
+device difficult while avoiding a reusable cross-registry tracking identifier.
 
 Exported identities must be protected with a high-entropy password and moved
 over a trusted channel. ``ClaimantIdentity.rotate`` creates a new key for the
@@ -92,6 +102,12 @@ Claim registration accepts only a signed manifest envelope. Extra fields such
 as raw content, private nonces, probe material, or responses are rejected
 before the registry appends an event.
 
+Profile registration accepts a signed mutation that includes the private
+device-binding token. The claimant signature prevents network tampering with
+that token. The registry also rejects missing tokens and legacy arbitrary
+fingerprint strings, so an unauthenticated profile still has a minimum device
+continuity proof.
+
 Registry challenge boundary
 ---------------------------
 
@@ -102,9 +118,8 @@ State-changing registry operations require:
 - a claimant signature over the exact challenge and mutation payload;
 - for key rotation, signatures from both the current and replacement keys.
 
-The in-process registry library enforces those rules before appending an
-event. The future HTTP/API layer must preserve the same exact verification
-boundary.
+The registry library and HTTP/API layer both enforce those rules before
+appending an event.
 
 C2PA trust boundary
 -------------------
@@ -113,6 +128,17 @@ The C2PA layer adds a second signature system with its own certificate-chain
 requirements. A valid PACT manifest does not make a C2PA certificate trusted,
 and a readable C2PA manifest store does not replace PACT content binding or
 registry trust decisions.
+
+Useful references:
+
+- official C2PA project: https://c2pa.org/
+- C2PA threat-model critique: https://lowentropy.net/posts/c2pa/
+- Hacker Factor VIDA discussion: https://www.hackerfactor.com/blog/index.php?/archives/1028-VIDA-The-Simple-Life.html
+
+PACT treats those concerns as product requirements: verification reports should
+say what was checked, avoid implying authorship or ownership from a container
+credential alone, and preserve separate signals for registry state, content
+binding, disputes, revocation, and C2PA validation.
 
 Current scope
 -------------
@@ -136,18 +162,19 @@ online intermediate material required by the serving process. ``pact registry
 serve`` loads only the public root certificate plus the intermediate key and
 certificate; it does not require the offline root private key at runtime.
 
-Current transport limitations
------------------------------
+Current transport limits
+------------------------
 
-The HTTP and HTML layer is present, but several production-hardening items
-from the plan remain future work:
+The HTTP and HTML layer is usable, but production deployments still need
+operator controls around it:
 
-- strict CSRF and cookie-based browser auth flows;
-- hardened CORS and Host/Origin policy;
-- SSRF-safe live domain-verification fetches;
-- resource-isolated worker processes for untrusted file handling;
-- public batch-root timestamp publication;
-- full hosted-browser consent and recovery UX.
+- gateway or load-balancer rate limits, especially for mutation routes;
+- strict CORS and Host/Origin configuration for the actual deployment;
+- careful logging policy for inspection uploads;
+- resource isolation for untrusted file handling at larger scale;
+- backup and rotation procedures for registry CA material and databases;
+- public communication about disputes, takedowns, and retention.
 
-The current transport layer should be treated as a functional foundation, not
-as a finished internet-exposed service profile.
+The AWS templates include WAF rate-limit scaffolding, but operators still need
+to connect it to their existing API Gateway or ALB and confirm the resulting
+behavior in their account.
