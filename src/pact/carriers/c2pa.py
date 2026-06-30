@@ -33,6 +33,10 @@ _DEFAULT_BUILDER_MIME_TYPES = frozenset(
 )
 
 
+class C2paError(CarrierError):
+    """Raised when C2PA credential operations fail."""
+
+
 def _c2pa_sdk() -> Any:
     try:
         import c2pa
@@ -130,10 +134,6 @@ def format_embeddable(
         tuple[int, bytes],
         _c2pa_native().format_embeddable(mime_type, manifest_bytes),
     )
-
-
-class C2paError(CarrierError):
-    """Raised when C2PA credential operations fail."""
 
 
 @dataclass(frozen=True, slots=True)
