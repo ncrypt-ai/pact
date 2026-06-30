@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: PACT registry API backed by Lambda, API Gateway, Cognito, and Postgres.
+Description: Legacy partial PACT registry stack. Prefer registry-compute.sam.yaml with an externally managed gateway/load balancer; this template is retained only for reference and does not expose the full current API surface.
 
 Parameters:
   RegistryUrl:
@@ -51,6 +51,7 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       Auth:
+        DefaultAuthorizer: CognitoAuthorizer
         Authorizers:
           CognitoAuthorizer:
             IdentitySource: "$request.header.Authorization"
