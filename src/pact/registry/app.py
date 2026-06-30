@@ -938,6 +938,28 @@ class DisputeRecord:
     resolution_note: str | None = None
     resolved_by_key_id: str | None = None
 
+    def to_public_dict(
+        self,
+        *,
+        claim_dispute_count: int,
+        reporter_credibility: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "dispute_id": str(self.dispute_id),
+            "claim_id": str(self.claim_id),
+            "opened_by_key_id": self.opened_by_key_id,
+            "opened_at": _isoformat(self.opened_at),
+            "reason": self.reason,
+            "misuse_url": self.misuse_url,
+            "status": self.status.value,
+            "resolved_at": None
+            if self.resolved_at is None
+            else _isoformat(self.resolved_at),
+            "resolution_note": self.resolution_note,
+            "claim_dispute_count": claim_dispute_count,
+            "reporter_credibility": reporter_credibility,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class AvoidanceReport:
@@ -961,14 +983,18 @@ class AvoidanceReport:
     description: str | None
     public_note: str | None
     owner_visible: bool = True
-    public_visible: bool = False
+    public_visible: bool = True
 
-    def to_public_dict(self) -> dict[str, object]:
-        """Return the public-safe report summary."""
-
+    def to_public_dict(
+        self,
+        *,
+        reporter_credibility: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         return {
             "report_id": str(self.report_id),
             "claim_id": str(self.claim_id),
+            "reporter_key_id": self.reporter_key_id,
+            "reporter_type": self.reporter_type,
             "observed_domain": self.observed_domain,
             "observed_at": _isoformat(self.observed_at),
             "submitted_at": _isoformat(self.submitted_at),
@@ -976,7 +1002,9 @@ class AvoidanceReport:
             "report_label": self.report_label.value,
             "status": self.status.value,
             "reverse_lookup_score": self.reverse_lookup_score,
+            "description": self.description,
             "public_note": self.public_note,
+            "reporter_credibility": reporter_credibility or {},
         }
 
 
@@ -1133,6 +1161,35 @@ class ClaimVerificationReport:
             VerificationLabel.CLAIM_VERIFIED_CONTENT_PRIVATE,
         }
 
+    @property
+    def registry_claim_valid(self) -> bool:
+        return (
+            self.registry_included
+            and self.manifest_signature_valid
+            and not self.revoked
+            and not self.errors
+        )
+
+    @property
+    def policy_valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def overall_verdict(self) -> str:
+        if self.revoked:
+            return "revoked"
+        if self.disputed:
+            return "disputed"
+        if not self.manifest_signature_valid:
+            return "signature_invalid"
+        if self.content_binding_valid is True:
+            return "content_verified"
+        if self.content_binding_valid is False:
+            return "content_mismatch"
+        if not self.public_nonce_available:
+            return "private_content_unchecked"
+        return "signature_only"
+
     def to_dict(self) -> dict[str, object]:
         """Serialize the registry verification report."""
 
@@ -1142,10 +1199,13 @@ class ClaimVerificationReport:
             "trust_tier": self.trust_tier.value,
             "trust_labels": [label.value for label in self.trust_labels],
             "registry_included": self.registry_included,
+            "registry_claim_valid": self.registry_claim_valid,
             "manifest_signature_valid": self.manifest_signature_valid,
             "content_binding_valid": self.content_binding_valid,
             "content_binding_checked": self.content_binding_checked,
             "public_nonce_available": self.public_nonce_available,
+            "policy_valid": self.policy_valid,
+            "overall_verdict": self.overall_verdict,
             "revoked": self.revoked,
             "disputed": self.disputed,
             "open_disputes": self.open_disputes,
@@ -1766,6 +1826,39 @@ class RegistryService:
 
         return tuple(disputes)
 
+    def dispute_reporter_credibility(self, key_id: str) -> dict[str, object]:
+        disputes = [
+            dispute
+            for dispute in self._load_disputes().values()
+            if dispute.opened_by_key_id == key_id
+        ]
+        return {
+            "reporter_key_id": key_id,
+            "submitted_dispute_count": len(disputes),
+            "open_dispute_count": sum(
+                dispute.status is DisputeStatus.OPEN for dispute in disputes
+            ),
+            "upheld_dispute_count": sum(
+                dispute.status is DisputeStatus.UPHELD for dispute in disputes
+            ),
+            "rejected_dispute_count": sum(
+                dispute.status is DisputeStatus.REJECTED
+                for dispute in disputes
+            ),
+        }
+
+    def public_dispute_dict(self, dispute: DisputeRecord) -> dict[str, object]:
+        claim_count = sum(
+            item.claim_id == dispute.claim_id
+            for item in self._load_disputes().values()
+        )
+        return dispute.to_public_dict(
+            claim_dispute_count=claim_count,
+            reporter_credibility=self.dispute_reporter_credibility(
+                dispute.opened_by_key_id
+            ),
+        )
+
     def get_avoidance_report(self, report_id: UUID) -> AvoidanceReport:
         """Return one possible provenance avoidance report."""
 
@@ -1774,6 +1867,17 @@ class RegistryService:
             return reports[report_id]
         except KeyError as error:
             raise RegistryError("avoidance report does not exist") from error
+
+    def public_avoidance_report_dict(
+        self,
+        report: AvoidanceReport,
+    ) -> dict[str, object]:
+        credibility: dict[str, object] = {}
+        if report.reporter_key_id is not None:
+            credibility = self.dispute_reporter_credibility(
+                report.reporter_key_id
+            )
+        return report.to_public_dict(reporter_credibility=credibility)
 
     def list_avoidance_reports(
         self,
@@ -1905,7 +2009,7 @@ class RegistryService:
                 "description": description,
                 "public_note": public_note,
                 "owner_visible": True,
-                "public_visible": False,
+                "public_visible": True,
             },
         )
         return self.get_avoidance_report(report_id)

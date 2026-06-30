@@ -383,7 +383,7 @@ def _manifest_verification(
         content=content,
         nonce=nonce,
     )
-    return {**asdict(report), "valid": report.valid}
+    return report.to_dict()
 
 
 def _nonce_for_reference(reference: ExtractedReference) -> bytes | None:

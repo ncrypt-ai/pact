@@ -1,7 +1,12 @@
 """FastAPI application for the registry API and proof pages."""
 
+import asyncio
+import hashlib
+import io
+import ipaddress
 import json
 import time
+import zipfile
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -29,7 +34,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from pact.crypto import jwk_thumbprint
+from pact.canonical import JsonValue, canonical_json
+from pact.crypto import jwk_thumbprint, public_key_from_jwk, verify_es256
 from pact.inspection import inspect_content
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
@@ -62,7 +68,23 @@ class RateLimitConfig:
     window_seconds: int = 60
     ip_limit: int = 300
     identity_limit: int = 60
+    anonymous_upload_limit: int = 20
     enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class UploadLimitConfig:
+    max_request_body_bytes: int = 25 * 1024 * 1024
+    max_upload_bytes: int = 20 * 1024 * 1024
+    media_parse_timeout_seconds: float = 10.0
+    max_zip_entries: int = 100
+    max_zip_uncompressed_bytes: int = 50 * 1024 * 1024
+    max_zip_compression_ratio: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedProxyConfig:
+    trusted_proxy_cidrs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +161,14 @@ def _rate_limit_response(decision: RateLimitDecision) -> JSONResponse:
     )
 
 
-def _client_ip(request: Request) -> str:
+def _client_ip(
+    request: Request,
+    trusted_proxy_config: TrustedProxyConfig | None = None,
+) -> str:
+    direct_ip = request.client.host if request.client is not None else None
+    if not _trusted_proxy_peer(direct_ip, trusted_proxy_config):
+        return direct_ip or "unknown"
+
     forwarded = request.headers.get("forwarded")
     if forwarded:
         for field in forwarded.split(";"):
@@ -159,6 +188,27 @@ def _client_ip(request: Request) -> str:
     if request.client is not None:
         return request.client.host
     return "unknown"
+
+
+def _trusted_proxy_peer(
+    direct_ip: str | None,
+    config: TrustedProxyConfig | None,
+) -> bool:
+    if direct_ip is None or config is None or not config.trusted_proxy_cidrs:
+        return False
+    if direct_ip in config.trusted_proxy_cidrs:
+        return True
+    try:
+        address = ipaddress.ip_address(direct_ip)
+    except ValueError:
+        return False
+    for cidr in config.trusted_proxy_cidrs:
+        try:
+            if address in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _rate_limit_key_part(value: object) -> str | None:
@@ -216,6 +266,99 @@ def _request_identity_keys(
         f"{request.url.path}:{key}"
         for key in _request_identity_key_values(body=body, extra=extra)
     )
+
+
+def _profile_auth_signed_bytes(
+    *,
+    challenge: object,
+    key_id: str,
+    method: str,
+    path: str,
+    body: object,
+) -> bytes:
+    if isinstance(body, BaseModel):
+        body = body.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_unset=True,
+        )
+    challenge_dict = (
+        cast(Any, challenge).to_dict()
+        if hasattr(challenge, "to_dict")
+        else challenge
+    )
+    body_bytes = canonical_json(cast(JsonValue, body))
+    return canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge_dict,
+                "profile_key_id": key_id,
+                "method": method.upper(),
+                "path": path,
+                "body_sha256": hashlib.sha256(body_bytes).hexdigest(),
+            },
+        )
+    )
+
+
+def _require_profile_request_auth(
+    request: Request,
+    service: RegistryService,
+    body: object,
+) -> str:
+    key_id = request.headers.get("x-pact-profile-key-id", "").strip()
+    challenge_id_text = request.headers.get("x-pact-challenge-id", "").strip()
+    solution_text = request.headers.get(
+        "x-pact-proof-of-work-solution", ""
+    ).strip()
+    signature = request.headers.get("x-pact-signature", "").strip()
+    if (
+        not key_id
+        or not challenge_id_text
+        or not solution_text
+        or not signature
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="signed registered profile proof is required",
+        )
+    try:
+        challenge_id = UUID(challenge_id_text)
+        solution = int(solution_text)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=401,
+            detail="profile proof headers are invalid",
+        ) from error
+    try:
+        profile = service.get_profile(key_id)
+        challenge = service._consume_challenge(  # noqa: SLF001
+            challenge_id,
+            ChallengePurpose.ACCOUNT_AUTHORIZATION,
+        )
+        if (
+            challenge.bound_key_id is not None
+            and challenge.bound_key_id != key_id
+        ):
+            raise RegistryError("challenge is bound to a different profile")
+        if not challenge.verify_solution(solution):
+            raise RegistryError("proof-of-work solution is invalid")
+        public_key = public_key_from_jwk(profile.public_jwk)
+        signed_bytes = _profile_auth_signed_bytes(
+            challenge=challenge,
+            key_id=key_id,
+            method=request.method,
+            path=request.url.path,
+            body=body,
+        )
+        if not verify_es256(public_key, signed_bytes, signature):
+            raise RegistryError("profile proof signature is invalid")
+    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    return key_id
 
 
 def _templates() -> Jinja2Templates:
@@ -512,7 +655,103 @@ def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
     return DEFAULT_BINARY_MIME_TYPE
 
 
+async def _read_upload_limited(
+    file: UploadFile,
+    limits: UploadLimitConfig,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limits.max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail="uploaded file is too large",
+            )
+        chunks.append(chunk)
+    payload = b"".join(chunks)
+    _check_zip_limits(payload, limits)
+    return payload
+
+
+def _check_zip_limits(payload: bytes, limits: UploadLimitConfig) -> None:
+    if not zipfile.is_zipfile(io.BytesIO(payload)):
+        return
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as error:
+        raise HTTPException(
+            status_code=400, detail="invalid ZIP file"
+        ) from error
+    with archive:
+        entries = archive.infolist()
+        if len(entries) > limits.max_zip_entries:
+            raise HTTPException(
+                status_code=413,
+                detail="ZIP file contains too many entries",
+            )
+        uncompressed_total = 0
+        for entry in entries:
+            if entry.flag_bits & 0x1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="encrypted ZIP entries are not supported",
+                )
+            if (
+                entry.filename.startswith("/")
+                or ".." in Path(entry.filename).parts
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="unsafe ZIP entry path",
+                )
+            uncompressed_total += entry.file_size
+            if uncompressed_total > limits.max_zip_uncompressed_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="ZIP file expands beyond the configured limit",
+                )
+            if (
+                entry.compress_size
+                and entry.file_size / entry.compress_size
+                > limits.max_zip_compression_ratio
+            ):
+                raise HTTPException(
+                    status_code=413,
+                    detail="ZIP compression ratio is too high",
+                )
+
+
+async def _inspect_content_limited(
+    payload: bytes,
+    *,
+    mime_type: str,
+    registry_service: RegistryService,
+    limits: UploadLimitConfig,
+) -> dict[str, object]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                inspect_content,
+                payload,
+                mime_type=mime_type,
+                registry_service=registry_service,
+            ),
+            timeout=limits.media_parse_timeout_seconds,
+        )
+    except TimeoutError as error:
+        raise HTTPException(
+            status_code=504,
+            detail="media parsing timed out",
+        ) from error
+
+
 def _raise_http_error(error: Exception) -> None:
+    if isinstance(error, HTTPException):
+        raise error
     if isinstance(error, RegistryError):
         LOGGER.warning("registry request rejected: %s", error)
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -523,6 +762,18 @@ def _raise_http_error(error: Exception) -> None:
 
 
 def _content_security_policy(path: str) -> str:
+    if (
+        path == "/pact"
+        or path.startswith("/pact/")
+        or path.startswith("/static/")
+    ):
+        return (
+            "default-src 'self'; base-uri 'self'; form-action 'self'; "
+            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
+            "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self' "
+            "https: http://localhost:* http://127.0.0.1:*"
+        )
     docs_paths = ("/api/docs", "/api/redoc", "/docs", "/redoc")
     if path.rstrip("/") in docs_paths:
         return (
@@ -530,16 +781,14 @@ def _content_security_policy(path: str) -> str:
             "frame-ancestors 'none'; img-src 'self' data: "
             "https://fastapi.tiangolo.com; style-src 'self' 'unsafe-inline' "
             "https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' "
-            "'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
+            "https://cdn.jsdelivr.net; "
             "worker-src 'self'; connect-src 'self' https: http://localhost:* "
             "http://127.0.0.1:*"
         )
     return (
         "default-src 'self'; base-uri 'self'; form-action 'self'; "
         "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
-        "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self' "
-        "https: http://localhost:* http://127.0.0.1:*"
+        "script-src 'self'; worker-src 'self'; connect-src 'self'"
     )
 
 
@@ -569,13 +818,9 @@ class ChallengeRequestModel(BaseModel):
 
 
 class DeviceBindingOprfRequestModel(BaseModel):
-    x: str = Field(
-        description="Base64url P-256 x coordinate of the blinded point.",
-        examples=["base64url-coordinate"],
-    )
-    y: str = Field(
-        description="Base64url P-256 y coordinate of the blinded point.",
-        examples=["base64url-coordinate"],
+    blinded: str = Field(
+        description="Base64url Ristretto255 blinded OPRF group element.",
+        examples=["base64url-blinded-oprf-element"],
     )
 
 
@@ -729,6 +974,8 @@ def create_app(
     cors_allowed_origins: tuple[str, ...] = (),
     docs_directory: str | Path | None = None,
     rate_limit_config: RateLimitConfig | None = None,
+    upload_limit_config: UploadLimitConfig | None = None,
+    trusted_proxy_config: TrustedProxyConfig | None = None,
     logging_config: LoggingConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
@@ -737,6 +984,8 @@ def create_app(
     configure_logging(selected_logging)
     templates = _templates()
     rate_limit = rate_limit_config or RateLimitConfig()
+    upload_limits = upload_limit_config or UploadLimitConfig()
+    trusted_proxies = trusted_proxy_config or TrustedProxyConfig()
     parsed_public_url = urlsplit(public_base_url)
     normalized_registry_url = (
         service.registry_url if service is not None else registry_url
@@ -767,6 +1016,8 @@ def create_app(
     app.state.enable_workspace = enable_workspace
     app.state.rate_limiter = SlidingWindowRateLimiter(rate_limit)
     app.state.rate_limit_config = rate_limit
+    app.state.upload_limit_config = upload_limits
+    app.state.trusted_proxy_config = trusted_proxies
     app.state.logging_config = selected_logging
     LOGGER.info(
         "created web application",
@@ -823,6 +1074,9 @@ def create_app(
                     },
                 )
 
+    def client_ip(request: Request) -> str:
+        return _client_ip(request, trusted_proxies)
+
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or uuid4().hex
@@ -843,7 +1097,7 @@ def create_app(
                     path=request.url.path,
                     status_code=status_code,
                     duration_ms=duration_ms,
-                    client_ip=_client_ip(request),
+                    client_ip=client_ip(request),
                 ),
             )
             raise
@@ -859,9 +1113,27 @@ def create_app(
                         path=request.url.path,
                         status_code=status_code,
                         duration_ms=duration_ms,
-                        client_ip=_client_ip(request),
+                        client_ip=client_ip(request),
                     ),
                 )
+
+    @app.middleware("http")
+    async def enforce_request_size(request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                request_size = int(content_length)
+            except ValueError:
+                return JSONResponse(
+                    {"detail": "content-length is invalid"},
+                    status_code=400,
+                )
+            if request_size > upload_limits.max_request_body_bytes:
+                return JSONResponse(
+                    {"detail": "request body is too large"},
+                    status_code=413,
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def rate_limit_requests(request: Request, call_next):
@@ -871,9 +1143,12 @@ def create_app(
             and request.method != "OPTIONS"
         ):
             limiter = cast(SlidingWindowRateLimiter, app.state.rate_limiter)
+            limit = rate_limit.ip_limit
+            if request.url.path in {"/api/v1/inspect", "/api/v1/recover"}:
+                limit = rate_limit.anonymous_upload_limit
             decision = limiter.check(
-                f"ip:{_client_ip(request)}",
-                limit=rate_limit.ip_limit,
+                f"ip:{client_ip(request)}",
+                limit=limit,
             )
             if not decision.allowed:
                 return _rate_limit_response(decision)
@@ -956,6 +1231,7 @@ def create_app(
 
     if service is None:
         return app
+    registry_service = service
 
     @app.get(
         "/api/v1/registry",
@@ -1025,12 +1301,13 @@ def create_app(
             description="Optional MIME type override for carrier parsing.",
         ),
     ) -> dict[str, object]:
-        payload = await file.read()
         try:
-            return inspect_content(
+            payload = await _read_upload_limited(file, upload_limits)
+            return await _inspect_content_limited(
                 payload,
                 mime_type=_infer_upload_mime_type(file, mime_type),
                 registry_service=service,
+                limits=upload_limits,
             )
         except Exception as error:
             _raise_http_error(error)
@@ -1065,7 +1342,7 @@ def create_app(
         tags=["Profiles"],
         summary="Evaluate a blinded device-binding OPRF point",
         description=(
-            "Evaluate a client-blinded point used to derive a private, "
+            "Evaluate a client-blinded OPRF element used to derive a private, "
             "registry-scoped device binding token."
         ),
     )
@@ -1192,7 +1469,12 @@ def create_app(
             disputes = service.list_disputes(claimant_key_id=key_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"disputes": jsonable_encoder(disputes)}
+        return {
+            "disputes": [
+                registry_service.public_dispute_dict(dispute)
+                for dispute in disputes
+            ]
+        }
 
     @app.post(
         "/api/v1/certificates",
@@ -1270,7 +1552,12 @@ def create_app(
             disputes = service.list_disputes(claim_id=claim_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"disputes": jsonable_encoder(disputes)}
+        return {
+            "disputes": [
+                registry_service.public_dispute_dict(dispute)
+                for dispute in disputes
+            ]
+        }
 
     @app.get(
         "/api/v1/claims/{claim_id}/reports",
@@ -1282,7 +1569,12 @@ def create_app(
             reports = service.list_avoidance_reports(claim_id=claim_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"reports": jsonable_encoder(reports)}
+        return {
+            "reports": [
+                registry_service.public_avoidance_report_dict(report)
+                for report in reports
+            ]
+        }
 
     @app.get(
         "/api/v1/claims/{claim_id}/spread",
@@ -1341,11 +1633,12 @@ def create_app(
         ] = None,
     ) -> dict[str, object]:
         try:
-            content = await file.read()
-            inspected = inspect_content(
+            content = await _read_upload_limited(file, upload_limits)
+            inspected = await _inspect_content_limited(
                 content,
                 mime_type=_infer_upload_mime_type(file, mime_type),
                 registry_service=service,
+                limits=upload_limits,
             )
             claim = inspected.get("registry_claim")
             matches: list[dict[str, object]] = []
@@ -1395,10 +1688,15 @@ def create_app(
         request: Request,
         body: AvoidanceReportRequestModel,
     ) -> dict[str, object]:
+        reporter_key_id = _require_profile_request_auth(
+            request,
+            service,
+            body,
+        )
         enforce_identity_rate(
             request,
             body,
-            extra=(str(body.claim_id), body.reporter_key_id),
+            extra=(str(body.claim_id), reporter_key_id),
         )
         try:
             report = service.submit_avoidance_report(
@@ -1406,8 +1704,8 @@ def create_app(
                 evidence_type=body.evidence.kind,
                 evidence_digest=body.evidence.digest,
                 report_label=body.reason,
-                reporter_key_id=body.reporter_key_id,
-                reporter_type=body.reporter_type,
+                reporter_key_id=reporter_key_id,
+                reporter_type="registered_profile",
                 observed_url=body.observed_url,
                 observed_at=body.observed_at,
                 reverse_lookup_score=body.reverse_lookup_score,
@@ -1417,8 +1715,8 @@ def create_app(
         except Exception as error:
             _raise_http_error(error)
         return {
-            **_json_dict(report),
-            "public_visibility": "pending_triage",
+            **service.public_avoidance_report_dict(report),
+            "public_visibility": "public",
             "owner_notified": True,
         }
 
@@ -1432,7 +1730,7 @@ def create_app(
             report = service.get_avoidance_report(report_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(report)
+        return service.public_avoidance_report_dict(report)
 
     @app.post(
         "/api/v1/rotations",
@@ -1595,7 +1893,7 @@ def create_app(
             dispute = service.open_dispute(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
     @app.get(
         "/api/v1/disputes/{dispute_id}",
@@ -1607,7 +1905,7 @@ def create_app(
             dispute = service.get_dispute(dispute_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
     @app.post(
         "/api/v1/disputes/{dispute_id}/resolve",
@@ -1642,7 +1940,7 @@ def create_app(
             dispute = service.resolve_dispute(request_model)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
     @app.get("/profiles/{key_id}", response_class=HTMLResponse)
     async def public_profile(request: Request, key_id: str) -> HTMLResponse:

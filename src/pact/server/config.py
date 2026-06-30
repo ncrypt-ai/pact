@@ -291,8 +291,9 @@ def default_routes() -> tuple[RouteConfig, ...]:
             "submit_avoidance_report",
             "POST",
             "/api/v1/reports/avoidance",
-            RouteAuth.PUBLIC,
+            RouteAuth.CLAIMANT_SIGNATURE,
             "submit_avoidance_report",
+            "reports:write",
         ),
         RouteConfig(
             "get_avoidance_report",

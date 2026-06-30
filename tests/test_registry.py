@@ -125,7 +125,7 @@ def register_profile(
     service.register_profile(request)
 
 
-def test_device_binding_oprf_token_is_deterministic_and_registry_scoped(
+def test_device_binding_oprf_token_uses_oblivious_provider(
     tmp_path: Path,
 ) -> None:
     service, _admin_identity = make_service(tmp_path / "one")
@@ -542,9 +542,13 @@ def test_registry_claim_verification_report_for_current_claim(
     assert report.content_binding_valid is True
     assert report.content_binding_checked is True
     assert report.public_nonce_available is True
+    assert report.registry_claim_valid is True
+    assert report.policy_valid is True
+    assert report.overall_verdict == "content_verified"
     assert report.trust_tier is TrustTier.UNAUTHENTICATED_DEVICE
     assert report.claim_meanings == ("signed_by", "training_restriction")
     assert report.to_dict()["label"] == "content_claim_verified"
+    assert report.to_dict()["overall_verdict"] == "content_verified"
 
 
 def test_registry_claim_only_is_not_content_verified(
@@ -562,6 +566,8 @@ def test_registry_claim_only_is_not_content_verified(
     assert report.claim_verified is True
     assert report.content_binding_valid is None
     assert report.content_binding_checked is False
+    assert report.registry_claim_valid is True
+    assert report.overall_verdict == "signature_only"
 
 
 def test_registry_claim_verification_reports_partial_content_match(
@@ -582,6 +588,7 @@ def test_registry_claim_verification_reports_partial_content_match(
     assert report.verified is False
     assert report.claim_verified is False
     assert report.content_binding_valid is False
+    assert report.overall_verdict == "content_mismatch"
 
 
 def test_avoidance_reports_require_public_nonce_claim(
@@ -931,9 +938,7 @@ def test_registry_snapshot_observes_external_sqlite_writes(
     second_request = MutationRequest.create(
         second_identity,
         second_challenge,
-        payload={
-            "device_fingerprint": device_binding_token(second_identity)
-        },
+        payload={"device_fingerprint": device_binding_token(second_identity)},
         proof_of_work_solution=solve_pow(second_challenge),
     )
 

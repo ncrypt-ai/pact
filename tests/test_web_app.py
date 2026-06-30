@@ -1,8 +1,9 @@
+import hashlib
 import io
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -23,14 +24,17 @@ from pact import (
     embed_text_carrier,
     sign_manifest,
 )
+from pact.canonical import JsonValue, canonical_json
+from pact.crypto import base64url_encode, sign_es256
 from pact.metadata import PACKAGE_VERSION
-from pact.oprf import (
-    P256_BASE_POINT,
-    format_device_binding_token,
-    p256_point_to_wire,
-)
+from pact.oprf import device_binding_input, format_device_binding_token
 from pact.registry import MutationChallenge
-from pact.web import RateLimitConfig, create_app
+from pact.web import (
+    RateLimitConfig,
+    TrustedProxyConfig,
+    UploadLimitConfig,
+    create_app,
+)
 
 
 def device_binding_token(identity: ClaimantIdentity) -> str:
@@ -90,6 +94,8 @@ def make_client(
     *,
     enable_workspace: bool = False,
     rate_limit_config: RateLimitConfig | None = None,
+    trusted_proxy_config: TrustedProxyConfig | None = None,
+    upload_limit_config: UploadLimitConfig | None = None,
 ) -> tuple[TestClient, ClaimantIdentity]:
     registry_url = "https://registry.example"
     authority = RegistryCertificateAuthority.initialize(registry_url)
@@ -103,6 +109,8 @@ def make_client(
         public_base_url="http://testserver",
         enable_workspace=enable_workspace,
         rate_limit_config=rate_limit_config,
+        trusted_proxy_config=trusted_proxy_config,
+        upload_limit_config=upload_limit_config,
     )
     return TestClient(app), ClaimantIdentity.generate(registry_url)
 
@@ -144,18 +152,78 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
     ).raise_for_status()
 
 
-def test_device_binding_oprf_endpoint_returns_evaluated_point(
+def profile_auth_headers(
+    client: TestClient,
+    identity: ClaimantIdentity,
+    *,
+    method: str,
+    path: str,
+    body: dict[str, object],
+) -> dict[str, str]:
+    challenge = client.post(
+        "/api/v1/challenges",
+        json={
+            "purpose": "account_authorization",
+            "difficulty": 4,
+            "bound_key_id": identity.key_id,
+        },
+    ).json()
+    challenge_object = MutationChallenge(
+        registry_url=challenge["registry_url"],
+        challenge_id=UUID(challenge["challenge_id"]),
+        purpose=ChallengePurpose(challenge["purpose"]),
+        issued_at=datetime.fromisoformat(challenge["issued_at"]),
+        expires_at=datetime.fromisoformat(challenge["expires_at"]),
+        challenge_nonce=challenge["challenge_nonce"],
+        difficulty=challenge["difficulty"],
+        bound_key_id=challenge.get("bound_key_id"),
+    )
+    solution = solve_pow(challenge_object)
+    body_digest = hashlib.sha256(
+        canonical_json(cast(JsonValue, body))
+    ).hexdigest()
+    signed = canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge_object.to_dict(),
+                "profile_key_id": identity.key_id,
+                "method": method,
+                "path": path,
+                "body_sha256": body_digest,
+            },
+        )
+    )
+    return {
+        "X-PACT-Profile-Key-Id": identity.key_id,
+        "X-PACT-Challenge-Id": str(challenge_object.challenge_id),
+        "X-PACT-Proof-Of-Work-Solution": str(solution),
+        "X-PACT-Signature": sign_es256(identity.private_key, signed),
+    }
+
+
+def test_device_binding_oprf_endpoint_returns_evaluated_element(
     tmp_path: Path,
 ) -> None:
     client, _identity = make_client(tmp_path)
-    point = p256_point_to_wire(P256_BASE_POINT)
+    from oblivious.ristretto import python as ristretto
 
-    response = client.post("/api/v1/device-bindings/oprf", json=point)
+    ristretto_any = cast(Any, ristretto)
+    blinded = ristretto_any.scalar() * ristretto_any.point.hash(
+        device_binding_input(
+            local_secret=b"local-secret",
+            registry_root_fingerprint="A" * 43,
+            device_fingerprint="browser-fingerprint",
+        )
+    )
+
+    response = client.post(
+        "/api/v1/device-bindings/oprf",
+        json={"blinded": base64url_encode(bytes(blinded))},
+    )
 
     assert response.status_code == 200
-    evaluated = response.json()
-    assert set(evaluated) == {"x", "y"}
-    assert evaluated != point
+    assert set(response.json()) == {"evaluated"}
 
 
 def test_device_binding_oprf_endpoint_rejects_invalid_points(
@@ -165,7 +233,7 @@ def test_device_binding_oprf_endpoint_rejects_invalid_points(
 
     response = client.post(
         "/api/v1/device-bindings/oprf",
-        json={"x": "bad", "y": "bad"},
+        json={"blinded": "bad"},
     )
 
     assert response.status_code == 400
@@ -366,24 +434,52 @@ def test_web_avoidance_report_flow_requires_public_nonce(
         client, identity, make_signed_manifest(identity)
     )
 
+    report_body = {
+        "claim_id": public_claim["claim_id"],
+        "observed_url": "https://example.com/repost",
+        "reason": "embedded_reference_removed",
+        "description": "Manifest appears stripped.",
+        "evidence": {
+            "kind": "hash_only",
+            "digest": "sha256-example",
+            "mime_type": "text/plain",
+        },
+    }
+    unsigned_report = client.post(
+        "/api/v1/reports/avoidance",
+        json=report_body,
+    )
+    assert unsigned_report.status_code == 401
+
     report_response = client.post(
         "/api/v1/reports/avoidance",
-        json={
-            "claim_id": public_claim["claim_id"],
-            "observed_url": "https://example.com/repost",
-            "reason": "embedded_reference_removed",
-            "description": "Manifest appears stripped.",
-            "evidence": {
-                "kind": "hash_only",
-                "digest": "sha256-example",
-                "mime_type": "text/plain",
-            },
-        },
+        json=report_body,
+        headers=profile_auth_headers(
+            client,
+            identity,
+            method="POST",
+            path="/api/v1/reports/avoidance",
+            body=report_body,
+        ),
     )
     assert report_response.status_code == 200
     report = report_response.json()
     assert report["status"] == "submitted"
-    assert report["public_visibility"] == "pending_triage"
+    assert report["public_visibility"] == "public"
+    assert report["reporter_key_id"] == identity.key_id
+    assert report["reporter_type"] == "registered_profile"
+    assert report["reporter_credibility"]["submitted_dispute_count"] == 0
+    assert "observed_url" not in report
+    assert "evidence_digest" not in report
+
+    listed = client.get(
+        f"/api/v1/claims/{public_claim['claim_id']}/reports"
+    ).json()["reports"]
+    assert listed[0]["report_id"] == report["report_id"]
+    assert listed[0]["reporter_key_id"] == identity.key_id
+    fetched = client.get(f"/api/v1/reports/{report['report_id']}").json()
+    assert fetched["report_id"] == report["report_id"]
+    assert "evidence_digest" not in fetched
 
     spread = client.get(
         f"/api/v1/claims/{public_claim['claim_id']}/spread"
@@ -397,12 +493,20 @@ def test_web_avoidance_report_flow_requires_public_nonce(
         identity,
         make_private_signed_manifest(identity),
     )
+    rejected_body = {
+        "claim_id": private_claim["claim_id"],
+        "evidence": {"kind": "hash_only", "digest": "sha256-example"},
+    }
     rejected = client.post(
         "/api/v1/reports/avoidance",
-        json={
-            "claim_id": private_claim["claim_id"],
-            "evidence": {"kind": "hash_only", "digest": "sha256-example"},
-        },
+        json=rejected_body,
+        headers=profile_auth_headers(
+            client,
+            identity,
+            method="POST",
+            path="/api/v1/reports/avoidance",
+            body=rejected_body,
+        ),
     )
     assert rejected.status_code == 400
     assert "public content verification" in rejected.text
@@ -537,6 +641,76 @@ def test_web_inspect_accepts_raw_text_carrier(tmp_path: Path) -> None:
     )
     assert inspected["source_material"]["content_binding_checked"] is True
     assert inspected["source_material"]["verification"]["valid"] is True
+    assert (
+        inspected["source_material"]["verification"]["overall_verdict"]
+        == "content_verified"
+    )
+
+
+def test_web_inspect_rejects_oversized_upload(tmp_path: Path) -> None:
+    client, _identity = make_client(
+        tmp_path,
+        upload_limit_config=UploadLimitConfig(
+            max_request_body_bytes=10_000,
+            max_upload_bytes=8,
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/inspect",
+        files={"file": ("work.txt", b"too-large-for-limit", "text/plain")},
+    )
+
+    assert response.status_code == 413
+
+
+def test_api_rejects_oversized_request_body(tmp_path: Path) -> None:
+    client, _identity = make_client(
+        tmp_path,
+        upload_limit_config=UploadLimitConfig(max_request_body_bytes=20),
+    )
+
+    response = client.post(
+        "/api/v1/challenges",
+        json={
+            "purpose": "profile_registration",
+            "difficulty": 4,
+            "padding": "x" * 100,
+        },
+    )
+
+    assert response.status_code == 413
+    assert "request body is too large" in response.text
+
+
+def test_web_inspect_rejects_zip_bomb_shape(tmp_path: Path) -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(
+        archive, "w", compression=zipfile.ZIP_DEFLATED
+    ) as zip_file:
+        zip_file.writestr("entry.txt", b"a" * 200)
+    client, _identity = make_client(
+        tmp_path,
+        upload_limit_config=UploadLimitConfig(
+            max_request_body_bytes=10_000,
+            max_upload_bytes=10_000,
+            max_zip_uncompressed_bytes=100,
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/inspect",
+        files={
+            "file": (
+                "carrier.zip",
+                archive.getvalue(),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+    assert "ZIP file expands" in response.text
 
 
 def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
@@ -552,6 +726,13 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
         misuse_url="https://example.com/copied-media",
     )
     assert dispute["misuse_url"] == "https://example.com/copied-media"
+    assert dispute["claim_dispute_count"] == 1
+    dispute_credibility = cast(
+        dict[str, object],
+        dispute["reporter_credibility"],
+    )
+    assert dispute_credibility["submitted_dispute_count"] == 1
+    assert dispute["opened_by_key_id"] == identity.key_id
 
     claims_response = client.get(f"/api/v1/profiles/{identity.key_id}/claims")
     assert claims_response.status_code == 200
@@ -571,6 +752,12 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
     assert (
         claim_disputes.json()["disputes"][0]["dispute_id"]
         == (dispute["dispute_id"])
+    )
+    assert (
+        claim_disputes.json()["disputes"][0]["reporter_credibility"][
+            "open_dispute_count"
+        ]
+        == 1
     )
 
 
@@ -638,6 +825,7 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert package.headers["content-type"] == "application/zip"
     core_names = zipfile.ZipFile(io.BytesIO(package.content)).namelist()
     assert "pact/browser.py" in core_names
+    assert "pact/oprf.py" in core_names
     assert "pact/carriers/c2pa_text.py" not in core_names
 
     documents = enabled_client.get("/pact/pact-browser-documents.pyz")
@@ -662,7 +850,9 @@ def test_web_workspace_can_run_without_local_registry_service() -> None:
     assert client.get("/api/v1/registry").status_code == 404
 
 
-def test_api_rate_limit_uses_forwarded_client_ip(tmp_path: Path) -> None:
+def test_api_rate_limit_ignores_forwarded_client_ip_by_default(
+    tmp_path: Path,
+) -> None:
     client, _identity = make_client(
         tmp_path,
         rate_limit_config=RateLimitConfig(
@@ -680,6 +870,37 @@ def test_api_rate_limit_uses_forwarded_client_ip(tmp_path: Path) -> None:
 
     assert limited.status_code == 429
     assert limited.headers["Retry-After"] == "59"
+    assert (
+        client.get(
+            "/api/v1/registry",
+            headers={"X-Forwarded-For": "203.0.113.11"},
+        ).status_code
+        == 429
+    )
+
+
+def test_api_rate_limit_uses_forwarded_client_ip_for_trusted_proxy(
+    tmp_path: Path,
+) -> None:
+    client, _identity = make_client(
+        tmp_path,
+        rate_limit_config=RateLimitConfig(
+            window_seconds=60,
+            ip_limit=2,
+            identity_limit=100,
+        ),
+        trusted_proxy_config=TrustedProxyConfig(
+            trusted_proxy_cidrs=("testclient",)
+        ),
+    )
+
+    headers = {"X-Forwarded-For": "203.0.113.10"}
+
+    assert client.get("/api/v1/registry", headers=headers).status_code == 200
+    assert client.get("/api/v1/registry", headers=headers).status_code == 200
+    limited = client.get("/api/v1/registry", headers=headers)
+
+    assert limited.status_code == 429
     assert (
         client.get(
             "/api/v1/registry",
@@ -706,9 +927,7 @@ def test_api_rate_limit_uses_claimant_identity_across_ips(
             "challenge_id": challenge_id,
             "claimant_public_jwk": identity.public_jwk,
             "proof_of_work_solution": 0,
-            "payload": {
-                "device_fingerprint": device_binding_token(identity)
-            },
+            "payload": {"device_fingerprint": device_binding_token(identity)},
             "signature": "invalid",
         }
 

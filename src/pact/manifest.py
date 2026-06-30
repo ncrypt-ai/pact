@@ -43,6 +43,14 @@ class ClaimMeaning(StrEnum):
     SUSPECTED_TRAINING_USE = "suspected_training_use"
 
 
+class VerificationVerdict(StrEnum):
+    CONTENT_VERIFIED = "content_verified"
+    SIGNATURE_ONLY = "signature_only"
+    PRIVATE_CONTENT_UNCHECKED = "private_content_unchecked"
+    CONTENT_MISMATCH = "content_mismatch"
+    SIGNATURE_INVALID = "signature_invalid"
+
+
 def _validate_digest(value: object, label: str) -> str:
     if not isinstance(value, str):
         raise ManifestError(f"{label} must be a string")
@@ -787,6 +795,22 @@ class VerificationReport:
     errors: tuple[str, ...]
 
     @property
+    def policy_valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def overall_verdict(self) -> VerificationVerdict:
+        if not self.signature_valid or not self.key_id_valid:
+            return VerificationVerdict.SIGNATURE_INVALID
+        if self.content_binding_valid is True:
+            return VerificationVerdict.CONTENT_VERIFIED
+        if self.content_binding_valid is False:
+            return VerificationVerdict.CONTENT_MISMATCH
+        if not self.public_nonce_available:
+            return VerificationVerdict.PRIVATE_CONTENT_UNCHECKED
+        return VerificationVerdict.SIGNATURE_ONLY
+
+    @property
     def valid(self) -> bool:
         """Whether every check requested by the caller succeeded."""
 
@@ -805,11 +829,22 @@ class VerificationReport:
 
     @property
     def content_claim_valid(self) -> bool:
-        """Whether the signed claim is valid and bound to supplied content."""
-
         return (
             self.claim_signature_valid and self.content_binding_valid is True
         )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "signature_valid": self.signature_valid,
+            "key_id_valid": self.key_id_valid,
+            "content_binding_valid": self.content_binding_valid,
+            "content_binding_checked": self.content_binding_checked,
+            "public_nonce_available": self.public_nonce_available,
+            "policy_valid": self.policy_valid,
+            "overall_verdict": self.overall_verdict.value,
+            "valid": self.valid,
+            "errors": list(self.errors),
+        }
 
 
 def verify_manifest(
