@@ -41,13 +41,17 @@ public OPRF endpoint as part of that derivation:
 
 The OPRF endpoint receives a blinded Ristretto255 element evaluated through the
 pure-Python ``oblivious`` package. It should not receive raw browser traits,
-raw hardware values, profile passcodes, or local secret material.
+raw hardware values, profile passcodes, or local secret material. The resulting
+token is a private continuity signal for honest clients. It is not, by itself,
+cryptographic proof that a physical browser or device completed the endpoint
+flow.
 
 Avoidance report submissions require a registered profile proof. Direct API
 integrations request an ``account_authorization`` challenge, solve its
 proof-of-work, and sign the canonical request body with the registered profile
 key. The server records the reporter from that signature rather than trusting a
-JSON field.
+JSON field. Submitted reports are not public by default; public report listing
+is a separate moderation/publication step.
 
 Public package
 --------------

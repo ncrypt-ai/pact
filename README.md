@@ -141,7 +141,9 @@ to the registry, not the raw file. Browser/device fingerprinting is used for
 baseline device continuity, but the registry receives only a private,
 registry-scoped device-binding token. The CLI and browser workspace use a
 blinded Ristretto OPRF flow backed by the pure-Python `oblivious` package, so
-raw device or browser traits are not sent to the registry.
+raw device or browser traits are not sent to the registry. The token is a
+privacy-preserving continuity signal from honest clients, not proof that a
+particular physical device used the official endpoint.
 
 ## AWS deployment shape
 
@@ -158,7 +160,9 @@ sam deploy --guided --template-file .aws-sam/build/template.yaml
 
 Use `deploy/aws/gateway-rate-limit.yaml` to attach AWS WAF rate limits to your
 existing API Gateway stage ARN, ALB ARN, or both. See `docs/server.rst` for the
-parameter list and deployment checklist.
+parameter list and deployment checklist. `deploy/aws/registry.sam.yaml` is a
+legacy partial full-stack example and should not be used as the current route
+map.
 
 ## HTTP examples
 
@@ -175,9 +179,11 @@ curl -F file=@work.txt -F mime_type=text/plain \
   https://registry.example/api/v1/inspect
 ```
 
-Report submissions require a registered profile signature. Public claim,
-profile, dispute, report, inspect, and recover reads remain available so a
-reviewer can inspect the evidence without creating an account.
+Report submissions require a registered profile signature. Submitted reports
+are claimant/moderator visible by default and become public only after a
+review/public-listing step. Public claim, profile, dispute, inspect, and recover
+reads remain available so a reviewer can inspect proof material without
+creating an account.
 
 Fetch a public claim:
 

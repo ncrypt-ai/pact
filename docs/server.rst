@@ -33,7 +33,8 @@ prompts for it. File-backed identity commands also read
      --database :memory
 
 Use ``--database .pact-registry/registry.sqlite3`` for a local persistent
-SQLite database.
+SQLite database. ``:memory`` is only for development and tests; a restart loses
+all claims, profiles, challenges, reports, and disputes.
 
 Browser workspace
 -----------------
@@ -107,6 +108,8 @@ The AWS deployment model uses:
 - externally managed API Gateway, Cognito, and load balancer resources;
 - externally managed gateway/load-balancer rate limiting through AWS WAF;
 - Postgres for registry events and batches;
+- a dedicated high-entropy OPRF server secret, managed separately from the
+  registry CA keys;
 - environment-driven runtime configuration.
 
 ``default_routes`` is the open-source route and permission map. It marks
@@ -118,6 +121,10 @@ surfaces.
 The running web app exposes the same route map at
 ``/api/v1/server/routes`` so operators and clients can discover the public
 URLs and mutation permissions supported by a deployment.
+
+Use ``deploy/aws/registry-compute.sam.yaml`` for current AWS deployments. The
+older ``deploy/aws/registry.sam.yaml`` file is a legacy partial full-stack
+example and does not expose the complete current API surface.
 ``/api/v1/server/info`` reports the package version and deployed commit hash.
 Set ``PACT_COMMIT_SHA`` during deployment so serverless or container builds do
 not depend on a local ``.git`` directory.

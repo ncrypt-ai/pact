@@ -269,7 +269,10 @@ profile evidence:
 In normal CLI and browser workflows, PACT derives the device-binding token for
 you. Direct API callers must provide a ``pact-device-binding-v2`` token signed
 inside the profile-registration mutation. The registry rejects profiles without
-that minimum unauthenticated-device proof.
+that minimum unauthenticated-device continuity signal. The token does not prove
+that a physical device used the official OPRF endpoint; production registries
+should combine it with account auth, gateway abuse controls, and review
+workflows.
 
 Run the hosted registry/API service
 -----------------------------------

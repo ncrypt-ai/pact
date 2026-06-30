@@ -110,8 +110,10 @@ before the registry appends an event.
 Profile registration accepts a signed mutation that includes the private
 device-binding token. The claimant signature prevents network tampering with
 that token. The registry also rejects missing tokens and legacy arbitrary
-fingerprint strings, so an unauthenticated profile still has a minimum device
-continuity proof.
+fingerprint strings, so an unauthenticated profile still carries a minimum
+device-continuity signal. The token is not presented as proof that a physical
+device completed the OPRF endpoint; it is a privacy-preserving continuity
+mechanism for honest clients.
 
 Registry challenge boundary
 ---------------------------
@@ -187,7 +189,8 @@ These controls are still not a replacement for production operator controls:
 - strict CORS and Host/Origin configuration for the actual deployment;
 - careful logging policy for inspection uploads;
 - separate worker/process isolation for untrusted file handling at larger scale;
-- backup and rotation procedures for registry CA material and databases;
+- backup and rotation procedures for registry CA material, databases, and the
+  dedicated OPRF server secret;
 - public communication about disputes, takedowns, and retention.
 
 The AWS templates include WAF rate-limit scaffolding, but operators still need
