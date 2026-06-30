@@ -9,7 +9,7 @@ async function loadRuntime() {
     const pyodide = await loadPyodide();
     await pyodide.loadPackage(["micropip", "cryptography"]);
     const micropip = pyodide.pyimport("micropip");
-    await micropip.install(["rfc8785", "defusedxml", "pypdf"]);
+    await micropip.install(["rfc8785", "defusedxml", "pypdf", "oblivious"]);
     const response = await fetch(`/pact/pact-browser-core.pyz?v=${Date.now()}`, {
       cache: "no-store"
     });

@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile, JsonValue, canonical_json
@@ -26,8 +26,15 @@ from pact.manifest import (
     sign_manifest,
     verify_manifest,
 )
+from pact.oprf import DEVICE_BINDING_TOKEN_PREFIX, format_device_binding_token
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
+
+
+def _browser_ristretto() -> Any:
+    from oblivious.ristretto import python
+
+    return python
 
 
 def _b64(value: bytes) -> str:
@@ -215,6 +222,41 @@ def create_mutation_request(
             "signature": sign_es256(identity.private_key, signed_bytes),
         }
     )
+
+
+def create_device_binding_oprf_request(local_input_b64: str) -> str:
+    """Create a blinded browser device-binding request."""
+
+    ristretto = _browser_ristretto()
+    local_input = _unb64(local_input_b64)
+    blind = ristretto.scalar()
+    blinded = blind * ristretto.point.hash(local_input)
+    return _json(
+        {
+            "blind_b64": _b64(bytes(blind)),
+            "blinded": base64.urlsafe_b64encode(bytes(blinded))
+            .rstrip(b"=")
+            .decode("ascii"),
+        }
+    )
+
+
+def finalize_device_binding_oprf_token(
+    blind_b64: str,
+    evaluated_b64url: str,
+) -> str:
+    """Finish the browser OPRF token from the registry response."""
+
+    ristretto = _browser_ristretto()
+    blind = ristretto.scalar(_unb64(blind_b64))
+    padded = evaluated_b64url + "=" * (-len(evaluated_b64url) % 4)
+    evaluated = ristretto.point(
+        base64.urlsafe_b64decode(padded.encode("ascii"))
+    )
+    token = format_device_binding_token(bytes((~blind) * evaluated))
+    if not token.startswith(DEVICE_BINDING_TOKEN_PREFIX):
+        raise ValueError("device binding token formatting failed")
+    return token
 
 
 def create_rotation_request(

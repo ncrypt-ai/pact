@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "pact"
 version = "0.0.1"
-description = ""
+description = "Content claim signing, policy, watermark, and registry tooling"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ authors = [
 maintainers = [
     { name = "Rex Stockham", email = "rexstockham13@gmail.com" },
 ]
-keywords = ["pact", "python", "typed"]
+keywords = ["provenance", "content-authenticity", "policy", "watermarking"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Developers",
@@ -33,6 +33,7 @@ dependencies = [
     "cryptography>=49.0.0",
     "defusedxml>=0.7.1",
     "keyring>=25.7.0",
+    "oblivious>=7.0.0",
     "rfc8785>=0.1.4",
 ]
 

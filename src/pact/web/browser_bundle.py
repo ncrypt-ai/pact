@@ -12,6 +12,7 @@ CORE_MODULES = (
     "crypto.py",
     "identity.py",
     "manifest.py",
+    "oprf.py",
     "policy.py",
     "privacy.py",
     "registry/__init__.py",

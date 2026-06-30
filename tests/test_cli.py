@@ -2,6 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -350,7 +351,11 @@ def test_cli_registry_device_binding_token_uses_blinded_oprf(
         assert path == "/api/v1/device-bindings/oprf"
         assert payload is not None
         blinded_requests.append(payload)
-        return dict(evaluate_device_oprf(payload, server_scalar=7))
+        assert set(payload) == {"blinded"}
+        return cast(
+            dict[str, object],
+            evaluate_device_oprf(payload, server_scalar=b"\x07" * 32),
+        )
 
     monkeypatch.setattr(cli, "_request_json", fake_request_json)
 
