@@ -49,6 +49,9 @@ def _handler():
                 "PACT_INTERMEDIATE_PRIVATE_KEY_PEM"
             ),
         ),
+        oprf_server_secret=None
+        if config.oprf_server_secret is None
+        else config.oprf_server_secret.encode("utf-8"),
     )
     app = create_app(
         service,

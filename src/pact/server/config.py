@@ -118,6 +118,7 @@ class RuntimeConfig:
     file_store_directory: str | None = None
     sqlite_database: str = ":memory:"
     postgres_dsn: str | None = None
+    oprf_server_secret: str | None = None
     security: SecurityProfile = SecurityProfile()
     logging: LoggingConfig = LoggingConfig()
     routes: tuple[RouteConfig, ...] = ()
@@ -144,6 +145,7 @@ class RuntimeConfig:
             file_store_directory=os.getenv("PACT_FILE_STORE_DIRECTORY"),
             sqlite_database=os.getenv("PACT_SQLITE_DATABASE", ":memory:"),
             postgres_dsn=os.getenv("PACT_POSTGRES_DSN"),
+            oprf_server_secret=os.getenv("PACT_OPRF_SERVER_SECRET"),
             security=security,
             logging=LoggingConfig.from_env(),
             routes=default_routes(),
@@ -160,6 +162,9 @@ class RuntimeConfig:
             "file_store_directory": self.file_store_directory,
             "sqlite_database": self.sqlite_database,
             "postgres_dsn_configured": self.postgres_dsn is not None,
+            "oprf_server_secret_configured": (
+                self.oprf_server_secret is not None
+            ),
             "security": self.security.to_dict(),
             "logging": self.logging.to_dict(),
             "routes": [route.to_dict() for route in self.routes],

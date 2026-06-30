@@ -31,6 +31,13 @@ def create_registry_store(config: RuntimeConfig) -> RegistryStore:
         )
         return FileRegistryStore(Path(config.file_store_directory))
     if config.store_backend is StoreBackend.SQLITE:
+        if config.sqlite_database == ":memory:":
+            LOGGER.warning(
+                "using ephemeral in-memory SQLite registry store; all "
+                "profiles, claims, reports, and disputes will be lost on "
+                "restart",
+                extra={"store_backend": config.store_backend.value},
+            )
         LOGGER.info(
             "creating registry store",
             extra={"store_backend": config.store_backend.value},

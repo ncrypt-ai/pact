@@ -29,6 +29,10 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Registry intermediate private key PEM with newlines escaped as \n when passed on the CLI.
+  OprfServerSecret:
+    Type: String
+    NoEcho: true
+    Description: Dedicated high-entropy OPRF server secret; rotate separately from registry CA keys.
   AllowedHosts:
     Type: String
     Default: ""
@@ -126,6 +130,7 @@ Resources:
           PACT_ROOT_CERTIFICATE_PEM: !Ref RootCertificatePem
           PACT_INTERMEDIATE_CERTIFICATE_PEM: !Ref IntermediateCertificatePem
           PACT_INTERMEDIATE_PRIVATE_KEY_PEM: !Ref IntermediatePrivateKeyPem
+          PACT_OPRF_SERVER_SECRET: !Ref OprfServerSecret
       Policies:
         - AWSLambdaBasicExecutionRole
         - AWSLambdaVPCAccessExecutionRole
