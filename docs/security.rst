@@ -64,9 +64,14 @@ The browser keeps the same privacy boundary. It uses WebAuthn PRF output as the
 preferred local secret when the browser and authenticator support it. Otherwise
 it falls back to the profile passcode and, only when no passcode is available,
 a local random secret. It combines that local secret with local browser
-fingerprint material and the registry-root fingerprint, then blinds the input
-before asking the registry's OPRF endpoint to evaluate it. The registry sees the
-blinded point and the final registry-scoped token, not raw browser traits.
+fingerprint material and the registry-root fingerprint, then derives the final
+token through the same blinded Ristretto OPRF flow used by the CLI.
+
+The OPRF implementation uses the pure-Python ``oblivious`` package. The
+registry receives a blinded Ristretto255 element and returns an evaluated
+element; final token derivation happens locally. Raw browser traits, raw device
+traits, passcodes, WebAuthn PRF output, and local HMAC input are not sent to the
+registry.
 
 This is spam resistance and device continuity, not proof of a unique person. A
 determined user with administrator access can still change hardware identifiers,
@@ -165,13 +170,23 @@ certificate; it does not require the offline root private key at runtime.
 Current transport limits
 ------------------------
 
-The HTTP and HTML layer is usable, but production deployments still need
-operator controls around it:
+The HTTP layer rejects oversized request bodies before parsing, reads uploads
+with an application-level byte limit, applies ZIP metadata checks before
+parsing ZIP-like carriers, and runs inspection parsing with a timeout. Public
+``inspect`` and ``recover`` remain available because they are proof and review
+workflows, but they use stricter anonymous request limits than normal metadata
+reads.
+
+Forwarded client IP headers are ignored unless the immediate peer is explicitly
+configured as a trusted proxy. If the app is reachable directly, clients cannot
+move rate-limit buckets by sending ``X-Forwarded-For`` themselves.
+
+These controls are still not a replacement for production operator controls:
 
 - gateway or load-balancer rate limits, especially for mutation routes;
 - strict CORS and Host/Origin configuration for the actual deployment;
 - careful logging policy for inspection uploads;
-- resource isolation for untrusted file handling at larger scale;
+- separate worker/process isolation for untrusted file handling at larger scale;
 - backup and rotation procedures for registry CA material and databases;
 - public communication about disputes, takedowns, and retention.
 

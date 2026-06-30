@@ -124,6 +124,14 @@ not depend on a local ``.git`` directory.
 ``/api/v1/inspect`` is public and accepts multipart uploads for signed
 manifest JSON or raw carrier media. It reports embedded references and, when
 the referenced claim exists in the registry, registry verification evidence.
+``/api/v1/recover`` is also public for source-candidate review. Both endpoints
+enforce application upload limits and parsing timeouts; deployments should
+still enforce lower gateway/proxy limits that match their expected workload.
+
+Avoidance report submission is not anonymous. A caller must have a registered
+profile and sign an ``account_authorization`` request proof. Dispute and report
+reads are public so reviewers can see the issue, total dispute count, and
+reporter credibility context.
 
 The Lambda entrypoint is ``pact.server.lambda_app.lambda_handler``. It expects
 the ``pact[aws]`` optional dependencies and these environment variables:
@@ -187,12 +195,16 @@ Before treating a registry as public, confirm:
 - the Cognito authorizer, if used, matches the route scopes from
   ``/api/v1/server/routes``;
 - public routes are intentionally public, including registry metadata,
-  inspection, challenges, proof pages, and the device-binding OPRF endpoint;
+  inspection/recovery, challenges, proof pages, public dispute/report reads,
+  and the device-binding OPRF endpoint;
 - mutation routes require signed mutation requests and, where applicable,
   gateway authorization;
+- report submissions require a signed registered-profile proof;
 - AWS WAF rate limiting is attached to the API Gateway stage ARN, ALB ARN, or
   both;
 - CORS origins and allowed hosts are exact deployment values, not wildcards;
+- forwarding headers are stripped and rewritten by the gateway/load balancer,
+  and the app trusts them only from configured proxy peers;
 - upload and request logs do not retain private claim content unnecessarily;
 - registry CA material comes from your secret manager and is not baked into an
   image or template;

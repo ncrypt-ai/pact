@@ -37,11 +37,17 @@ public OPRF endpoint as part of that derivation:
 
    curl -X POST https://registry.example/api/v1/device-bindings/oprf \
      -H 'content-type: application/json' \
-     -d '{"x":"BASE64URL_P256_X","y":"BASE64URL_P256_Y"}'
+     -d '{"blinded":"BASE64URL_RISTRETTO255_ELEMENT"}'
 
-The OPRF endpoint receives a blinded P-256 point. It should not receive raw
-browser traits, raw hardware values, profile passcodes, or local secret
-material.
+The OPRF endpoint receives a blinded Ristretto255 element evaluated through the
+pure-Python ``oblivious`` package. It should not receive raw browser traits,
+raw hardware values, profile passcodes, or local secret material.
+
+Avoidance report submissions require a registered profile proof. Direct API
+integrations request an ``account_authorization`` challenge, solve its
+proof-of-work, and sign the canonical request body with the registered profile
+key. The server records the reporter from that signature rather than trusting a
+JSON field.
 
 Public package
 --------------

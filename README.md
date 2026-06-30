@@ -139,7 +139,9 @@ Open `http://127.0.0.1:8000/pact`.
 The browser workspace keeps signing local. Publishing sends signed manifest JSON
 to the registry, not the raw file. Browser/device fingerprinting is used for
 baseline device continuity, but the registry receives only a private,
-registry-scoped device-binding token derived through a blinded OPRF flow.
+registry-scoped device-binding token. The CLI and browser workspace use a
+blinded Ristretto OPRF flow backed by the pure-Python `oblivious` package, so
+raw device or browser traits are not sent to the registry.
 
 ## AWS deployment shape
 
@@ -172,6 +174,10 @@ Inspect a proof or carrier:
 curl -F file=@work.txt -F mime_type=text/plain \
   https://registry.example/api/v1/inspect
 ```
+
+Report submissions require a registered profile signature. Public claim,
+profile, dispute, report, inspect, and recover reads remain available so a
+reviewer can inspect the evidence without creating an account.
 
 Fetch a public claim:
 
