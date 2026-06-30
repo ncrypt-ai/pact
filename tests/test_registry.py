@@ -612,12 +612,10 @@ def test_avoidance_reports_require_public_nonce_claim(
 
     assert report.status.value == "submitted"
     assert report.observed_domain == "example.com"
-    assert spread.status is SpreadStatus.HIGH_CONFIDENCE_SPREAD
-    assert spread.report_count == 1
-    assert spread.domain_count == 1
-    assert spread.highest_confidence is (
-        AvoidanceReportLabel.LIKELY_DERIVED_STRIPPED
-    )
+    assert spread.status is SpreadStatus.NO_REPORTS
+    assert spread.report_count == 0
+    assert spread.domain_count == 0
+    assert spread.highest_confidence is None
 
 
 def test_avoidance_reports_reject_private_nonce_claim(

@@ -1,6 +1,7 @@
 """Hosted and local web application helpers."""
 
 from pact.web.app import (
+    ChallengeDifficultyConfig,
     RateLimitConfig,
     TrustedProxyConfig,
     UploadLimitConfig,
@@ -9,6 +10,7 @@ from pact.web.app import (
 
 __all__ = [
     "RateLimitConfig",
+    "ChallengeDifficultyConfig",
     "TrustedProxyConfig",
     "UploadLimitConfig",
     "create_app",

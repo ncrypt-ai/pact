@@ -88,6 +88,23 @@ class TrustedProxyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ChallengeDifficultyConfig:
+    default_minimum: int = 4
+    profile_registration: int = 4
+    account_authorization: int = 8
+    claim_registration: int = 4
+
+    def minimum_for(self, purpose: ChallengePurpose) -> int:
+        if purpose is ChallengePurpose.PROFILE_REGISTRATION:
+            return self.profile_registration
+        if purpose is ChallengePurpose.ACCOUNT_AUTHORIZATION:
+            return self.account_authorization
+        if purpose is ChallengePurpose.CLAIM_REGISTRATION:
+            return self.claim_registration
+        return self.default_minimum
+
+
+@dataclass(frozen=True, slots=True)
 class RateLimitDecision:
     """Result of one rate-limit check."""
 
@@ -976,6 +993,7 @@ def create_app(
     rate_limit_config: RateLimitConfig | None = None,
     upload_limit_config: UploadLimitConfig | None = None,
     trusted_proxy_config: TrustedProxyConfig | None = None,
+    challenge_difficulty_config: ChallengeDifficultyConfig | None = None,
     logging_config: LoggingConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
@@ -986,6 +1004,9 @@ def create_app(
     rate_limit = rate_limit_config or RateLimitConfig()
     upload_limits = upload_limit_config or UploadLimitConfig()
     trusted_proxies = trusted_proxy_config or TrustedProxyConfig()
+    challenge_difficulty = (
+        challenge_difficulty_config or ChallengeDifficultyConfig()
+    )
     parsed_public_url = urlsplit(public_base_url)
     normalized_registry_url = (
         service.registry_url if service is not None else registry_url
@@ -1018,6 +1039,7 @@ def create_app(
     app.state.rate_limit_config = rate_limit
     app.state.upload_limit_config = upload_limits
     app.state.trusted_proxy_config = trusted_proxies
+    app.state.challenge_difficulty_config = challenge_difficulty
     app.state.logging_config = selected_logging
     LOGGER.info(
         "created web application",
@@ -1330,10 +1352,14 @@ def create_app(
         ],
     ) -> dict[str, object]:
         enforce_identity_rate(request, body, extra=(body.purpose.value,))
+        difficulty = max(
+            body.difficulty,
+            challenge_difficulty.minimum_for(body.purpose),
+        )
         challenge = service.issue_challenge(
             body.purpose,
             bound_key_id=body.bound_key_id,
-            difficulty=body.difficulty,
+            difficulty=difficulty,
         )
         return _json_dict(challenge.to_dict())
 
@@ -1716,7 +1742,7 @@ def create_app(
             _raise_http_error(error)
         return {
             **service.public_avoidance_report_dict(report),
-            "public_visibility": "public",
+            "public_visibility": "claimant_visible",
             "owner_notified": True,
         }
 
@@ -1730,6 +1756,8 @@ def create_app(
             report = service.get_avoidance_report(report_id)
         except Exception as error:
             _raise_http_error(error)
+        if not report.public_visible:
+            raise HTTPException(status_code=404, detail="report not found")
         return service.public_avoidance_report_dict(report)
 
     @app.post(

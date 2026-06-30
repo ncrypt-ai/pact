@@ -983,7 +983,7 @@ class AvoidanceReport:
     description: str | None
     public_note: str | None
     owner_visible: bool = True
-    public_visible: bool = True
+    public_visible: bool = False
 
     def to_public_dict(
         self,
@@ -1228,6 +1228,7 @@ class RegistryService:
         admin_public_jwks: tuple[Mapping[str, object], ...] = (),
         dns_txt_resolver: Callable[[str], tuple[str, ...]] = resolve_dns_txt,
         hosted_account_verifier: HostedAccountVerifier | None = None,
+        oprf_server_secret: bytes | None = None,
     ) -> None:
         self.registry_url = normalize_registry_url(registry_url)
         self.store = store
@@ -1240,6 +1241,14 @@ class RegistryService:
         }
         self._dns_txt_resolver = dns_txt_resolver
         self._hosted_account_verifier = hosted_account_verifier
+        self._oprf_server_secret = (
+            oprf_server_secret
+            if oprf_server_secret is not None
+            else hashlib.sha256(
+                b"PACT development OPRF fallback v1\0"
+                + certificate_authority.intermediate_private_key_pem
+            ).digest()
+        )
 
     def issue_challenge(
         self,
@@ -1278,7 +1287,7 @@ class RegistryService:
         server_scalar = device_oprf_server_scalar(
             registry_url=self.registry_url,
             registry_root_fingerprint=self.certificate_authority.root_fingerprint,
-            server_secret=self.certificate_authority.intermediate_private_key_pem,
+            server_secret=self._oprf_server_secret,
         )
         return evaluate_device_oprf(
             blinded_point,
@@ -1883,7 +1892,7 @@ class RegistryService:
         self,
         *,
         claim_id: UUID | None = None,
-        public_only: bool = False,
+        public_only: bool = True,
     ) -> tuple[AvoidanceReport, ...]:
         """Return avoidance reports, optionally filtered by claim."""
 
@@ -2009,7 +2018,7 @@ class RegistryService:
                 "description": description,
                 "public_note": public_note,
                 "owner_visible": True,
-                "public_visible": True,
+                "public_visible": False,
             },
         )
         return self.get_avoidance_report(report_id)

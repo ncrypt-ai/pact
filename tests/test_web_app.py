@@ -465,7 +465,7 @@ def test_web_avoidance_report_flow_requires_public_nonce(
     assert report_response.status_code == 200
     report = report_response.json()
     assert report["status"] == "submitted"
-    assert report["public_visibility"] == "public"
+    assert report["public_visibility"] == "claimant_visible"
     assert report["reporter_key_id"] == identity.key_id
     assert report["reporter_type"] == "registered_profile"
     assert report["reporter_credibility"]["submitted_dispute_count"] == 0
@@ -475,18 +475,16 @@ def test_web_avoidance_report_flow_requires_public_nonce(
     listed = client.get(
         f"/api/v1/claims/{public_claim['claim_id']}/reports"
     ).json()["reports"]
-    assert listed[0]["report_id"] == report["report_id"]
-    assert listed[0]["reporter_key_id"] == identity.key_id
-    fetched = client.get(f"/api/v1/reports/{report['report_id']}").json()
-    assert fetched["report_id"] == report["report_id"]
-    assert "evidence_digest" not in fetched
+    assert listed == []
+    fetched = client.get(f"/api/v1/reports/{report['report_id']}")
+    assert fetched.status_code == 404
 
     spread = client.get(
         f"/api/v1/claims/{public_claim['claim_id']}/spread"
     ).json()
-    assert spread["status"] == "reports_received"
-    assert spread["report_count"] == 1
-    assert spread["domain_count"] == 1
+    assert spread["status"] == "no_reports"
+    assert spread["report_count"] == 0
+    assert spread["domain_count"] == 0
 
     private_claim = register_claim(
         client,
@@ -681,6 +679,20 @@ def test_api_rejects_oversized_request_body(tmp_path: Path) -> None:
 
     assert response.status_code == 413
     assert "request body is too large" in response.text
+
+
+def test_challenge_endpoint_enforces_server_difficulty_floor(
+    tmp_path: Path,
+) -> None:
+    client, _identity = make_client(tmp_path)
+
+    response = client.post(
+        "/api/v1/challenges",
+        json={"purpose": "account_authorization", "difficulty": 0},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["difficulty"] == 8
 
 
 def test_web_inspect_rejects_zip_bomb_shape(tmp_path: Path) -> None:
