@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, Self, cast
+from typing import Any, LiteralString, Protocol, Self, cast
 from uuid import UUID, uuid4
 
 from pact.canonical import JsonValue, canonical_json
@@ -595,7 +595,7 @@ class SqliteRegistryStore:
     ) -> None:
         """Persist a short-lived, one-use mutation challenge."""
 
-        with self.connection:
+        with self._lock, self.connection:
             self.connection.execute(
                 """
                 INSERT OR REPLACE INTO registry_challenges(
@@ -618,15 +618,16 @@ class SqliteRegistryStore:
     ) -> dict[str, object] | None:
         """Atomically load and consume a mutation challenge."""
 
-        row = self.connection.execute(
-            """
-            DELETE FROM registry_challenges
-            WHERE challenge_id = ?
-            RETURNING challenge_json
-            """,
-            (str(challenge_id),),
-        ).fetchone()
-        self.connection.commit()
+        with self._lock:
+            row = self.connection.execute(
+                """
+                DELETE FROM registry_challenges
+                WHERE challenge_id = ?
+                RETURNING challenge_json
+                """,
+                (str(challenge_id),),
+            ).fetchone()
+            self.connection.commit()
 
         if row is None:
             return None
@@ -636,7 +637,7 @@ class SqliteRegistryStore:
     def purge_expired_challenges(self, now: datetime) -> int:
         """Remove expired unconsumed mutation challenges."""
 
-        with self.connection:
+        with self._lock, self.connection:
             cursor = self.connection.execute(
                 "DELETE FROM registry_challenges WHERE expires_at < ?",
                 (_isoformat(now),),
@@ -712,7 +713,10 @@ class PostgresRegistryStore:
         )
         self.connection.commit()
 
-    def _load_json_rows(self, query: str) -> list[dict[str, object]]:
+    def _load_json_rows(
+        self,
+        query: LiteralString,
+    ) -> list[dict[str, object]]:
         rows = self.connection.execute(query).fetchall()
         result: list[dict[str, object]] = []
         for row in rows:
@@ -747,6 +751,10 @@ class PostgresRegistryStore:
         row = self.connection.execute(
             "SELECT COALESCE(MAX(sequence), 0) FROM registry_events"
         ).fetchone()
+        if row is None:
+            raise RegistryStoreError(
+                "Postgres latest-sequence query returned no rows"
+            )
         return int(row[0])
 
     def append(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -119,6 +120,7 @@ class RuntimeConfig:
     sqlite_database: str = ":memory:"
     postgres_dsn: str | None = None
     oprf_server_secret: str | None = None
+    admin_public_jwks: tuple[dict[str, object], ...] = ()
     security: SecurityProfile = SecurityProfile()
     logging: LoggingConfig = LoggingConfig()
     routes: tuple[RouteConfig, ...] = ()
@@ -146,6 +148,7 @@ class RuntimeConfig:
             sqlite_database=os.getenv("PACT_SQLITE_DATABASE", ":memory:"),
             postgres_dsn=os.getenv("PACT_POSTGRES_DSN"),
             oprf_server_secret=os.getenv("PACT_OPRF_SERVER_SECRET"),
+            admin_public_jwks=_admin_public_jwks_from_env(),
             security=security,
             logging=LoggingConfig.from_env(),
             routes=default_routes(),
@@ -165,6 +168,7 @@ class RuntimeConfig:
             "oprf_server_secret_configured": (
                 self.oprf_server_secret is not None
             ),
+            "admin_public_jwk_count": len(self.admin_public_jwks),
             "security": self.security.to_dict(),
             "logging": self.logging.to_dict(),
             "routes": [route.to_dict() for route in self.routes],
@@ -413,3 +417,18 @@ def _cognito_from_env() -> CognitoAuthorizerConfig | None:
         region=region,
         issuer=os.getenv("PACT_COGNITO_ISSUER"),
     )
+
+
+def _admin_public_jwks_from_env() -> tuple[dict[str, object], ...]:
+    value = os.getenv("PACT_ADMIN_PUBLIC_JWKS")
+    if not value:
+        return ()
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        raise ValueError("PACT_ADMIN_PUBLIC_JWKS must be a JSON array")
+    result: list[dict[str, object]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError("PACT_ADMIN_PUBLIC_JWKS entries must be objects")
+        result.append(dict(item))
+    return tuple(result)

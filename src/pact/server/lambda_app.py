@@ -27,6 +27,10 @@ def _handler():
     mangum_module = cast(Any, mangum)
     config = RuntimeConfig.from_env()
     configure_logging(config.logging)
+    if config.oprf_server_secret is None:
+        raise RuntimeError(
+            "PACT_OPRF_SERVER_SECRET is required for AWS Lambda deployments"
+        )
     LOGGER.info(
         "initializing lambda registry app",
         extra={
@@ -49,9 +53,8 @@ def _handler():
                 "PACT_INTERMEDIATE_PRIVATE_KEY_PEM"
             ),
         ),
-        oprf_server_secret=None
-        if config.oprf_server_secret is None
-        else config.oprf_server_secret.encode("utf-8"),
+        oprf_server_secret=config.oprf_server_secret.encode("utf-8"),
+        admin_public_jwks=config.admin_public_jwks,
     )
     app = create_app(
         service,

@@ -2,7 +2,7 @@
 
 import hashlib
 import ipaddress
-import random
+import secrets
 import socket
 import struct
 import threading
@@ -337,7 +337,7 @@ def _skip_dns_name(packet: bytes, offset: int) -> int:
 def resolve_dns_txt(name: str, *, timeout: float = 3.0) -> tuple[str, ...]:
     """Resolve TXT records using the system recursive DNS resolvers."""
 
-    query_id = random.randrange(0, 65536)
+    query_id = secrets.randbelow(65536)
     query = (
         struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
         + _dns_name_wire(name)

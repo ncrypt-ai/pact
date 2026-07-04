@@ -1,3 +1,4 @@
+import json
 from typing import cast
 
 from pact import (
@@ -53,6 +54,23 @@ def test_runtime_config_requires_postgres_dsn() -> None:
         assert "postgres_dsn" in str(error)
     else:
         raise AssertionError("Postgres store creation should require a DSN")
+
+
+def test_runtime_config_loads_admin_public_jwks(monkeypatch) -> None:
+    admin_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "example-x",
+        "y": "example-y",
+    }
+    monkeypatch.setenv("PACT_REGISTRY_URL", "https://registry.example")
+    monkeypatch.setenv("PACT_PUBLIC_BASE_URL", "https://registry.example")
+    monkeypatch.setenv("PACT_ADMIN_PUBLIC_JWKS", json.dumps([admin_jwk]))
+
+    config = RuntimeConfig.from_env()
+
+    assert config.admin_public_jwks == (admin_jwk,)
+    assert config.to_dict()["admin_public_jwk_count"] == 1
 
 
 def test_aws_lambda_route_metadata_maps_auth_and_scopes() -> None:

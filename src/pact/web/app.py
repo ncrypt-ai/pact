@@ -178,6 +178,19 @@ def _rate_limit_response(decision: RateLimitDecision) -> JSONResponse:
     )
 
 
+def _request_id(value: str | None) -> str:
+    if value is None:
+        return uuid4().hex
+    normalized = "".join(
+        character
+        for character in value.strip()
+        if character.isascii() and (character.isalnum() or character in "-_.")
+    )
+    if not normalized:
+        return uuid4().hex
+    return normalized[:64]
+
+
 def _client_ip(
     request: Request,
     trusted_proxy_config: TrustedProxyConfig | None = None,
@@ -778,7 +791,12 @@ def _raise_http_error(error: Exception) -> None:
     ) from error
 
 
-def _content_security_policy(path: str) -> str:
+def _content_security_policy(path: str, *, local_mode: bool = False) -> str:
+    workspace_connect = "connect-src 'self' https:"
+    if local_mode:
+        workspace_connect = (
+            "connect-src 'self' https: http://localhost:* http://127.0.0.1:*"
+        )
     if (
         path == "/pact"
         or path.startswith("/pact/")
@@ -788,8 +806,8 @@ def _content_security_policy(path: str) -> str:
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
             "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
             "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
-            "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self' "
-            "https: http://localhost:* http://127.0.0.1:*"
+            f"https://cdn.jsdelivr.net blob:; worker-src 'self'; "
+            f"{workspace_connect}"
         )
     docs_paths = ("/api/docs", "/api/redoc", "/docs", "/redoc")
     if path.rstrip("/") in docs_paths:
@@ -798,9 +816,7 @@ def _content_security_policy(path: str) -> str:
             "frame-ancestors 'none'; img-src 'self' data: "
             "https://fastapi.tiangolo.com; style-src 'self' 'unsafe-inline' "
             "https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' "
-            "https://cdn.jsdelivr.net; "
-            "worker-src 'self'; connect-src 'self' https: http://localhost:* "
-            "http://127.0.0.1:*"
+            "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self'"
         )
     return (
         "default-src 'self'; base-uri 'self'; form-action 'self'; "
@@ -1101,7 +1117,7 @@ def create_app(
 
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid4().hex
+        request_id = _request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         started_ms = monotonic_ms()
         status_code = 500
@@ -1200,7 +1216,7 @@ def create_app(
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Content-Security-Policy",
-            _content_security_policy(request.url.path),
+            _content_security_policy(request.url.path, local_mode=local_mode),
         )
         if local_mode:
             response.headers.setdefault("Cache-Control", "no-store")

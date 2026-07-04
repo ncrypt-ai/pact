@@ -417,6 +417,8 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     assert "device_fingerprint" not in profile_page.text
     claim_page = client.get(f"/claims/{claim['claim_id']}")
     assert claim["claim_id"] in claim_page.text
+    assert "<summary>Signed manifest</summary>" in claim_page.text
+    assert '{\n  "manifest":' in claim_page.text
     verify_page = client.get(f"/verify/claim/{claim['claim_id']}")
     assert "Claim check" in verify_page.text
     assert "claim_verified_content_unchecked" in verify_page.text
@@ -561,7 +563,47 @@ def test_api_docs_have_scoped_content_security_policy(tmp_path: Path) -> None:
     assert "'unsafe-inline'" in docs_csp
     assert "https://cdn.jsdelivr.net" in docs_slash_csp
     assert "https://cdn.jsdelivr.net" in default_docs_csp
+    assert "http://localhost:" not in docs_csp
+    assert "http://127.0.0.1:" not in docs_csp
     assert "https://fastapi.tiangolo.com" not in home_csp
+
+
+def test_workspace_csp_allows_localhost_only_in_local_mode(
+    tmp_path: Path,
+) -> None:
+    hosted_client, _identity = make_client(
+        tmp_path / "hosted",
+        enable_workspace=True,
+    )
+    hosted_csp = hosted_client.get("/pact").headers["Content-Security-Policy"]
+    assert "http://localhost:" not in hosted_csp
+    assert "http://127.0.0.1:" not in hosted_csp
+
+    registry_url = "http://127.0.0.1:8000"
+    app = create_app(
+        None,
+        public_base_url=registry_url,
+        registry_url=registry_url,
+        local_mode=True,
+        enable_workspace=True,
+    )
+    local_csp = TestClient(app).get("/pact").headers["Content-Security-Policy"]
+    assert "http://localhost:*" in local_csp
+    assert "http://127.0.0.1:*" in local_csp
+
+
+def test_request_id_header_is_bounded_and_sanitized(tmp_path: Path) -> None:
+    client, _identity = make_client(tmp_path)
+
+    response = client.get(
+        "/api/v1/registry",
+        headers={"X-Request-ID": "abc\nbad" + "x" * 200},
+    )
+
+    request_id = response.headers["X-Request-ID"]
+    assert len(request_id) <= 64
+    assert "\n" not in request_id
+    assert request_id.startswith("abc")
 
 
 def test_web_updates_profile_display_name(tmp_path: Path) -> None:
@@ -812,6 +854,9 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     workspace_js = Path("src/pact/web/static/workspace.js").read_text(
         encoding="utf-8"
     )
+    worker_js = Path("src/pact/web/static/pyodide-worker.js").read_text(
+        encoding="utf-8"
+    )
     assert "Generative AI training" in workspace_js
     assert "Search indexing" in workspace_js
     assert "Redistribution" in workspace_js
@@ -825,11 +870,13 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert "Disputes" in workspace.text
     assert "Model checks" not in workspace.text
     assert 'autocomplete="username"' in workspace.text
+    assert "PYODIDE_SHA384" in worker_js
+    assert "integrity check failed" in worker_js
     csp = workspace.headers["Content-Security-Policy"]
     assert "'unsafe-eval'" in csp
     assert "'wasm-unsafe-eval'" in csp
     assert (
-        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net"
+        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:"
         in csp
     )
     package = enabled_client.get("/pact/pact-browser-core.pyz")
@@ -838,6 +885,8 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     core_names = zipfile.ZipFile(io.BytesIO(package.content)).namelist()
     assert "pact/browser.py" in core_names
     assert "pact/oprf.py" in core_names
+    assert "pact/registry/app.py" not in core_names
+    assert "pact/registry/store.py" not in core_names
     assert "pact/carriers/c2pa_text.py" not in core_names
 
     documents = enabled_client.get("/pact/pact-browser-documents.pyz")
