@@ -391,9 +391,7 @@ def embed_text_carrier(
         locator = InvisibleLocator.create(
             signed.manifest, nonce
         ).to_zero_width()
-        result = (
-            visible_block + body + locator
-        )
+        result = visible_block + body + locator
     return result.encode("utf-8")
 
 

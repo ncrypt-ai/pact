@@ -1,14 +1,17 @@
 import json
 import sys
 import types
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 
 import pact.cli as cli
 from pact import (
     CanonicalizationProfile,
+    CarrierMode,
     ClaimantIdentity,
     Manifest,
     Permission,
@@ -16,12 +19,16 @@ from pact import (
     Policy,
     PolicyEntry,
     base64url_encode,
+    browser,
     embed_text_carrier,
+    extract_text_carrier,
     sign_manifest,
 )
 from pact.cli import build_parser, main
+from pact.crypto import base64url_decode
 from pact.metadata import PACKAGE_VERSION
-from pact.oprf import evaluate_device_oprf
+from pact.oprf import device_binding_input, evaluate_device_oprf
+from pact.registry.store import RegistryEventType
 
 
 @pytest.fixture(autouse=True)
@@ -105,10 +112,20 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert manifest_path.exists()
     assert not nonce_path.exists()
     sign_output = json.loads(capsys.readouterr().out)
+    carrier_path = tmp_path / "work.pact.txt"
     assert sign_output["manifest"] == str(manifest_path)
+    assert sign_output["carrier"] == str(carrier_path)
     assert sign_output["nonce"] is None
     assert sign_output["nonce_disclosure"] == "public"
     assert sign_output["public_content_verifiable"] is True
+    assert carrier_path.exists()
+    carrier = extract_text_carrier(carrier_path.read_bytes())
+    assert carrier.content == b"hello\n"
+    assert carrier.mode is CarrierMode.VISIBLE
+    assert carrier.signed_manifest is not None
+    assert carrier.signed_manifest.manifest.claim_id == UUID(
+        sign_output["claim_id"]
+    )
 
     default_content_path = tmp_path / "default-name.txt"
     default_content_path.write_text("hello again\n", encoding="utf-8")
@@ -133,8 +150,10 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert default_output["manifest"] == str(
         tmp_path / "default-name.manifest.json"
     )
+    assert default_output["carrier"] == str(tmp_path / "default-name.pact.txt")
     assert default_output["nonce"] is None
     assert (tmp_path / "default-name.manifest.json").exists()
+    assert (tmp_path / "default-name.pact.txt").exists()
     assert not (tmp_path / "default-name.nonce").exists()
 
     private_manifest_path = tmp_path / "private-manifest.json"
@@ -183,7 +202,10 @@ def test_cli_identity_sign_verify_and_inspect_flow(
     assert verify_output["signature_valid"] is True
 
     assert main(["inspect", str(manifest_path)]) == 0
-    inspect_output = json.loads(capsys.readouterr().out)
+    raw_inspect_output = capsys.readouterr().out
+    assert raw_inspect_output.startswith("{\n  ")
+    assert '\n  "manifest": {' in raw_inspect_output
+    inspect_output = json.loads(raw_inspect_output)
     assert inspect_output["manifest"]["registry_url"] == registry
 
     identity = ClaimantIdentity.generate(registry)
@@ -346,10 +368,12 @@ def test_cli_registry_device_binding_token_uses_blinded_oprf(
         path: str,
         *,
         payload: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         assert registry_url == registry
         assert path == "/api/v1/device-bindings/oprf"
         assert payload is not None
+        assert headers is None
         blinded_requests.append(payload)
         assert set(payload) == {"blinded"}
         return cast(
@@ -366,6 +390,106 @@ def test_cli_registry_device_binding_token_uses_blinded_oprf(
     assert first.startswith("pact-device-binding-v2.")
     assert blinded_requests[0] != blinded_requests[1]
     assert store.fingerprint(registry) not in json.dumps(blinded_requests)
+
+
+def test_cli_report_submits_signed_profile_request(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    registry = "https://registry.example"
+    identity_file = tmp_path / "identity-store"
+    evidence_file = tmp_path / "suspicious.txt"
+    evidence_file.write_text("copied text\n", encoding="utf-8")
+    claim_id = "018f7f79-7b42-7c00-9000-000000000123"
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    identity = json.loads(capsys.readouterr().out)
+    posted: list[dict[str, object]] = []
+
+    def fake_request_json(
+        registry_url: str,
+        path: str,
+        *,
+        payload: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        assert registry_url == registry
+        if path == "/api/v1/challenges":
+            assert payload == {
+                "purpose": "account_authorization",
+                "bound_key_id": identity["key_id"],
+            }
+            assert headers is None
+            issued_at = datetime.now(UTC)
+            return {
+                "registry_url": registry,
+                "challenge_id": "018f7f79-7b42-7c00-9000-000000000124",
+                "purpose": "account_authorization",
+                "issued_at": issued_at.isoformat(),
+                "expires_at": (issued_at + timedelta(minutes=5)).isoformat(),
+                "challenge_nonce": "nonce",
+                "difficulty": 0,
+                "bound_key_id": identity["key_id"],
+            }
+        assert path == "/api/v1/reports/avoidance"
+        assert payload is not None
+        assert headers is not None
+        assert headers["X-PACT-Profile-Key-Id"] == identity["key_id"]
+        assert headers["X-PACT-Challenge-Id"]
+        assert headers["X-PACT-Signature"]
+        posted.append(payload)
+        return {
+            "report_id": "018f7f79-7b42-7c00-9000-000000000125",
+            "claim_id": payload["claim_id"],
+            "status": "submitted",
+            "public_visibility": "claimant_visible",
+            "owner_notified": True,
+        }
+
+    monkeypatch.setattr(cli, "_request_json", fake_request_json)
+
+    assert (
+        main(
+            [
+                "report",
+                str(evidence_file),
+                "--claim-id",
+                claim_id,
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+                "--where",
+                "https://example.test/repost",
+                "--description",
+                "Visible carrier was removed.",
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["claim_id"] == claim_id
+    assert output["reported_file"] == str(evidence_file)
+    assert posted[0]["observed_url"] == "https://example.test/repost"
+    assert posted[0]["description"] == "Visible carrier was removed."
 
 
 def test_cli_web_command_bootstraps_local_app(
@@ -442,6 +566,7 @@ def test_cli_registry_init_writes_online_and_offline_ca_material(
     assert (data_dir / "ca" / "offline_root_private_key.pem").exists()
     assert (data_dir / "ca" / "intermediate_certificate.pem").exists()
     assert (data_dir / "ca" / "intermediate_private_key.pem").exists()
+    assert (data_dir / "ca" / "oprf_server_secret").exists()
 
 
 def test_cli_registry_init_uses_local_environment_defaults(
@@ -459,6 +584,7 @@ def test_cli_registry_init_uses_local_environment_defaults(
     output = json.loads(capsys.readouterr().out)
     assert output["registry_url"] == "http://127.0.0.1:8123"
     assert (data_dir / "ca" / "root_certificate.pem").exists()
+    assert (data_dir / "ca" / "oprf_server_secret").exists()
 
 
 def test_cli_registry_init_prompts_for_missing_local_values(
@@ -480,6 +606,110 @@ def test_cli_registry_init_prompts_for_missing_local_values(
     output = json.loads(capsys.readouterr().out)
     assert output["registry_url"] == "http://127.0.0.1:8124"
     assert (data_dir / "ca" / "root_certificate.pem").exists()
+
+
+def test_cli_registry_teardown_deletes_persistent_local_state(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    registry = "https://registry.example"
+    data_dir = tmp_path / "registry-data"
+    database = tmp_path / "registry.sqlite"
+    identity_file = tmp_path / "identity-store"
+    replacement_identity_file = tmp_path / "replacement-identity-store"
+
+    assert (
+        main(
+            [
+                "registry",
+                "init",
+                "--registry",
+                registry,
+                "--data-dir",
+                str(data_dir),
+                "--root-key-password",
+                "offline-secret",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    store = cli.SqliteRegistryStore(database)
+    store.append(
+        RegistryEventType.PROFILE_REGISTERED,
+        actor_key_id="claimant",
+        data={"key_id": "claimant"},
+    )
+    store.connection.close()
+    assert database.exists()
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    binding_store = cli.LocalDeviceBindingStore()
+    binding_path = binding_store.path(registry)
+    assert binding_path.exists()
+
+    assert (
+        main(
+            [
+                "registry",
+                "teardown",
+                "--registry",
+                registry,
+                "--data-dir",
+                str(data_dir),
+                "--database",
+                str(database),
+                "--confirm-registry",
+                registry,
+                "--confirm-delete",
+                f"delete registry {registry}",
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry_url"] == registry
+    assert output["browser_cleanup_url"] == (
+        "https://registry.example/workspace?"
+        "teardown_registry=https%3A%2F%2Fregistry.example"
+    )
+    assert not (data_dir / "ca" / "root_certificate.pem").exists()
+    assert not (data_dir / "ca" / "intermediate_private_key.pem").exists()
+    assert not database.exists()
+    assert not binding_path.exists()
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(replacement_identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
 
 
 def test_cli_file_identity_uses_registry_and_password_environment(
@@ -507,6 +737,160 @@ def test_cli_file_identity_uses_registry_and_password_environment(
     assert output["registry_url"] == "https://registry.example"
 
 
+def test_cli_identity_public_jwk_writes_admin_file(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    identity_file = tmp_path / "admin-identity.pem"
+    admin_jwk = tmp_path / "admin.public.jwk.json"
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                "https://registry.example",
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "identity",
+                "public-jwk",
+                "--registry",
+                "https://registry.example",
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+                "--out",
+                str(admin_jwk),
+            ]
+        )
+        == 0
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    public_jwk = json.loads(admin_jwk.read_text(encoding="utf-8"))
+    assert output["output"] == str(admin_jwk)
+    assert public_jwk["kty"] == "EC"
+    assert public_jwk["crv"] == "P-256"
+    assert public_jwk["x"]
+    assert public_jwk["y"]
+
+
+def test_cli_recovery_json_preserves_profile_continuity_secret(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    registry = "https://registry.example"
+    identity_file = tmp_path / "identity.pem"
+    imported_identity_file = tmp_path / "imported-identity.pem"
+    recovery_file = tmp_path / "pact-profile-recovery.json"
+
+    assert (
+        main(
+            [
+                "identity",
+                "init",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "identity",
+                "export",
+                "--registry",
+                registry,
+                "--identity-file",
+                str(identity_file),
+                "--identity-password",
+                "secret",
+                "--export-password",
+                "secret",
+                "--recovery-json",
+                "--out",
+                str(recovery_file),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    recovery = json.loads(recovery_file.read_text(encoding="utf-8"))
+    assert recovery["registry_url"] == registry
+    assert recovery["encrypted_pkcs8_b64"]
+    continuity_secret = recovery["continuity_secret"]
+    assert len(base64url_decode(continuity_secret, length=32)) == 32
+
+    monkeypatch.setenv(
+        "PACT_DEVICE_BINDING_DIR",
+        str(tmp_path / "imported-device-bindings"),
+    )
+    assert (
+        main(
+            [
+                "identity",
+                "import",
+                "--source",
+                str(recovery_file),
+                "--import-password",
+                "secret",
+                "--identity-file",
+                str(imported_identity_file),
+                "--identity-password",
+                "secret",
+            ]
+        )
+        == 0
+    )
+
+    imported = json.loads(capsys.readouterr().out)
+    binding_store = cli.LocalDeviceBindingStore()
+    binding = binding_store.load(registry)
+    assert binding is not None
+    assert binding.key_id == imported["key_id"]
+    assert binding.continuity_secret == continuity_secret
+    root_fingerprint = "A" * 43
+    assert binding_store.private_binding_input(
+        registry,
+        root_fingerprint,
+    ) == device_binding_input(
+        local_secret=base64url_decode(continuity_secret, length=32),
+        registry_root_fingerprint=root_fingerprint,
+        device_fingerprint=f"profile:{imported['key_id']}",
+    )
+
+
+def test_browser_identity_includes_profile_continuity_secret() -> None:
+    created = json.loads(
+        browser.create_identity("https://registry.example", "secret")
+    )
+
+    assert created["registry_url"] == "https://registry.example"
+    assert created["encrypted_pkcs8_b64"]
+    assert len(base64url_decode(created["continuity_secret"], length=32)) == 32
+
+
 def test_cli_parser_exposes_registry_serve_command() -> None:
     parser = build_parser()
     args = parser.parse_args(
@@ -526,6 +910,42 @@ def test_cli_parser_exposes_registry_serve_command() -> None:
     assert args.database == ":memory:"
     assert not hasattr(args, "store_backend")
     assert not hasattr(args, "sqlite_database")
+
+
+def test_cli_parser_exposes_registry_teardown_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "registry",
+            "teardown",
+            "--registry",
+            "https://registry.example",
+            "--data-dir",
+            "./data",
+            "--database",
+            "./registry.sqlite",
+            "--confirm-registry",
+            "https://registry.example",
+            "--confirm-delete",
+            "delete registry https://registry.example",
+        ]
+    )
+    assert args.command == "registry"
+    assert args.registry_command == "teardown"
+    assert args.database == "./registry.sqlite"
+
+
+def test_cli_help_documents_registry_teardown(capsys) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["registry", "teardown", "--help"])
+
+    assert error.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "usage: pact registry teardown" in help_text
+    assert "--database" in help_text
+    assert "--confirm-registry" in help_text
+    assert "--confirm-delete" in help_text
 
 
 def test_cli_parser_exposes_watermark_image_command() -> None:

@@ -1,21 +1,26 @@
 """Command-line entry point for signing, inspection, and registry hosting."""
 
 import argparse
+import base64
+import binascii
 import getpass
 import hashlib
 import json
 import os
 import secrets
+import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from pact.canonical import CanonicalizationProfile
-from pact.crypto import base64url_encode
+from pact.canonical import CanonicalizationProfile, JsonValue, canonical_json
+from pact.carriers import CarrierMode, embed_text_carrier
+from pact.crypto import base64url_encode, sign_es256
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.probes import (
     ProbeSet,
@@ -27,6 +32,7 @@ from pact.identity import (
     ClaimantIdentity,
     DeviceBindingError,
     EncryptedFileIdentityStore,
+    IdentityError,
     IdentityNotFoundError,
     KeyringIdentityStore,
     LocalDeviceBindingStore,
@@ -136,6 +142,10 @@ def _default_manifest_path(input_path: Path) -> Path:
     return input_path.with_suffix(".manifest.json")
 
 
+def _default_carrier_path(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}.pact{input_path.suffix}")
+
+
 def _default_nonce_path(input_path: Path) -> Path:
     return input_path.with_suffix(".nonce")
 
@@ -200,13 +210,16 @@ def _request_json(
     path: str,
     *,
     payload: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, object]:
     url = f"{registry_url}{path}"
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
     request = Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=request_headers,
         method="GET" if payload is None else "POST",
     )
     try:
@@ -359,6 +372,48 @@ def _signed_mutation_body(
     }
 
 
+def _profile_auth_headers(
+    registry_url: str,
+    identity: ClaimantIdentity,
+    *,
+    method: str,
+    path: str,
+    body: dict[str, object],
+) -> dict[str, str]:
+    challenge = _challenge_from_response(
+        _request_json(
+            registry_url,
+            "/api/v1/challenges",
+            payload={
+                "purpose": ChallengePurpose.ACCOUNT_AUTHORIZATION.value,
+                "bound_key_id": identity.key_id,
+            },
+        )
+    )
+    solution = _solve_pow(challenge)
+    body_digest = hashlib.sha256(
+        canonical_json(cast(JsonValue, body))
+    ).hexdigest()
+    signed = canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge.to_dict(),
+                "profile_key_id": identity.key_id,
+                "method": method,
+                "path": path,
+                "body_sha256": body_digest,
+            },
+        )
+    )
+    return {
+        "X-PACT-Profile-Key-Id": identity.key_id,
+        "X-PACT-Challenge-Id": str(challenge.challenge_id),
+        "X-PACT-Proof-Of-Work-Solution": str(solution),
+        "X-PACT-Signature": sign_es256(identity.private_key, signed),
+    }
+
+
 def _identity_store(
     args: argparse.Namespace,
 ) -> KeyringIdentityStore | EncryptedFileIdentityStore:
@@ -471,6 +526,7 @@ def _authority_paths(data_dir: Path) -> dict[str, Path]:
         "root_private_key": ca_dir / "offline_root_private_key.pem",
         "intermediate_certificate": ca_dir / "intermediate_certificate.pem",
         "intermediate_private_key": ca_dir / "intermediate_private_key.pem",
+        "oprf_server_secret": ca_dir / "oprf_server_secret",
     }
 
 
@@ -522,6 +578,29 @@ def _write_authority(
         authority.intermediate_private_key_pem
     )
     os.chmod(paths["intermediate_private_key"], 0o600)
+    if not paths["oprf_server_secret"].exists():
+        paths["oprf_server_secret"].write_text(
+            base64url_encode(secrets.token_bytes(32)),
+            encoding="ascii",
+        )
+        os.chmod(paths["oprf_server_secret"], 0o600)
+
+
+def _load_oprf_server_secret(
+    data_dir: Path,
+    override: str | None = None,
+) -> bytes:
+    value = override or os.getenv("PACT_OPRF_SERVER_SECRET")
+    if value:
+        return value.encode("utf-8")
+    path = _authority_paths(data_dir)["oprf_server_secret"]
+    if not path.exists():
+        path.write_text(
+            base64url_encode(secrets.token_bytes(32)),
+            encoding="ascii",
+        )
+        os.chmod(path, 0o600)
+    return path.read_text(encoding="ascii").strip().encode("utf-8")
 
 
 def _load_admin_jwks(paths: list[str]) -> tuple[dict[str, str], ...]:
@@ -534,12 +613,160 @@ def _load_admin_jwks(paths: list[str]) -> tuple[dict[str, str], ...]:
     return tuple(result)
 
 
+def _sqlite_database_paths(database: str) -> tuple[Path, ...]:
+    if database in {":memory", ":memory:"}:
+        return ()
+    path = Path(database).expanduser()
+    return (path, Path(f"{path}-wal"), Path(f"{path}-shm"))
+
+
+def _existing_registry_teardown_targets(
+    *,
+    data_dir: Path,
+    database: str,
+    registry_url: str,
+    binding_store: LocalDeviceBindingStore,
+) -> dict[str, list[str]]:
+    authority_paths = _authority_paths(data_dir)
+    ca_files = [
+        str(path) for path in authority_paths.values() if path.exists()
+    ]
+    database_files = [
+        str(path) for path in _sqlite_database_paths(database) if path.exists()
+    ]
+    device_binding_files: list[str] = []
+    if binding_store.load(registry_url) is not None:
+        device_binding_files.append(str(binding_store.path(registry_url)))
+    return {
+        "ca_files": ca_files,
+        "database_files": database_files,
+        "device_binding_files": device_binding_files,
+    }
+
+
+def _browser_cleanup_url(registry_url: str) -> str:
+    return (
+        f"{registry_url}/workspace?"
+        f"teardown_registry={quote(registry_url, safe='')}"
+    )
+
+
+def _confirm_registry_teardown(
+    args: argparse.Namespace,
+    *,
+    registry_url: str,
+    database: str,
+    data_dir: Path,
+    targets: dict[str, list[str]],
+) -> None:
+    print(
+        _serialize_json(
+            {
+                "registry_url": registry_url,
+                "data_dir": str(data_dir),
+                "database": database,
+                "browser_cleanup_url": _browser_cleanup_url(registry_url),
+                "will_delete": targets,
+            }
+        ),
+        file=sys.stderr,
+    )
+    expected_phrase = f"delete registry {registry_url}"
+    confirmed_registry = cast(str | None, args.confirm_registry)
+    if confirmed_registry is None:
+        confirmed_registry = _prompt_text(
+            "Type the registry URL to confirm teardown"
+        )
+    try:
+        normalized_confirmed_registry = normalize_registry_url(
+            confirmed_registry
+        )
+    except IdentityError as error:
+        raise SystemExit(str(error)) from error
+    if normalized_confirmed_registry != registry_url:
+        raise SystemExit("registry teardown confirmation did not match")
+
+    confirmed_phrase = cast(str | None, args.confirm_delete)
+    if confirmed_phrase is None:
+        confirmed_phrase = _prompt_text(
+            f'Type "{expected_phrase}" to delete persistent registry state'
+        )
+    if confirmed_phrase != expected_phrase:
+        raise SystemExit("registry teardown delete confirmation did not match")
+
+
+def _cmd_registry_teardown(args: argparse.Namespace) -> int:
+    registry_url = _resolve_registry_url(args)
+    data_dir = _resolve_data_dir(args)
+    database = _resolve_database(args)
+    binding_store = _device_binding_store()
+    try:
+        targets = _existing_registry_teardown_targets(
+            data_dir=data_dir,
+            database=database,
+            registry_url=registry_url,
+            binding_store=binding_store,
+        )
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
+    _confirm_registry_teardown(
+        args,
+        registry_url=registry_url,
+        database=database,
+        data_dir=data_dir,
+        targets=targets,
+    )
+
+    removed: dict[str, list[str]] = {
+        "ca_files": [],
+        "database_files": [],
+        "device_binding_files": [],
+    }
+    for path in _authority_paths(data_dir).values():
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        removed["ca_files"].append(str(path))
+    ca_dir = data_dir / "ca"
+    try:
+        ca_dir.rmdir()
+    except OSError:
+        pass
+
+    for path in _sqlite_database_paths(database):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        removed["database_files"].append(str(path))
+
+    try:
+        binding_path = binding_store.path(registry_url)
+        if binding_store.delete(registry_url):
+            removed["device_binding_files"].append(str(binding_path))
+    except DeviceBindingError as error:
+        raise _device_binding_error(error) from error
+
+    print(
+        _serialize_json(
+            {
+                "registry_url": registry_url,
+                "browser_cleanup_url": _browser_cleanup_url(registry_url),
+                "removed": removed,
+            }
+        )
+    )
+    return 0
+
+
 def _bootstrap_service(
     data_dir: Path,
     registry_url: str,
     *,
     admin_jwk_files: list[str] | None = None,
     database: str = DEFAULT_LOCAL_DATABASE,
+    oprf_server_secret: str | None = None,
 ) -> RegistryService:
     authority = _load_authority(data_dir, registry_url).online_material()
     store = SqliteRegistryStore(database)
@@ -549,6 +776,10 @@ def _bootstrap_service(
         store=store,
         certificate_authority=authority,
         admin_public_jwks=admin_public_jwks,
+        oprf_server_secret=_load_oprf_server_secret(
+            data_dir,
+            oprf_server_secret,
+        ),
     )
 
 
@@ -599,6 +830,18 @@ def _cmd_identity_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_identity_public_jwk(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
+    output_path = cast(str | None, getattr(args, "out", None))
+    payload = _serialize_json(identity.public_jwk)
+    if output_path:
+        Path(output_path).write_text(payload + "\n", encoding="utf-8")
+        print(_serialize_json({"output": output_path}))
+    else:
+        print(payload)
+    return 0
+
+
 def _cmd_identity_export(args: argparse.Namespace) -> int:
     identity = _load_identity(args)
     export_password = _resolve_secret(
@@ -611,12 +854,90 @@ def _cmd_identity_export(args: argparse.Namespace) -> int:
             args,
             "out",
             label="Export output path",
-            default="pact-identity.pkcs8.pem",
+            default="pact-profile-recovery.json"
+            if args.recovery_json
+            else "pact-identity.pkcs8.pem",
         )
     )
-    output_path.write_bytes(identity.export_pkcs8(export_password))
+    exported = identity.export_pkcs8(export_password)
+    if args.recovery_json:
+        binding_store = _device_binding_store()
+        try:
+            binding = binding_store.bind_imported_identity(identity)
+        except DeviceBindingError as error:
+            raise _device_binding_error(error) from error
+        output_path.write_text(
+            _serialize_json(
+                {
+                    "registry_url": identity.registry_url,
+                    "key_id": identity.key_id,
+                    "public_jwk": identity.public_jwk,
+                    "encrypted_pkcs8_b64": base64.b64encode(exported).decode(
+                        "ascii"
+                    ),
+                    "continuity_secret": binding.continuity_secret,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    else:
+        output_path.write_bytes(exported)
     print(_serialize_json({"output": str(output_path)}))
     return 0
+
+
+def _import_source_identity(
+    args: argparse.Namespace,
+    source: Path,
+    import_password: str,
+) -> tuple[ClaimantIdentity, str | None]:
+    raw = source.read_bytes()
+    stripped = raw.lstrip()
+    if not stripped.startswith(b"{"):
+        return (
+            ClaimantIdentity.import_pkcs8(
+                _resolve_registry_url(args),
+                raw,
+                import_password,
+            ),
+            None,
+        )
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("identity recovery JSON is invalid") from error
+    if not isinstance(data, dict):
+        raise SystemExit("identity recovery JSON must be an object")
+    registry_value = cast(str | None, getattr(args, "registry", None))
+    registry_source = registry_value or os.getenv("PACT_REGISTRY_URL")
+    if registry_source is None:
+        imported_registry = data.get("registry_url")
+        if not isinstance(imported_registry, str):
+            raise SystemExit(
+                "identity recovery JSON is missing registry_url; pass --registry"
+            )
+        registry_source = imported_registry
+    registry_url = normalize_registry_url(registry_source)
+    encrypted = data.get("encrypted_pkcs8_b64")
+    if not isinstance(encrypted, str):
+        raise SystemExit(
+            "identity recovery JSON is missing encrypted_pkcs8_b64"
+        )
+    try:
+        pkcs8 = base64.b64decode(encrypted.encode("ascii"), validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise SystemExit("encrypted_pkcs8_b64 is not valid base64") from error
+    continuity_secret = data.get("continuity_secret")
+    if continuity_secret is not None and not isinstance(
+        continuity_secret,
+        str,
+    ):
+        raise SystemExit("continuity_secret must be a string")
+    return (
+        ClaimantIdentity.import_pkcs8(registry_url, pkcs8, import_password),
+        continuity_secret,
+    )
 
 
 def _cmd_identity_import(args: argparse.Namespace) -> int:
@@ -630,9 +951,9 @@ def _cmd_identity_import(args: argparse.Namespace) -> int:
         env_name="PACT_IMPORT_PASSWORD",
         label="Import password",
     )
-    identity = ClaimantIdentity.import_pkcs8(
-        _resolve_registry_url(args),
-        Path(source).read_bytes(),
+    identity, continuity_secret = _import_source_identity(
+        args,
+        Path(source),
         import_password,
     )
     binding_store = _device_binding_store()
@@ -647,7 +968,10 @@ def _cmd_identity_import(args: argparse.Namespace) -> int:
         )
     _save_identity(args, identity)
     try:
-        binding = binding_store.bind_imported_identity(identity)
+        binding = binding_store.bind_imported_identity(
+            identity,
+            continuity_secret=continuity_secret,
+        )
     except DeviceBindingError as error:
         raise _device_binding_error(error) from error
     print(
@@ -717,6 +1041,26 @@ def _cmd_sign(args: argparse.Namespace) -> int:
     )
     signed = sign_manifest(manifest, identity)
     output_path.write_bytes(signed.to_json())
+    carrier_output: str | None = None
+    if (
+        args.carrier in {CarrierMode.VISIBLE.value, CarrierMode.BOTH.value}
+        and manifest.canonicalization is CanonicalizationProfile.TEXT_V1
+    ):
+        carrier_path = _default_carrier_path(input_path)
+        carrier_mode = (
+            CarrierMode.BOTH
+            if args.carrier == CarrierMode.BOTH.value
+            else CarrierMode.VISIBLE
+        )
+        carrier_path.write_bytes(
+            embed_text_carrier(
+                content,
+                signed,
+                nonce=nonce,
+                mode=carrier_mode,
+            )
+        )
+        carrier_output = str(carrier_path)
     if disclose_nonce:
         nonce_output: str | None = None
     else:
@@ -726,6 +1070,7 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         _serialize_json(
             {
                 "manifest": str(output_path),
+                "carrier": carrier_output,
                 "nonce": nonce_output,
                 "nonce_disclosure": "public" if disclose_nonce else "private",
                 "public_content_verifiable": disclose_nonce,
@@ -1020,6 +1365,7 @@ def _cmd_recover(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
+    identity = _load_identity(args)
     target = Path(args.input)
     evidence_path = Path(cast(str | None, args.evidence) or args.input)
     digest = base64url_encode(
@@ -1052,6 +1398,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
         registry_url,
         "/api/v1/reports/avoidance",
         payload=payload,
+        headers=_profile_auth_headers(
+            registry_url,
+            identity,
+            method="POST",
+            path="/api/v1/reports/avoidance",
+            body=payload,
+        ),
     )
     print(
         _serialize_json(
@@ -1327,6 +1680,7 @@ def _serve(
     admin_jwk_files: list[str],
     database: str,
     enable_workspace: bool,
+    oprf_server_secret: str | None = None,
     cors_allowed_origins: tuple[str, ...] = (),
     logging_config: LoggingConfig | None = None,
 ) -> int:
@@ -1336,11 +1690,18 @@ def _serve(
 
     selected_logging = logging_config or _logging_config_from_args(None)
     configure_logging(selected_logging)
+    if database in {":memory", ":memory:"}:
+        print(
+            "warning: using ephemeral in-memory registry storage; profiles, "
+            "claims, reports, and disputes disappear when the server stops",
+            file=sys.stderr,
+        )
     service = _bootstrap_service(
         data_dir,
         registry_url,
         admin_jwk_files=admin_jwk_files,
         database=database,
+        oprf_server_secret=oprf_server_secret,
     )
     app = create_app(
         service,
@@ -1426,6 +1787,7 @@ def _cmd_registry_serve(args: argparse.Namespace) -> int:
         admin_jwk_files=args.admin_jwk_file,
         database=_resolve_database(args),
         enable_workspace=bool(args.enable_workspace),
+        oprf_server_secret=cast(str | None, args.oprf_server_secret),
         cors_allowed_origins=tuple(args.cors_allowed_origin),
         logging_config=_logging_config_from_args(args),
     )
@@ -1464,6 +1826,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
         admin_jwk_files=args.admin_jwk_file,
         database=_resolve_database(args),
         enable_workspace=True,
+        oprf_server_secret=cast(str | None, args.oprf_server_secret),
         logging_config=_logging_config_from_args(args),
     )
 
@@ -1491,6 +1854,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, handler in {
         "init": _cmd_identity_init,
         "show": _cmd_identity_show,
+        "public-jwk": _cmd_identity_public_jwk,
         "export": _cmd_identity_export,
         "import": _cmd_identity_import,
         "rotate": _cmd_identity_rotate,
@@ -1521,12 +1885,25 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if name == "export":
             subparser.add_argument(
+                "--recovery-json",
+                action="store_true",
+                help=(
+                    "Write browser-compatible recovery JSON with continuity "
+                    "material instead of raw encrypted PKCS#8 PEM."
+                ),
+            )
+            subparser.add_argument(
                 "--export-password",
                 help="Password used to encrypt the exported PKCS#8 key.",
             )
             subparser.add_argument(
                 "--out",
                 help="Path where the encrypted private key should be written.",
+            )
+        if name == "public-jwk":
+            subparser.add_argument(
+                "--out",
+                help="Path where the public JWK object should be written.",
             )
         if name == "import":
             subparser.add_argument(
@@ -1588,7 +1965,10 @@ def build_parser() -> argparse.ArgumentParser:
     sign.add_argument(
         "--carrier",
         default="visible",
-        help="Carrier hint recorded in the manifest.",
+        help=(
+            "Carrier hint recorded in the manifest. For visible or both text "
+            "carriers, pact sign also writes INPUT_STEM.pact.EXT."
+        ),
     )
     sign.add_argument(
         "--canonicalization",
@@ -1673,6 +2053,14 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--registry",
         help="Registry URL. Uses PACT_REGISTRY_URL or prompts.",
+    )
+    report.add_argument(
+        "--identity-file",
+        help="Encrypted local reporter identity store. Omit to use the OS keyring.",
+    )
+    report.add_argument(
+        "--identity-password",
+        help="Password for --identity-file.",
     )
     report.add_argument(
         "--where",
@@ -2008,12 +2396,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--admin-jwk-file",
         action="append",
         default=[],
-        help="Admin public JWK file. Repeat for multiple admins.",
+        help=(
+            "Public JWK for a registry administrator identity. Create with "
+            "`pact identity public-jwk --out admin.public.jwk.json`. Repeat "
+            "for multiple admins."
+        ),
     )
     serve.add_argument(
         "--database",
         default=DEFAULT_LOCAL_DATABASE,
         help="SQLite database path, or :memory / :memory: for ephemeral state.",
+    )
+    serve.add_argument(
+        "--oprf-server-secret",
+        help=(
+            "Dedicated OPRF server secret. Defaults to "
+            "PACT_OPRF_SERVER_SECRET or the registry data-dir secret file."
+        ),
     )
     serve.add_argument(
         "--enable-workspace",
@@ -2034,6 +2433,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_server_logging_args(serve)
     serve.set_defaults(handler=_cmd_registry_serve)
+    teardown = registry_subparsers.add_parser(
+        "teardown",
+        formatter_class=HelpFormatter,
+        help="Delete persistent local state for one registry.",
+        description=(
+            "Delete local CA/OPRF material, SQLite registry records, and the "
+            "local device binding for one registry. The command prints the "
+            "planned deletions and requires two confirmations."
+        ),
+    )
+    teardown.add_argument(
+        "--registry",
+        help="Registry URL whose local state should be deleted.",
+    )
+    teardown.add_argument(
+        "--data-dir",
+        help="Directory containing registry CA material.",
+    )
+    teardown.add_argument(
+        "--database",
+        default=DEFAULT_LOCAL_DATABASE,
+        help="SQLite database path used by the registry server.",
+    )
+    teardown.add_argument(
+        "--confirm-registry",
+        help=(
+            "First confirmation: must equal the normalized registry URL. "
+            "Omit to be prompted."
+        ),
+    )
+    teardown.add_argument(
+        "--confirm-delete",
+        help=(
+            "Second confirmation: must be `delete registry <registry-url>`. "
+            "Omit to be prompted."
+        ),
+    )
+    teardown.set_defaults(handler=_cmd_registry_teardown)
     register_profile = registry_subparsers.add_parser(
         "register-profile",
         formatter_class=HelpFormatter,
@@ -2269,12 +2706,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--admin-jwk-file",
         action="append",
         default=[],
-        help="Admin public JWK file. Repeat for multiple admins.",
+        help=(
+            "Public JWK for a registry administrator identity. Create with "
+            "`pact identity public-jwk --out admin.public.jwk.json`. Repeat "
+            "for multiple admins."
+        ),
     )
     web.add_argument(
         "--database",
         default=DEFAULT_LOCAL_DATABASE,
         help="SQLite database path, or :memory / :memory: for ephemeral state.",
+    )
+    web.add_argument(
+        "--oprf-server-secret",
+        help=(
+            "Dedicated OPRF server secret. Defaults to "
+            "PACT_OPRF_SERVER_SECRET or the registry data-dir secret file."
+        ),
     )
     _add_server_logging_args(web)
     web.set_defaults(handler=_cmd_web)

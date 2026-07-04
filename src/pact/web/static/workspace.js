@@ -8,6 +8,67 @@ const selectedIdentityStorageKey = "pact.selectedIdentity";
 const passcodeStorageKey = "pact.passcode";
 const deviceBindingSecretPrefix = "pact.deviceBindingSecret.";
 const webAuthnDeviceCredentialPrefix = "pact.webAuthnDeviceCredential.";
+const webAuthnDeviceCredentialRegistryPrefix = "pact.webAuthnDeviceCredentialRegistry.";
+
+function normalizeRegistryUrl(value) {
+  return String(value || "").trim().replace(/\/+$/g, "");
+}
+
+function profileRegistryUrl(record) {
+  return normalizeRegistryUrl(record && record.registry_url);
+}
+
+function clearBrowserProfilesForRegistry(registry) {
+  const normalized = normalizeRegistryUrl(registry);
+  if (!normalized) {
+    return 0;
+  }
+  let removed = 0;
+  const identities = savedIdentities();
+  const kept = identities.filter((record) => profileRegistryUrl(record) !== normalized);
+  removed += identities.length - kept.length;
+  saveIdentities(kept);
+
+  const legacy = parseStoredJson(identityStorageKey, null);
+  if (profileRegistryUrl(legacy) === normalized) {
+    localStorage.removeItem(identityStorageKey);
+    removed += 1;
+  }
+  const selectedKey = selectedIdentityKey();
+  if (selectedKey && !kept.some((record) => record.key_id === selectedKey)) {
+    localStorage.removeItem(selectedIdentityStorageKey);
+  }
+  localStorage.removeItem(passcodeStorageKey);
+  localStorage.removeItem(`${deviceBindingSecretPrefix}${normalized}`);
+
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(webAuthnDeviceCredentialRegistryPrefix)) {
+      continue;
+    }
+    if (normalizeRegistryUrl(localStorage.getItem(key)) !== normalized) {
+      continue;
+    }
+    const rootFingerprint = key.slice(webAuthnDeviceCredentialRegistryPrefix.length);
+    localStorage.removeItem(key);
+    localStorage.removeItem(`${webAuthnDeviceCredentialPrefix}${rootFingerprint}`);
+  }
+  return removed;
+}
+
+function applyTeardownFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const registry = params.get("teardown_registry");
+  if (!registry) {
+    return null;
+  }
+  const removed = clearBrowserProfilesForRegistry(registry);
+  params.delete("teardown_registry");
+  const query = params.toString();
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  window.history.replaceState({}, "", nextUrl);
+  return { registry, removed };
+}
+
 function parseStoredJson(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key) || "null") || fallback;
@@ -73,6 +134,7 @@ function forgetSavedPasscode() {
   localStorage.removeItem(passcodeStorageKey);
 }
 
+const browserTeardownResult = applyTeardownFromUrl();
 let identity = savedIdentity();
 let identityPassword = null;
 let creatingIdentity = !identity;
@@ -1251,6 +1313,7 @@ async function webAuthnPrfSecret(registryRootFingerprint) {
     return null;
   }
   const credentialKey = `${webAuthnDeviceCredentialPrefix}${registryRootFingerprint}`;
+  const registryCredentialKey = `${webAuthnDeviceCredentialRegistryPrefix}${registryRootFingerprint}`;
   const salt = await sha256Bytes(
     `PACT WebAuthn PRF device binding v1:${registryRootFingerprint}`
   );
@@ -1274,7 +1337,11 @@ async function webAuthnPrfSecret(registryRootFingerprint) {
       });
       const first = assertion?.getClientExtensionResults?.()
         ?.prf?.results?.first;
-      return first ? new Uint8Array(first) : null;
+      if (!first) {
+        return null;
+      }
+      localStorage.setItem(registryCredentialKey, registryUrl());
+      return new Uint8Array(first);
     }
     const userId = crypto.getRandomValues(new Uint8Array(32));
     const credential = await navigator.credentials.create({
@@ -1304,6 +1371,7 @@ async function webAuthnPrfSecret(registryRootFingerprint) {
       return null;
     }
     localStorage.setItem(credentialKey, base64Url(new Uint8Array(credential.rawId)));
+    localStorage.setItem(registryCredentialKey, registryUrl());
     return new Uint8Array(first);
   } catch {
     return null;
@@ -1366,6 +1434,16 @@ async function browserFingerprint() {
   const rootFingerprint = registry.root_fingerprint;
   if (!rootFingerprint) {
     throw new Error("Registry did not return a root fingerprint.");
+  }
+  const currentIdentity = requireIdentity();
+  if (currentIdentity.continuity_secret) {
+    const localInput = await hmacSha256Bytes(
+      base64UrlToBytes(currentIdentity.continuity_secret),
+      new TextEncoder().encode(
+        `PACT device binding input v1\0${rootFingerprint}\0profile:${currentIdentity.key_id}`
+      )
+    );
+    return await deviceBindingOprfToken(localInput);
   }
   const localSecret = await localDeviceBindingSecret(rootFingerprint);
   const localInput = await hmacSha256Bytes(
@@ -2203,7 +2281,11 @@ updateMutationOptions();
 setPage("identity");
 forgetSavedPasscode();
 message(
-  identity
+  browserTeardownResult
+    ? browserTeardownResult.removed
+      ? "Browser profiles for this registry were removed."
+      : "No browser profiles for this registry were stored here."
+    : identity
     ? "Saved profile found. Enter the selected profile's passcode to unlock private profile information."
     : "Create your profile to begin."
 );

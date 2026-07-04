@@ -9,7 +9,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile, JsonValue, canonical_json
-from pact.crypto import sign_es256
+from pact.crypto import base64url_encode, sign_es256
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.probes import (
     ProbeSet,
@@ -96,6 +96,7 @@ def create_identity(registry_url: str, password: str) -> str:
             "key_id": identity.key_id,
             "public_jwk": identity.public_jwk,
             "encrypted_pkcs8_b64": _b64(identity.export_pkcs8(password)),
+            "continuity_secret": base64url_encode(os.urandom(32)),
         }
     )
 
