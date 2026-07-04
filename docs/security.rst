@@ -58,7 +58,9 @@ but the registry will not accept a profile without it.
 The CLI keeps local continuity state so one local device is normally bound to
 one claimant identity per registry. It derives local fingerprint material from
 harder-to-change local signals, but raw hardware and host values are not sent to
-the registry.
+the registry. ``pact registry teardown`` removes this local continuity record
+for a specific registry as part of a deliberate local registry reset, after
+multiple confirmations.
 
 The browser keeps the same privacy boundary. It uses WebAuthn PRF output as the
 preferred local secret when the browser and authenticator support it. Otherwise
@@ -164,10 +166,14 @@ cryptographic review before they are treated as stable.
 CA handling
 -----------
 
-``pact registry init`` writes an encrypted offline root private key and the
-online intermediate material required by the serving process. ``pact registry
-serve`` loads only the public root certificate plus the intermediate key and
-certificate; it does not require the offline root private key at runtime.
+``pact registry init`` writes an encrypted offline root private key, online
+intermediate material, and a separate OPRF server secret. ``pact registry
+serve`` loads only the public root certificate, the intermediate key and
+certificate, and the dedicated OPRF secret. It does not require the offline
+root private key at runtime, and the OPRF secret is not derived from CA key
+material in the normal CLI serving path.
+``pact registry teardown`` removes local CA/OPRF material and the selected
+SQLite registry database for intentional local reset or decommissioning.
 
 Current transport limits
 ------------------------

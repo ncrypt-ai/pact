@@ -36,6 +36,97 @@ Use ``--database .pact-registry/registry.sqlite3`` for a local persistent
 SQLite database. ``:memory`` is only for development and tests; a restart loses
 all claims, profiles, challenges, reports, and disputes.
 
+``pact registry init`` also creates ``ca/oprf_server_secret`` under the data
+directory. ``pact registry serve`` uses that file by default, or
+``PACT_OPRF_SERVER_SECRET``/``--oprf-server-secret`` when explicitly supplied.
+Keep this secret separate from the registry CA keys and rotate it deliberately.
+
+To intentionally remove local persistent state for a registry, stop the server
+and run ``pact registry teardown`` with the same registry URL, data directory,
+and SQLite database path:
+
+.. code-block:: bash
+
+   pact registry teardown \
+     --registry http://127.0.0.1:8000 \
+     --data-dir .pact-registry \
+     --database .pact-registry/registry.sqlite3
+
+The command deletes local CA/OPRF files, SQLite database files, and this
+machine's local device-binding record for that registry. It prints the planned
+deletions and requires two confirmations. For noninteractive local automation,
+pass ``--confirm-registry`` with the normalized registry URL and
+``--confirm-delete`` with ``delete registry <registry-url>``.
+
+Registry administrators
+-----------------------
+
+A PACT registry administrator is a PACT signing identity whose public JWK is
+loaded by the server at startup. It is not created by ``pact registry init``,
+and it is not the same thing as a Cognito user. ``pact registry init`` creates
+registry certificate-authority material. Admin identities are created and kept
+separately, then their public JWK files are passed to ``pact registry serve``
+or the local ``pact web`` command.
+
+Create one admin identity and write the public JWK file:
+
+.. code-block:: bash
+
+   pact identity init \
+     --registry https://registry.example \
+     --identity-file ./secrets/admin.identity.pem \
+     --identity-password 'store-this-in-your-password-manager'
+
+   pact identity public-jwk \
+     --registry https://registry.example \
+     --identity-file ./secrets/admin.identity.pem \
+     --identity-password 'store-this-in-your-password-manager' \
+     --out ./secrets/admin.public.jwk.json
+
+Start the local monolith with that admin:
+
+.. code-block:: bash
+
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3 \
+     --admin-jwk-file ./secrets/admin.public.jwk.json
+
+Repeat ``--admin-jwk-file`` for each administrator. The server stores only the
+public JWK. The private admin identity stays with the operator and is used by
+commands such as:
+
+.. code-block:: bash
+
+   pact registry authorize-hosted-account CLAIMANT_KEY_ID \
+     --registry https://registry.example \
+     --identity-file ./secrets/admin.identity.pem \
+     --identity-password 'store-this-in-your-password-manager'
+
+For AWS, keep the same boundary: Cognito/API Gateway can authenticate HTTP
+callers at the edge, but PACT admin actions are authorized by the signed
+mutation body and the admin public JWKs configured in the registry service.
+For ``deploy/aws/registry-compute.sam.yaml``, pass ``AdminPublicJwks`` as a
+JSON array:
+
+.. code-block:: bash
+
+   ADMIN_PUBLIC_JWKS="$(
+     python -c 'import json,sys; print(json.dumps([json.load(open(path)) for path in sys.argv[1:]]))' \
+       ./secrets/admin.public.jwk.json
+   )"
+
+   sam deploy \
+     --template-file .aws-sam/build/template.yaml \
+     --parameter-overrides \
+       AdminPublicJwks="$ADMIN_PUBLIC_JWKS"
+
+Multiple admins are just multiple objects in that array. The values are public
+keys, not private key material, but they still control who can perform admin
+registry actions.
+
 Browser workspace
 -----------------
 
@@ -123,8 +214,9 @@ The running web app exposes the same route map at
 URLs and mutation permissions supported by a deployment.
 
 Use ``deploy/aws/registry-compute.sam.yaml`` for current AWS deployments. The
-older ``deploy/aws/registry.sam.yaml`` file is a legacy partial full-stack
-example and does not expose the complete current API surface.
+repository does not ship a full-stack API Gateway/Cognito template; those
+resources stay outside the PACT template so FastAPI remains the source of truth
+for the route surface.
 ``/api/v1/server/info`` reports the package version and deployed commit hash.
 Set ``PACT_COMMIT_SHA`` during deployment so serverless or container builds do
 not depend on a local ``.git`` directory.
@@ -157,6 +249,8 @@ the ``pact[aws]`` optional dependencies and these environment variables:
    PACT_ROOT_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_PRIVATE_KEY_PEM=...
+   PACT_OPRF_SERVER_SECRET=...
+   PACT_ADMIN_PUBLIC_JWKS='[{"kty":"EC","crv":"P-256","x":"...","y":"..."}]'
    PACT_ALLOWED_HOSTS=registry.example
    PACT_CORS_ORIGINS=https://workspace.example
    PACT_COMMIT_SHA=...
@@ -173,6 +267,9 @@ global IP rate limit, a lower mutation-route IP rate limit, and AWS managed
 common and known-bad-input rule groups. This is required for AWS Lambda
 deployments because the in-process limiter is only a defense-in-depth fallback
 and does not coordinate across concurrent Lambda execution environments.
+The same limitation applies to multi-worker ``uvicorn`` or container
+deployments: each worker has its own in-memory limiter, so production rate
+limits must live at the gateway, load balancer, WAF, or another shared layer.
 
 Build and deploy from the repository root:
 

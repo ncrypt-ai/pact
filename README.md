@@ -136,6 +136,38 @@ pact registry serve \
 
 Open `http://127.0.0.1:8000/pact`.
 
+To reset that local registry and remove this machine's registry-scoped device
+binding, run:
+
+```bash
+pact registry teardown \
+  --registry http://127.0.0.1:8000 \
+  --data-dir ./.pact-dev \
+  --database ./.pact-dev/registry.sqlite3
+```
+
+The command prints the files it will delete and requires two confirmations.
+
+Registry admins are normal PACT identities whose public JWK is loaded at server
+startup. Create an admin identity, export its public JWK, and pass it when
+serving:
+
+```bash
+pact identity init \
+  --registry http://127.0.0.1:8000 \
+  --identity-file ./.pact-dev/admin.identity.pem \
+  --identity-password 'change-this'
+
+pact identity public-jwk \
+  --registry http://127.0.0.1:8000 \
+  --identity-file ./.pact-dev/admin.identity.pem \
+  --identity-password 'change-this' \
+  --out ./.pact-dev/admin.public.jwk.json
+
+pact registry serve ... \
+  --admin-jwk-file ./.pact-dev/admin.public.jwk.json
+```
+
 The browser workspace keeps signing local. Publishing sends signed manifest JSON
 to the registry, not the raw file. Browser/device fingerprinting is used for
 baseline device continuity, but the registry receives only a private,
@@ -160,9 +192,7 @@ sam deploy --guided --template-file .aws-sam/build/template.yaml
 
 Use `deploy/aws/gateway-rate-limit.yaml` to attach AWS WAF rate limits to your
 existing API Gateway stage ARN, ALB ARN, or both. See `docs/server.rst` for the
-parameter list and deployment checklist. `deploy/aws/registry.sam.yaml` is a
-legacy partial full-stack example and should not be used as the current route
-map.
+parameter list and deployment checklist.
 
 ## HTTP examples
 
@@ -197,6 +227,8 @@ browser workspace unless you are integrating directly with the API.
 ## Documentation
 
 - Quickstart: `docs/quickstart.rst`
+- CLI commands: `docs/cli.rst`
+- Identity commands: `docs/identity.rst`
 - Carrier formats and C2PA notes: `docs/carriers.rst`
 - Manifest format: `docs/manifest.rst`
 - Security model: `docs/security.rst`

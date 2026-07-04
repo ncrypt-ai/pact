@@ -294,6 +294,44 @@ pages:
      --database ./registry-data/registry.sqlite3 \
      --enable-workspace
 
+For a development reset or intentional local decommission, stop the server and
+run ``pact registry teardown`` with the same registry URL, data directory, and
+SQLite database path:
+
+.. code-block:: bash
+
+   pact registry teardown \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --database ./registry-data/registry.sqlite3
+
+The command deletes local CA/OPRF material, SQLite registry records, and this
+machine's device-binding record for that registry after two confirmations.
+
+Admin users are not created by ``pact registry init``. Create an admin PACT
+identity, export its public JWK, and restart the server with that public JWK:
+
+.. code-block:: bash
+
+   pact identity init \
+     --registry https://registry.example \
+     --identity-file ./secrets/admin.identity.pem \
+     --identity-password 'store-this-in-your-password-manager'
+
+   pact identity public-jwk \
+     --registry https://registry.example \
+     --identity-file ./secrets/admin.identity.pem \
+     --identity-password 'store-this-in-your-password-manager' \
+     --out ./secrets/admin.public.jwk.json
+
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3 \
+     --admin-jwk-file ./secrets/admin.public.jwk.json \
+     --enable-workspace
+
 Once the server is running, the CLI can publish identities and claims without
 custom request scripts:
 
@@ -426,7 +464,7 @@ registry has the referenced claim.
 
 The CLI exposes:
 
-- ``pact identity init|show|export|import|rotate``
+- ``pact identity init|show|public-jwk|export|import|rotate``
 - ``pact sign``
 - ``pact privacy audit``
 - ``pact watermark image``
@@ -436,6 +474,7 @@ The CLI exposes:
 - ``pact probe create|analyze|export``
 - ``pact registry init``
 - ``pact registry serve``
+- ``pact registry teardown``
 - ``pact registry register-profile``
 - ``pact registry register-claim``
 - ``pact web``

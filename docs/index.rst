@@ -16,6 +16,8 @@ Start Here
 ----------
 
 - :doc:`Quickstart <quickstart>`
+- :doc:`CLI commands <cli>`
+- :doc:`Identity commands <identity>`
 - :doc:`Carrier formats <carriers>`
 - :doc:`Manifest format <manifest>`
 - :doc:`Security model <security>`
@@ -37,6 +39,8 @@ Build Documentation Locally
    :hidden:
 
    quickstart
+   cli
+   identity
    carriers
    manifest
    security
