@@ -14,6 +14,7 @@ from pact.manifest import (
     C2PAIngredient,
     ClaimMeaning,
     ContentBinding,
+    ContentFingerprint,
     Manifest,
     ManifestError,
     ManifestSignature,
@@ -73,6 +74,15 @@ def make_manifest(identity: ClaimantIdentity | None = None) -> Manifest:
                 registry_url="https://registry.example",
                 title="source.txt",
                 format="text/plain",
+            ),
+        ),
+        fingerprints=(
+            ContentFingerprint(
+                "pact.exact.sha256.v1",
+                "sha256",
+                base64url_encode(bytes([3]) * 32),
+                media_type="text/plain",
+                details={"canonicalization": "pact.text.v1"},
             ),
         ),
         source_url="https://creator.example/work",
@@ -169,6 +179,15 @@ def test_manifest_create_and_round_trip() -> None:
             }
         ]
     }
+    assert manifest.to_dict()["fingerprints"] == [
+        {
+            "fingerprint_id": "pact.exact.sha256.v1",
+            "algorithm": "sha256",
+            "value": base64url_encode(bytes([3]) * 32),
+            "media_type": "text/plain",
+            "details": {"canonicalization": "pact.text.v1"},
+        }
+    ]
     assert manifest.canonical_bytes() == parsed.canonical_bytes()
 
 
@@ -262,6 +281,12 @@ def test_manifest_parser_rejects_bad_policy_and_shape() -> None:
         (("actions", "actions"), "c2pa.created", "actions array"),
         (("ingredients",), [], "C2PA ingredients object"),
         (("ingredients", "ingredients"), "claim", "ingredients array"),
+        (("fingerprints",), "fingerprint", "fingerprints must be an array"),
+        (
+            ("fingerprints",),
+            [{"fingerprint_id": "id", "algorithm": "sha256", "value": ""}],
+            "fingerprint value",
+        ),
         (("claim_meanings",), ["unknown"], "unsupported claim meaning"),
         (("source_url",), 1, "source_url must be a string"),
         (("licensing_url",), 1, "licensing_url must be a string"),

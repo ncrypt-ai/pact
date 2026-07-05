@@ -28,6 +28,7 @@ from pact.detection.probes import (
     responses_from_jsonl,
 )
 from pact.detection.statistics import analyze_probe_responses
+from pact.fingerprints import create_content_fingerprints
 from pact.identity import (
     ClaimantIdentity,
     DeviceBindingError,
@@ -317,6 +318,41 @@ def _registry_root_fingerprint(args: argparse.Namespace) -> str:
             f"{registry_url}/pact/api/v1/registry did not include root_fingerprint"
         )
     return value
+
+
+def _warn_prior_claim_matches(
+    registry_url: str,
+    signed: SignedManifest,
+) -> None:
+    try:
+        response = _request_json(
+            registry_url,
+            "/pact/api/v1/claims/matches",
+            payload={"signed_manifest_json": signed.to_json().decode("utf-8")},
+        )
+    except SystemExit as error:
+        print(
+            f"warning: could not check for prior similar claims: {error}",
+            file=sys.stderr,
+        )
+        return
+    raw_matches = response.get("matches")
+    if not isinstance(raw_matches, list) or not raw_matches:
+        return
+    print(
+        f"warning: registry found {len(raw_matches)} prior similar claim(s)",
+        file=sys.stderr,
+    )
+    for item in raw_matches[:5]:
+        if not isinstance(item, dict):
+            continue
+        claim_id = item.get("claim_id", "unknown")
+        score = item.get("score", "unknown")
+        source_url = item.get("source_url") or "no source URL"
+        print(
+            f"  - claim {claim_id} score {score}: {source_url}",
+            file=sys.stderr,
+        )
 
 
 def _profile_public_jwk(
@@ -1046,18 +1082,26 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         cast(str | None, args.nonce_out) or _default_nonce_path(input_path)
     )
     disclose_nonce = not bool(args.private_nonce)
+    canonicalization = CanonicalizationProfile(args.canonicalization)
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=_registry_root_fingerprint(args),
         content=content,
         mime_type=mime_type,
-        canonicalization=CanonicalizationProfile(args.canonicalization),
+        canonicalization=canonicalization,
         policy=_default_policy(args.policy),
         carriers=(args.carrier,) if args.carrier else (),
+        fingerprints=create_content_fingerprints(
+            content,
+            mime_type,
+            canonicalization,
+        ),
         nonce=nonce,
         disclose_nonce=disclose_nonce,
     )
     signed = sign_manifest(manifest, identity)
+    if not bool(args.no_prior_match_check):
+        _warn_prior_claim_matches(identity.registry_url, signed)
     output_path.write_bytes(signed.to_json())
     carrier_output: str | None = None
     if (
@@ -1996,6 +2040,14 @@ def build_parser() -> argparse.ArgumentParser:
     sign.add_argument(
         "--mime-type",
         help="Input MIME type. Omit to infer from the file extension.",
+    )
+    sign.add_argument(
+        "--no-prior-match-check",
+        action="store_true",
+        help=(
+            "Skip the advisory registry lookup for existing exact or similar "
+            "claims before writing the signed manifest."
+        ),
     )
     sign.add_argument(
         "--identity-file",

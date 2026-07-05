@@ -42,6 +42,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pact.canonical import JsonValue, canonical_json
 from pact.crypto import jwk_thumbprint, public_key_from_jwk, verify_es256
 from pact.inspection import inspect_content
+from pact.manifest import SignedManifest
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
 from pact.oprf import OprfError
@@ -1009,6 +1010,13 @@ class AvoidanceReportRequestModel(BaseModel):
     reporter_type: str = Field(default="anonymous")
 
 
+class ClaimMatchRequestModel(BaseModel):
+    signed_manifest_json: str = Field(
+        description="Signed manifest JSON to compare against registered claims."
+    )
+    limit: int = Field(default=10, ge=1, le=25)
+
+
 def create_app(
     service: RegistryService | None = None,
     *,
@@ -1591,6 +1599,29 @@ def create_app(
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(claim)
+
+    @app.post(
+        "/pact/api/v1/claims/matches",
+        tags=["Claims"],
+        summary="Find prior claims with matching public fingerprints",
+        description="Return advisory exact or perceptual matches for an unpublished signed manifest.",
+    )
+    async def find_claim_matches(
+        request: Request,
+        body: ClaimMatchRequestModel,
+    ) -> dict[str, object]:
+        del request
+        try:
+            signed_manifest = SignedManifest.from_json(
+                body.signed_manifest_json.encode("utf-8")
+            )
+            matches = service.find_claim_matches(
+                signed_manifest,
+                limit=body.limit,
+            )
+        except Exception as error:
+            _raise_http_error(error)
+        return {"matches": [match.to_dict() for match in matches]}
 
     @app.get(
         "/pact/api/v1/claims/{claim_id}",

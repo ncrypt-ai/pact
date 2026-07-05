@@ -28,6 +28,7 @@ from pact import (
 from pact.canonical import JsonValue, canonical_json
 from pact.carriers.c2pa import embed_c2pa_manifest_in_pdf
 from pact.crypto import base64url_encode, sign_es256
+from pact.fingerprints import create_content_fingerprints
 from pact.metadata import PACKAGE_VERSION
 from pact.oprf import device_binding_input, format_device_binding_token
 from pact.registry import MutationChallenge
@@ -87,6 +88,34 @@ def make_private_signed_manifest(identity: ClaimantIdentity):
         ),
         nonce=b"\x01" * 32,
         disclose_nonce=False,
+    )
+    return sign_manifest(manifest, identity)
+
+
+def make_fingerprinted_manifest(
+    identity: ClaimantIdentity,
+    content: bytes,
+):
+    manifest = Manifest.create(
+        identity=identity,
+        registry_root_fingerprint="A" * 43,
+        content=content,
+        mime_type="text/plain",
+        canonicalization=CanonicalizationProfile.TEXT_V1,
+        policy=Policy(
+            (
+                PolicyEntry(
+                    Permission.GENERATIVE_TRAINING,
+                    PermissionValue.NOT_ALLOWED,
+                ),
+            )
+        ),
+        fingerprints=create_content_fingerprints(
+            content,
+            "text/plain",
+            CanonicalizationProfile.TEXT_V1,
+        ),
+        nonce=b"\x02" * 32,
     )
     return sign_manifest(manifest, identity)
 
@@ -890,6 +919,30 @@ def test_web_lists_profile_claims_and_disputes(tmp_path: Path) -> None:
         ]
         == 1
     )
+
+
+def test_web_claim_match_endpoint_returns_prior_fingerprint_match(
+    tmp_path: Path,
+) -> None:
+    client, identity = make_client(tmp_path)
+    register_profile(client, identity)
+    original = make_fingerprinted_manifest(identity, b"hello similar world")
+    claim = register_claim(client, identity, original)
+    candidate = make_fingerprinted_manifest(identity, b"hello similar world")
+
+    response = client.post(
+        "/pact/api/v1/claims/matches",
+        json={"signed_manifest_json": candidate.to_json().decode("utf-8")},
+    )
+
+    assert response.status_code == 200
+    matches = response.json()["matches"]
+    assert matches[0]["claim_id"] == claim["claim_id"]
+    assert matches[0]["score"] == 1.0
+    assert matches[0]["matches"][0]["fingerprint_id"] in {
+        "pact.exact.sha256.v1",
+        "pact.text.simhash.v1",
+    }
 
 
 def test_web_workspace_is_optional_and_serves_pyodide_assets(

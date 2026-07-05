@@ -17,6 +17,7 @@ from pact.detection.probes import (
     responses_from_jsonl,
 )
 from pact.detection.statistics import analyze_probe_responses
+from pact.fingerprints import create_content_fingerprints
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
     C2PAAction,
@@ -338,12 +339,13 @@ def sign_content(
     identity = _identity(registry_url, encrypted_pkcs8_b64, password)
     content = _unb64(content_b64)
     nonce = os.urandom(32)
+    canonicalization_profile = CanonicalizationProfile(canonicalization)
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=registry_root_fingerprint,
         content=content,
         mime_type=mime_type,
-        canonicalization=CanonicalizationProfile(canonicalization),
+        canonicalization=canonicalization_profile,
         policy=_policy_from_json(policy_json, policy),
         carriers=(carrier,),
         actions=tuple(
@@ -353,6 +355,11 @@ def sign_content(
         ingredients=tuple(
             C2PAIngredient.from_dict(cast(dict[str, object], item))
             for item in json.loads(ingredients_json)
+        ),
+        fingerprints=create_content_fingerprints(
+            content,
+            mime_type,
+            canonicalization_profile,
         ),
         source_url=source_url or None,
         nonce=nonce,

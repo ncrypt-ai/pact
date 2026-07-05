@@ -28,6 +28,7 @@ from pact.crypto import (
     sign_es256,
     verify_es256,
 )
+from pact.fingerprints import compare_content_fingerprints
 from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
 from pact.oprf import (
@@ -924,6 +925,27 @@ class RegisteredClaim:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaimFingerprintMatch:
+    """Advisory similarity result between a submitted proof and a claim."""
+
+    claim: RegisteredClaim
+    score: float
+    fingerprint_matches: tuple[dict[str, object], ...]
+
+    def to_dict(self) -> dict[str, object]:
+        manifest = self.claim.signed_manifest.manifest
+        return {
+            "claim_id": str(self.claim.claim_id),
+            "claimant_key_id": self.claim.claimant_key_id,
+            "registered_at": self.claim.registered_at.isoformat(),
+            "mime_type": manifest.mime_type,
+            "source_url": manifest.source_url,
+            "score": self.score,
+            "matches": list(self.fingerprint_matches),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DisputeRecord:
     """A public dispute thread attached to a claim."""
 
@@ -1796,6 +1818,48 @@ class RegistryService:
             for claim in claims
             if claim.claimant_key_id == claimant_key_id
         )
+
+    def find_claim_matches(
+        self,
+        signed_manifest: SignedManifest,
+        *,
+        limit: int = 10,
+    ) -> tuple[ClaimFingerprintMatch, ...]:
+        """Find existing claims with exact or similar public fingerprints."""
+
+        if limit < 1:
+            return ()
+        manifest = signed_manifest.manifest
+        if manifest.registry_url != self.registry_url:
+            raise RegistryError("manifest belongs to a different registry")
+        if not manifest.fingerprints:
+            return ()
+        matches: list[ClaimFingerprintMatch] = []
+        for claim in self._load_claims().values():
+            claim_manifest = claim.signed_manifest.manifest
+            if claim_manifest.claim_id == manifest.claim_id:
+                continue
+            fingerprint_matches = compare_content_fingerprints(
+                claim_manifest.fingerprints,
+                manifest.fingerprints,
+            )
+            if not fingerprint_matches:
+                continue
+            score = max(item.score for item in fingerprint_matches)
+            matches.append(
+                ClaimFingerprintMatch(
+                    claim=claim,
+                    score=round(score, 4),
+                    fingerprint_matches=tuple(
+                        item.to_dict() for item in fingerprint_matches[:5]
+                    ),
+                )
+            )
+        matches.sort(
+            key=lambda item: (item.score, item.claim.registered_at),
+            reverse=True,
+        )
+        return tuple(matches[:limit])
 
     def find_claim_by_watermark_locator(
         self,

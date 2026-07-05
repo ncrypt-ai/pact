@@ -1680,6 +1680,33 @@ async function publishSignedManifest(manifestJson) {
   });
 }
 
+async function findPriorClaimMatches(manifestJson) {
+  const response = await registryJson("/pact/api/v1/claims/matches", {
+    method: "POST",
+    body: JSON.stringify({ signed_manifest_json: manifestJson, limit: 10 })
+  });
+  return response.matches || [];
+}
+
+function priorMatchSummary(matches) {
+  if (!matches.length) {
+    return "No prior exact or similar claims found.";
+  }
+  return matches
+    .slice(0, 3)
+    .map((match) => `${match.claim_id} (${Math.round(match.score * 100)}%)`)
+    .join(", ");
+}
+
+function confirmPriorMatches(matches) {
+  if (!matches.length) {
+    return true;
+  }
+  return window.confirm(
+    `PACT found ${matches.length} prior exact or similar claim(s): ${priorMatchSummary(matches)}.\n\nContinue publishing this proof?`
+  );
+}
+
 async function continueIdentity() {
   identity = creatingIdentity ? null : identity || savedIdentity();
   const hadSavedProfile = Boolean(identity);
@@ -2007,10 +2034,14 @@ document.querySelector("#sign-content").onclick = () =>
       downloadedFiles.push(protectedFilename);
     }
     let claim = null;
+    let priorMatches = [];
     if (document.querySelector("#publish-after-signing").checked) {
-      claim = await publishSignedManifest(signedManifest);
-      document.querySelector("#revoke-claim-id").value = claim.claim_id;
-      document.querySelector("#dispute-claim-id").value = claim.claim_id;
+      priorMatches = await findPriorClaimMatches(signedManifest);
+      if (confirmPriorMatches(priorMatches)) {
+        claim = await publishSignedManifest(signedManifest);
+        document.querySelector("#revoke-claim-id").value = claim.claim_id;
+        document.querySelector("#dispute-claim-id").value = claim.claim_id;
+      }
     }
     let embeddedFilename = null;
     if (document.querySelector("#download-embedded-proof").checked) {
@@ -2061,6 +2092,7 @@ document.querySelector("#sign-content").onclick = () =>
       ["Downloaded", downloadedFiles.join(", ")],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"],
       ["Watermarked image", imageWatermarkDownloaded || "Not downloaded"],
+      ["Prior matches", priorMatchSummary(priorMatches)],
       ["Published", claim ? "Yes" : "No"],
       ["Registry claim", claim ? claim.claim_id : "Not published"]
     ]);
@@ -2130,6 +2162,17 @@ document.querySelector("#register-mutation").onclick = () =>
     const stem = selectedFileStem(fileInput);
     download(`${stem}.proof.json`, signedManifest);
     const downloadedFiles = [`${stem}.proof.json`];
+    const priorMatches = await findPriorClaimMatches(signedManifest);
+    if (!confirmPriorMatches(priorMatches)) {
+      renderObject("#mutation-result", "Registered edit", [
+        ["New claim ID", result.claim_id],
+        ["Previous claim ID", previousManifest.claim_id],
+        ["Prior matches", priorMatchSummary(priorMatches)],
+        ["Published", "No"]
+      ]);
+      message("Edit proof was signed but not published.");
+      return;
+    }
     const claim = await publishSignedManifest(signedManifest);
     document.querySelector("#revoke-claim-id").value = claim.claim_id;
     document.querySelector("#dispute-claim-id").value = claim.claim_id;
@@ -2152,6 +2195,7 @@ document.querySelector("#register-mutation").onclick = () =>
       ["Edit action", actionSummary(action)],
       ["Source ingredient", ingredientSummary(ingredient)],
       ["Content verification", "Public: proof JSON contains the content check key"],
+      ["Prior matches", priorMatchSummary(priorMatches)],
       ["Downloaded", downloadedFiles.join(", ")],
       ["Embedded copy", embeddedFilename || "Not downloaded for this file type"]
     ]);

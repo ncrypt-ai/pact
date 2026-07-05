@@ -74,6 +74,11 @@ if TYPE_CHECKING:
         create_training_use_risk_report,
         responses_from_jsonl,
     )
+    from pact.fingerprints import (
+        FingerprintMatch,
+        compare_content_fingerprints,
+        create_content_fingerprints,
+    )
     from pact.identity import (
         ClaimantIdentity,
         DeviceBindingError,
@@ -92,6 +97,7 @@ if TYPE_CHECKING:
         C2PAIngredient,
         ClaimMeaning,
         ContentBinding,
+        ContentFingerprint,
         Manifest,
         ManifestError,
         ManifestSignature,
@@ -122,6 +128,7 @@ if TYPE_CHECKING:
         AvoidanceReportStatus,
         ChallengePurpose,
         ClaimantProfile,
+        ClaimFingerprintMatch,
         ClaimVerificationReport,
         DisputeRecord,
         DisputeStatus,
@@ -283,6 +290,7 @@ _EXPORTS = {
     "C2PAAction": "pact.manifest",
     "C2PAIngredient": "pact.manifest",
     "ContentBinding": "pact.manifest",
+    "ContentFingerprint": "pact.manifest",
     "Manifest": "pact.manifest",
     "ManifestError": "pact.manifest",
     "ManifestSignature": "pact.manifest",
@@ -303,6 +311,7 @@ _EXPORTS = {
     "audit_registry_claim_payload": "pact.privacy",
     "audit_signed_manifest_publication": "pact.privacy",
     "ChallengePurpose": "pact.registry",
+    "ClaimFingerprintMatch": "pact.registry",
     "ClaimVerificationReport": "pact.registry",
     "ClaimantProfile": "pact.registry",
     "DisputeRecord": "pact.registry",
@@ -381,6 +390,9 @@ _EXPORTS = {
     "trustmark_supported_image_mime_types": "pact.watermarks",
     "verify_image_soft_binding": "pact.watermarks",
     "watermark_id_for_image_soft_binding": "pact.watermarks",
+    "FingerprintMatch": "pact.fingerprints",
+    "compare_content_fingerprints": "pact.fingerprints",
+    "create_content_fingerprints": "pact.fingerprints",
 }
 
 __all__ = sorted([*_EXPORTS, "__version__"])
