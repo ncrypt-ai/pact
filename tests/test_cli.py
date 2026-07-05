@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 import types
@@ -371,7 +372,7 @@ def test_cli_registry_device_binding_token_uses_blinded_oprf(
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         assert registry_url == registry
-        assert path == "/api/v1/device-bindings/oprf"
+        assert path == "/pact/api/v1/device-bindings/oprf"
         assert payload is not None
         assert headers is None
         blinded_requests.append(payload)
@@ -429,7 +430,7 @@ def test_cli_report_submits_signed_profile_request(
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         assert registry_url == registry
-        if path == "/api/v1/challenges":
+        if path == "/pact/api/v1/challenges":
             assert payload == {
                 "purpose": "account_authorization",
                 "bound_key_id": identity["key_id"],
@@ -446,7 +447,7 @@ def test_cli_report_submits_signed_profile_request(
                 "difficulty": 0,
                 "bound_key_id": identity["key_id"],
             }
-        assert path == "/api/v1/reports/avoidance"
+        assert path == "/pact/api/v1/reports/avoidance"
         assert payload is not None
         assert headers is not None
         assert headers["X-PACT-Profile-Key-Id"] == identity["key_id"]
@@ -611,12 +612,37 @@ def test_cli_registry_init_prompts_for_missing_local_values(
 def test_cli_registry_teardown_deletes_persistent_local_state(
     tmp_path: Path,
     capsys,
+    monkeypatch,
 ) -> None:
     registry = "https://registry.example"
     data_dir = tmp_path / "registry-data"
     database = tmp_path / "registry.sqlite"
     identity_file = tmp_path / "identity-store"
     replacement_identity_file = tmp_path / "replacement-identity-store"
+    keyring_values: dict[tuple[str, str], str] = {}
+
+    class MemoryKeyringBackend:
+        def get_password(self, service: str, username: str) -> str | None:
+            return keyring_values.get((service, username))
+
+        def set_password(
+            self,
+            service: str,
+            username: str,
+            password: str,
+        ) -> None:
+            keyring_values[(service, username)] = password
+
+        def delete_password(self, service: str, username: str) -> None:
+            del keyring_values[(service, username)]
+
+    class MemoryKeyringIdentityStore(cli.KeyringIdentityStore):
+        def __init__(self) -> None:
+            super().__init__(MemoryKeyringBackend())
+
+    monkeypatch.setattr(
+        cli, "KeyringIdentityStore", MemoryKeyringIdentityStore
+    )
 
     assert (
         main(
@@ -663,6 +689,10 @@ def test_cli_registry_teardown_deletes_persistent_local_state(
     binding_store = cli.LocalDeviceBindingStore()
     binding_path = binding_store.path(registry)
     assert binding_path.exists()
+    keyring_store = MemoryKeyringIdentityStore()
+    keyring_store.save(ClaimantIdentity.generate(registry))
+    keyring_target = keyring_store.target(registry)
+    assert keyring_store.exists(registry)
 
     assert (
         main(
@@ -687,13 +717,15 @@ def test_cli_registry_teardown_deletes_persistent_local_state(
     output = json.loads(capsys.readouterr().out)
     assert output["registry_url"] == registry
     assert output["browser_cleanup_url"] == (
-        "https://registry.example/workspace?"
+        "https://registry.example/pact/web?"
         "teardown_registry=https%3A%2F%2Fregistry.example"
     )
     assert not (data_dir / "ca" / "root_certificate.pem").exists()
     assert not (data_dir / "ca" / "intermediate_private_key.pem").exists()
     assert not database.exists()
     assert not binding_path.exists()
+    assert output["removed"]["keyring_identities"] == [keyring_target]
+    assert not keyring_store.exists(registry)
 
     assert (
         main(
@@ -865,6 +897,7 @@ def test_cli_recovery_json_preserves_profile_continuity_secret(
     )
 
     imported = json.loads(capsys.readouterr().out)
+    assert imported["registry_url"] == registry
     binding_store = cli.LocalDeviceBindingStore()
     binding = binding_store.load(registry)
     assert binding is not None
@@ -889,6 +922,30 @@ def test_browser_identity_includes_profile_continuity_secret() -> None:
     assert created["registry_url"] == "https://registry.example"
     assert created["encrypted_pkcs8_b64"]
     assert len(base64url_decode(created["continuity_secret"], length=32)) == 32
+
+
+def test_browser_sign_content_preserves_source_url() -> None:
+    js_null = type("JsNull", (), {})()
+    created = json.loads(
+        browser.create_identity("https://registry.example", "secret")
+    )
+    signed = json.loads(
+        browser.sign_content(
+            "https://registry.example",
+            created["encrypted_pkcs8_b64"],
+            "secret",
+            base64.b64encode(b"hello").decode("ascii"),
+            base64url_encode(b"r" * 32),
+            "text/plain",
+            source_url="https://creator.example/original",
+        )
+    )
+    manifest = json.loads(signed["manifest_json"])["manifest"]
+
+    assert manifest["source_url"] == "https://creator.example/original"
+    assert "passed" in json.loads(
+        browser.privacy_audit(signed["manifest_json"], js_null, js_null)
+    )
 
 
 def test_cli_parser_exposes_registry_serve_command() -> None:

@@ -1123,6 +1123,28 @@ class EvidenceProfile:
             labels.append(TrustLabel.REVOKED)
         return tuple(labels)
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize evidence with derived public trust fields."""
+
+        return {
+            "key_age_days": self.key_age_days,
+            "active_claim_count": self.active_claim_count,
+            "revoked_claim_count": self.revoked_claim_count,
+            "verified_domains": list(self.verified_domains),
+            "certificate_count": self.certificate_count,
+            "rotation_count": self.rotation_count,
+            "open_disputes": self.open_disputes,
+            "upheld_disputes": self.upheld_disputes,
+            "rejected_disputes": self.rejected_disputes,
+            "hosted_account": self.hosted_account,
+            "device_continuity": self.device_continuity,
+            "hardware_attested": self.hardware_attested,
+            "third_party_attested": self.third_party_attested,
+            "documented_rights": self.documented_rights,
+            "trust_tier": self.trust_tier.value,
+            "trust_labels": [label.value for label in self.trust_labels],
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimVerificationReport:

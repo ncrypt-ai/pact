@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <title>PACT Workspace</title>
-    <link rel="stylesheet" href="/static/workspace.css">
+    <link rel="stylesheet" href="/pact/static/workspace.css">
   </head>
   <body data-registry-url="{{ registry_url }}" data-public-base-url="{{ public_base_url }}">
     <header>
@@ -17,11 +17,6 @@
         Mode:
         {{ "standalone web interface" if standalone else "registry-hosted web interface" }}
       </p>
-      <p class="note">
-        Your private signing key stays in this browser. The registry only sees
-        public proof records you choose to publish.
-      </p>
-      <p id="session-status" class="session-status">No profile loaded.</p>
       <p id="workspace-message" role="status"></p>
       <nav class="workspace-nav" aria-label="Workspace actions">
         <button type="button" data-page-button="identity">Your profile</button>
@@ -38,12 +33,12 @@
       <section data-page="identity">
         <h2>Your profile</h2>
         <p>
-          Your browser profile is the private signing key saved in this
-          browser. Your public registry profile is the public record other
-          people can look up after you register.
+          Create or unlock a browser profile to sign content. Your private key
+          and raw files stay in this browser; the registry stores the public
+          profile and proof records you publish.
         </p>
         <p id="identity-guidance" class="bottom-line">
-          Create a browser profile, or unlock the saved profile on this device.
+          Create or unlock a profile to begin.
         </p>
         <form id="identity-form">
           <input
@@ -65,37 +60,45 @@
             <input id="identity-passcode" type="password" autocomplete="current-password" required>
           </label>
           <p id="identity-passcode-hint" class="small"></p>
-          <p class="small">
-            PACT will not create a passcode for you. If you lose it, you may
-            not be able to use this signing profile again.
-          </p>
         </form>
         <div class="actions">
           <button type="button" id="continue-identity" class="primary-action">Create profile</button>
-          <button type="button" id="new-identity">Create another profile</button>
           <button type="button" id="logout-identity" hidden>Log out</button>
         </div>
-        <p class="small">
-          <strong>Saved browser profile:</strong> the encrypted signing profile
-          stored in this browser.
-        </p>
-        <p class="small">
-          <strong>Public registry profile:</strong> the public record other
-          people can look up after registration.
-        </p>
         <div id="browser-profile-summary" class="result" hidden></div>
         <div id="public-profile-summary" class="result" hidden></div>
-        <fieldset>
-          <legend>Trust upgrades</legend>
+        <details>
+          <summary>Recovery and account options</summary>
+          <p class="small">
+            Download a backup, import an existing profile, or rotate keys.
+          </p>
           <label>
-            Domain to verify
-            <input id="verify-domain-name" placeholder="example.com">
+            Import recovery file or CLI identity export
+            <input id="identity-import" type="file">
+          </label>
+          <label>
+            Import password, if needed
+            <input id="identity-import-password" type="password" autocomplete="current-password">
           </label>
           <div class="actions">
-            <button type="button" id="show-domain-record">Show DNS TXT record</button>
-            <button type="button" id="verify-domain">Verify DNS record</button>
+            <button type="button" id="export-identity">Download recovery file</button>
+            <button type="button" id="rotate-key">Rotate signing key</button>
           </div>
-          <div id="domain-verification-result" class="result" hidden></div>
+        </details>
+        <fieldset>
+          <legend>Trust upgrades</legend>
+          <details>
+            <summary>Domain to verify</summary>
+            <label>
+              Domain
+              <input id="verify-domain-name" placeholder="example.com">
+            </label>
+            <div class="actions">
+              <button type="button" id="show-domain-record">Show DNS TXT record</button>
+              <button type="button" id="verify-domain">Verify DNS record</button>
+            </div>
+            <div id="domain-verification-result" class="result" hidden></div>
+          </details>
           <details>
             <summary>Hosted account</summary>
             <label>
@@ -105,9 +108,9 @@
             <div class="actions">
               <button type="button" id="complete-hosted-login">Complete hosted login</button>
             </div>
-          <label>
-            Admin approval profile ID
-            <input id="authorize-hosted-key-id" placeholder="Profile ID to approve">
+            <label>
+              Admin approval profile ID
+              <input id="authorize-hosted-key-id" placeholder="Profile ID to approve">
             </label>
             <label>
               Provider
@@ -146,26 +149,6 @@
             <div id="third-party-result" class="result" hidden></div>
           </details>
         </fieldset>
-        <details>
-          <summary>Recovery and account options</summary>
-          <p class="small">
-            Use these when you want to inspect the public registry record,
-            download a backup, import an existing profile, or rotate keys.
-          </p>
-          <label>
-            Import recovery file or CLI identity export
-            <input id="identity-import" type="file">
-          </label>
-          <label>
-            Import password, if needed
-            <input id="identity-import-password" type="password" autocomplete="current-password">
-          </label>
-          <div class="actions">
-            <button type="button" id="show-identity">Check public registry profile</button>
-            <button type="button" id="export-identity">Download recovery file</button>
-            <button type="button" id="rotate-key">Rotate signing key</button>
-          </div>
-        </details>
       </section>
 
       <section data-page="sign">
@@ -197,8 +180,12 @@
             Short description (optional)
             <input id="c2pa-action-description" placeholder="Example: corrected color and exported final version">
           </label>
+          <label>
+            Source URL (optional)
+            <input id="source-url" type="url" placeholder="https://example.com/original-work">
+          </label>
         </fieldset>
-        <fieldset>
+        <fieldset id="optional-protection-fieldset">
           <legend>Optional protection</legend>
           <p class="small">
             Text protection changes the text before signing. Image protection
@@ -455,12 +442,10 @@
           <button type="button" id="view-claim-disputes">View claim disputes</button>
           <button type="button" id="view-my-disputes">View my claim disputes</button>
         </div>
-        <label>Dispute ID <input id="view-dispute-id"></label>
-        <button type="button" id="view-dispute">View dispute</button>
         <div id="dispute-result" class="result" hidden></div>
       </section>
     </main>
 
-    <script type="module" src="/static/workspace.js"></script>
+    <script type="module" src="/pact/static/workspace.js"></script>
   </body>
 </html>

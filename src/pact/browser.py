@@ -45,6 +45,16 @@ def _unb64(value: str) -> bytes:
     return base64.b64decode(value.encode("ascii"), validate=True)
 
 
+def _optional_unb64(value: object) -> bytes | None:
+    if value is None or type(value).__name__ in {"JsNull", "JsUndefined"}:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("optional base64 value must be a string or null")
+    if value == "":
+        return None
+    return _unb64(value)
+
+
 def _json(value: object) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
@@ -363,31 +373,31 @@ def sign_content(
 def verify_manifest_json(
     signed_manifest_json: str,
     public_jwk_json: str,
-    content_b64: str | None = None,
-    nonce_b64: str | None = None,
+    content_b64: object = None,
+    nonce_b64: object = None,
 ) -> str:
     """Verify a signed manifest and optional content binding."""
 
     report = verify_manifest(
         SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
         cast(dict[str, object], json.loads(public_jwk_json)),
-        content=None if content_b64 is None else _unb64(content_b64),
-        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+        content=_optional_unb64(content_b64),
+        nonce=_optional_unb64(nonce_b64),
     )
     return _json(asdict(report))
 
 
 def privacy_audit(
     signed_manifest_json: str,
-    content_b64: str | None = None,
-    nonce_b64: str | None = None,
+    content_b64: object = None,
+    nonce_b64: object = None,
 ) -> str:
     """Audit a signed manifest before it is registered publicly."""
 
     report = audit_signed_manifest_publication(
         SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
-        content=None if content_b64 is None else _unb64(content_b64),
-        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+        content=_optional_unb64(content_b64),
+        nonce=_optional_unb64(nonce_b64),
     )
     return _json(report.to_dict())
 
@@ -498,7 +508,7 @@ def embed_signed_manifest_carrier(
     asset_b64: str,
     mime_type: str,
     signed_manifest_json: str,
-    nonce_b64: str | None = None,
+    nonce_b64: object = None,
 ) -> str:
     """Embed a PACT signed manifest in a browser-provided asset."""
 
@@ -511,11 +521,9 @@ def embed_signed_manifest_carrier(
 
     asset = _unb64(asset_b64)
     signed = SignedManifest.from_json(signed_manifest_json.encode("utf-8"))
-    nonce = (
-        _unb64(nonce_b64)
-        if nonce_b64 is not None
-        else signed.manifest.content_binding.public_nonce_bytes()
-    )
+    nonce = _optional_unb64(nonce_b64)
+    if nonce is None:
+        nonce = signed.manifest.content_binding.public_nonce_bytes()
     if mime_type in {"text/html", "application/xhtml+xml"}:
         embedded = embed_html_carrier(
             asset,

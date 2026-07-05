@@ -14,26 +14,26 @@
     <p>This host publishes human-readable proof pages for profiles, claims, and verification checks.</p>
     <ul>
         {% if workspace_enabled %}
-        <li><a href="/pact">PACT interface</a></li>
+        <li><a href="/pact/web">PACT interface</a></li>
         {% endif %}
-      <li>Profiles: <code>/profiles/&lt;key_id&gt;</code></li>
-      <li>Claims: <code>/claims/&lt;claim_id&gt;</code></li>
-      <li>Claim checks: <code>/verify/claim/&lt;claim_id&gt;</code></li>
+      <li>Profiles: <code>/pact/profiles/&lt;key_id&gt;</code></li>
+      <li>Claims: <code>/pact/claims/&lt;claim_id&gt;</code></li>
+      <li>Claim checks: <code>/pact/verify/claim/&lt;claim_id&gt;</code></li>
     </ul>
 
     <h2>Service Discovery</h2>
     <p>These JSON endpoints describe the registry and its deployed API surface.</p>
     <ul>
-      <li><a href="/api/v1/registry">Registry metadata</a></li>
-      <li><a href="/api/v1/server/info">Server info</a></li>
-      <li><a href="/api/v1/server/routes">Route map</a></li>
+      <li><a href="/pact/api/v1/registry">Registry metadata</a></li>
+      <li><a href="/pact/api/v1/server/info">Server info</a></li>
+      <li><a href="/pact/api/v1/server/routes">Route map</a></li>
     </ul>
 
     {% if docs_enabled %}
     <h2>Documentation</h2>
     <ul>
-        <li><a href="/docs">PACT library</a></li>
-        <li><a href="/api/docs">API Surface</a></li>
+        <li><a href="/pact/docs">PACT library</a></li>
+        <li><a href="/pact/api/docs">API Surface</a></li>
     </ul>
     {% endif %}
   </body>

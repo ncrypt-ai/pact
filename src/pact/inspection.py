@@ -287,8 +287,15 @@ def _try_embedded_c2pa_sidecar(
     except Exception as error:
         _record_error(errors, "embedded_c2pa_sidecar", error)
         return None
+    try:
+        signed = SignedManifest.from_json(sidecar)
+    except Exception as error:
+        _record_error(errors, carrier, error)
+        signed = None
     return ExtractedReference(
         carrier=carrier,
+        signed_manifest=signed,
+        claim_id=None if signed is None else signed.manifest.claim_id,
         details={
             "manifest_store_size_bytes": len(sidecar),
             "manifest_store_sha256": base64url_encode(

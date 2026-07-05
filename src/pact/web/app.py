@@ -26,7 +26,12 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -792,15 +797,18 @@ def _raise_http_error(error: Exception) -> None:
 
 
 def _content_security_policy(path: str, *, local_mode: bool = False) -> str:
-    workspace_connect = "connect-src 'self' https:"
+    workspace_connect = (
+        "connect-src 'self' blob: https://cdn.jsdelivr.net "
+        "https://files.pythonhosted.org"
+    )
     if local_mode:
         workspace_connect = (
-            "connect-src 'self' https: http://localhost:* http://127.0.0.1:*"
+            f"{workspace_connect} http://localhost:* http://127.0.0.1:*"
         )
     if (
-        path == "/pact"
-        or path.startswith("/pact/")
-        or path.startswith("/static/")
+        path == "/pact/web"
+        or path.startswith("/pact/web/")
+        or path.startswith("/pact/static/")
     ):
         return (
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
@@ -809,7 +817,12 @@ def _content_security_policy(path: str, *, local_mode: bool = False) -> str:
             f"https://cdn.jsdelivr.net blob:; worker-src 'self'; "
             f"{workspace_connect}"
         )
-    docs_paths = ("/api/docs", "/api/redoc", "/docs", "/redoc")
+    docs_paths = (
+        "/pact/api/docs",
+        "/pact/api/redoc",
+        "/pact/docs",
+        "/pact/redoc",
+    )
     if path.rstrip("/") in docs_paths:
         return (
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
@@ -865,7 +878,7 @@ class MutationRequestModel(BaseModel):
     }
 
     challenge_id: UUID = Field(
-        description="Challenge ID returned by /api/v1/challenges.",
+        description="Challenge ID returned by /pact/api/v1/challenges.",
         examples=[EXAMPLE_CHALLENGE_ID],
     )
     claimant_public_jwk: dict[str, str] = Field(
@@ -925,7 +938,7 @@ class RotationRequestModel(BaseModel):
     }
 
     challenge_id: UUID = Field(
-        description="Key-rotation challenge ID returned by /api/v1/challenges.",
+        description="Key-rotation challenge ID returned by /pact/api/v1/challenges.",
         examples=[EXAMPLE_CHALLENGE_ID],
     )
     current_public_jwk: dict[str, str] = Field(
@@ -1038,9 +1051,9 @@ def create_app(
         title="PACT Registry",
         version=PACKAGE_VERSION,
         summary="Registry API and proof pages for PACT",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/pact/api/docs",
+        redoc_url="/pact/api/redoc",
+        openapi_url="/pact/api/openapi.json",
         openapi_tags=OPENAPI_TAGS,
         middleware=[
             Middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts),
@@ -1075,13 +1088,13 @@ def create_app(
         )
     if enable_workspace:
         app.mount(
-            "/static",
+            "/pact/static",
             StaticFiles(directory=str(_static_directory())),
             name="static",
         )
     if mounted_docs_directory is not None:
         app.mount(
-            "/docs",
+            "/pact/docs",
             StaticFiles(directory=str(mounted_docs_directory), html=True),
             name="docs",
         )
@@ -1177,12 +1190,15 @@ def create_app(
     async def rate_limit_requests(request: Request, call_next):
         if (
             rate_limit.enabled
-            and request.url.path.startswith("/api/")
+            and request.url.path.startswith("/pact/api/")
             and request.method != "OPTIONS"
         ):
             limiter = cast(SlidingWindowRateLimiter, app.state.rate_limiter)
             limit = rate_limit.ip_limit
-            if request.url.path in {"/api/v1/inspect", "/api/v1/recover"}:
+            if request.url.path in {
+                "/pact/api/v1/inspect",
+                "/pact/api/v1/recover",
+            }:
                 limit = rate_limit.anonymous_upload_limit
             decision = limiter.check(
                 f"ip:{client_ip(request)}",
@@ -1227,7 +1243,11 @@ def create_app(
             )
         return response
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=RedirectResponse)
+    async def root() -> RedirectResponse:
+        return RedirectResponse("/pact", status_code=308)
+
+    @app.get("/pact", response_class=HTMLResponse)
     async def home(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
@@ -1241,7 +1261,7 @@ def create_app(
             },
         )
 
-    @app.get("/pact", response_class=HTMLResponse)
+    @app.get("/pact/web", response_class=HTMLResponse)
     async def workspace(request: Request) -> HTMLResponse:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
@@ -1255,7 +1275,7 @@ def create_app(
             },
         )
 
-    @app.get("/pact/pact-browser-{feature}.pyz")
+    @app.get("/pact/web/pact-browser-{feature}.pyz")
     async def browser_python_feature(feature: str) -> Response:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
@@ -1272,7 +1292,7 @@ def create_app(
     registry_service = service
 
     @app.get(
-        "/api/v1/registry",
+        "/pact/api/v1/registry",
         tags=["Discovery"],
         summary="Registry metadata",
         description="Return registry certificates, root fingerprint, package version, and deployment metadata.",
@@ -1281,7 +1301,7 @@ def create_app(
         return PrettyJSONResponse(_registry_info(service))
 
     @app.get(
-        "/api/v1/server/routes",
+        "/pact/api/v1/server/routes",
         tags=["Discovery"],
         summary="Route map",
         description="List public, claimant-signed, and administrator routes exposed by this deployment.",
@@ -1293,7 +1313,7 @@ def create_app(
                 {
                     "name": "documentation",
                     "method": "GET",
-                    "path": "/docs/",
+                    "path": "/pact/docs/",
                     "auth": "public",
                     "lambda_name": None,
                     "permission": None,
@@ -1302,7 +1322,7 @@ def create_app(
         return PrettyJSONResponse({"routes": routes})
 
     @app.get(
-        "/api/v1/server/info",
+        "/pact/api/v1/server/info",
         tags=["Discovery"],
         summary="Server information",
         description="Return public base URL, optional documentation URL, package version, and deployed commit hash.",
@@ -1312,7 +1332,7 @@ def create_app(
             {
                 "registry_url": app.state.registry_url,
                 "public_base_url": app.state.public_base_url,
-                "documentation_url": f"{app.state.public_base_url}/docs/"
+                "documentation_url": f"{app.state.public_base_url}/pact/docs/"
                 if app.state.docs_enabled
                 else None,
                 "server": server_metadata(),
@@ -1320,7 +1340,7 @@ def create_app(
         )
 
     @app.post(
-        "/api/v1/inspect",
+        "/pact/api/v1/inspect",
         tags=["Inspection"],
         summary="Inspect a manifest or raw carrier file",
         description=(
@@ -1352,7 +1372,7 @@ def create_app(
             raise AssertionError("unreachable")
 
     @app.post(
-        "/api/v1/challenges",
+        "/pact/api/v1/challenges",
         tags=["Challenges"],
         summary="Issue a replay and proof-of-work challenge",
         description=(
@@ -1380,7 +1400,7 @@ def create_app(
         return _json_dict(challenge.to_dict())
 
     @app.post(
-        "/api/v1/device-bindings/oprf",
+        "/pact/api/v1/device-bindings/oprf",
         tags=["Profiles"],
         summary="Evaluate a blinded device-binding OPRF point",
         description=(
@@ -1399,7 +1419,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.post(
-        "/api/v1/profiles",
+        "/pact/api/v1/profiles",
         tags=["Profiles"],
         summary="Register a claimant profile",
         description=(
@@ -1430,7 +1450,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.get(
-        "/api/v1/profiles/{key_id}",
+        "/pact/api/v1/profiles/{key_id}",
         tags=["Profiles"],
         summary="Get claimant profile",
     )
@@ -1442,7 +1462,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/update",
+        "/pact/api/v1/profiles/{key_id}/update",
         tags=["Profiles"],
         summary="Update claimant profile",
     )
@@ -1478,7 +1498,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.get(
-        "/api/v1/profiles/{key_id}/evidence",
+        "/pact/api/v1/profiles/{key_id}/evidence",
         tags=["Profiles"],
         summary="Get claimant evidence summary",
     )
@@ -1487,10 +1507,10 @@ def create_app(
             evidence = service.evidence_profile(key_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(evidence)
+        return evidence.to_dict()
 
     @app.get(
-        "/api/v1/profiles/{key_id}/claims",
+        "/pact/api/v1/profiles/{key_id}/claims",
         tags=["Claims"],
         summary="List claims by claimant profile",
     )
@@ -1502,7 +1522,7 @@ def create_app(
         return {"claims": jsonable_encoder(claims)}
 
     @app.get(
-        "/api/v1/profiles/{key_id}/disputes",
+        "/pact/api/v1/profiles/{key_id}/disputes",
         tags=["Disputes"],
         summary="List disputes attached to a claimant profile",
     )
@@ -1519,7 +1539,7 @@ def create_app(
         }
 
     @app.post(
-        "/api/v1/certificates",
+        "/pact/api/v1/certificates",
         tags=["Certificates"],
         summary="Issue claimant certificate",
         description="Issue a short-lived claimant certificate after key-possession proof.",
@@ -1545,7 +1565,7 @@ def create_app(
         }
 
     @app.post(
-        "/api/v1/claims",
+        "/pact/api/v1/claims",
         tags=["Claims"],
         summary="Register signed claim",
         description="Publish a signed manifest as a registry claim.",
@@ -1573,7 +1593,7 @@ def create_app(
         return _json_dict(claim)
 
     @app.get(
-        "/api/v1/claims/{claim_id}",
+        "/pact/api/v1/claims/{claim_id}",
         tags=["Claims"],
         summary="Get registered claim",
     )
@@ -1585,7 +1605,7 @@ def create_app(
         return _json_dict(claim)
 
     @app.get(
-        "/api/v1/claims/{claim_id}/disputes",
+        "/pact/api/v1/claims/{claim_id}/disputes",
         tags=["Disputes"],
         summary="List disputes attached to a claim",
     )
@@ -1602,7 +1622,7 @@ def create_app(
         }
 
     @app.get(
-        "/api/v1/claims/{claim_id}/reports",
+        "/pact/api/v1/claims/{claim_id}/reports",
         tags=["Reports"],
         summary="List possible provenance avoidance reports for a claim",
     )
@@ -1619,7 +1639,7 @@ def create_app(
         }
 
     @app.get(
-        "/api/v1/claims/{claim_id}/spread",
+        "/pact/api/v1/claims/{claim_id}/spread",
         tags=["Reports"],
         summary="Get public spread summary for a claim",
     )
@@ -1631,7 +1651,7 @@ def create_app(
         return spread.to_dict()
 
     @app.post(
-        "/api/v1/claims/{claim_id}/revoke",
+        "/pact/api/v1/claims/{claim_id}/revoke",
         tags=["Claims"],
         summary="Revoke registered claim",
         description="Revoke an existing claim. The claim ID is supplied in the path and added to the signed mutation payload by the server.",
@@ -1663,7 +1683,7 @@ def create_app(
         return _json_dict(claim)
 
     @app.post(
-        "/api/v1/recover",
+        "/pact/api/v1/recover",
         tags=["Reports"],
         summary="Recover possible source claim candidates",
     )
@@ -1704,7 +1724,7 @@ def create_app(
                         "reporting_enabled": reporting_enabled,
                         "report_url": None
                         if not reporting_enabled
-                        else f"/claims/{claim_id}/report",
+                        else f"/pact/claims/{claim_id}/report",
                         "reporting_disabled_reason": None
                         if reporting_enabled
                         else "private_nonce_claim",
@@ -1722,7 +1742,7 @@ def create_app(
             raise AssertionError("unreachable")
 
     @app.post(
-        "/api/v1/reports/avoidance",
+        "/pact/api/v1/reports/avoidance",
         tags=["Reports"],
         summary="Submit possible provenance avoidance report",
     )
@@ -1763,7 +1783,7 @@ def create_app(
         }
 
     @app.get(
-        "/api/v1/reports/{report_id}",
+        "/pact/api/v1/reports/{report_id}",
         tags=["Reports"],
         summary="Get possible provenance avoidance report",
     )
@@ -1777,7 +1797,7 @@ def create_app(
         return service.public_avoidance_report_dict(report)
 
     @app.post(
-        "/api/v1/rotations",
+        "/pact/api/v1/rotations",
         tags=["Profiles"],
         summary="Rotate claimant key",
         description="Rotate a claimant key using signatures from both the current and replacement keys.",
@@ -1797,7 +1817,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/domains/verify",
+        "/pact/api/v1/domains/verify",
         tags=["Profiles"],
         summary="Verify claimant domain",
     )
@@ -1827,7 +1847,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/hosted-authorize",
+        "/pact/api/v1/profiles/{key_id}/hosted-authorize",
         tags=["Profiles"],
         summary="Authorize hosted-account trust",
         description=(
@@ -1866,7 +1886,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/me/hosted-login",
+        "/pact/api/v1/profiles/me/hosted-login",
         tags=["Profiles"],
         summary="Complete hosted-account login",
     )
@@ -1882,7 +1902,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/third-party-attest",
+        "/pact/api/v1/profiles/{key_id}/third-party-attest",
         tags=["Profiles"],
         summary="Record third-party account attestation",
     )
@@ -1917,7 +1937,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/disputes",
+        "/pact/api/v1/disputes",
         tags=["Disputes"],
         summary="Open claim dispute",
     )
@@ -1940,7 +1960,7 @@ def create_app(
         return service.public_dispute_dict(dispute)
 
     @app.get(
-        "/api/v1/disputes/{dispute_id}",
+        "/pact/api/v1/disputes/{dispute_id}",
         tags=["Disputes"],
         summary="Get dispute record",
     )
@@ -1952,7 +1972,7 @@ def create_app(
         return service.public_dispute_dict(dispute)
 
     @app.post(
-        "/api/v1/disputes/{dispute_id}/resolve",
+        "/pact/api/v1/disputes/{dispute_id}/resolve",
         tags=["Disputes"],
         summary="Resolve claim dispute",
         description="Administrative endpoint for resolving an open dispute.",
@@ -1986,7 +2006,11 @@ def create_app(
             _raise_http_error(error)
         return service.public_dispute_dict(dispute)
 
-    @app.get("/profiles/{key_id}", response_class=HTMLResponse)
+    @app.get("/profiles/{key_id}", response_class=RedirectResponse)
+    async def legacy_public_profile(key_id: str) -> RedirectResponse:
+        return RedirectResponse(f"/pact/profiles/{key_id}", status_code=308)
+
+    @app.get("/pact/profiles/{key_id}", response_class=HTMLResponse)
     async def public_profile(request: Request, key_id: str) -> HTMLResponse:
         try:
             profile = service.get_profile(key_id)
@@ -1998,12 +2022,16 @@ def create_app(
             "profile.html",
             {
                 "profile": _public_jsonable(profile),
-                "evidence": jsonable_encoder(evidence),
+                "evidence": evidence.to_dict(),
                 "public_base_url": app.state.public_base_url,
             },
         )
 
-    @app.get("/claims/{claim_id}", response_class=HTMLResponse)
+    @app.get("/claims/{claim_id}", response_class=RedirectResponse)
+    async def legacy_public_claim(claim_id: UUID) -> RedirectResponse:
+        return RedirectResponse(f"/pact/claims/{claim_id}", status_code=308)
+
+    @app.get("/pact/claims/{claim_id}", response_class=HTMLResponse)
     async def public_claim(request: Request, claim_id: UUID) -> HTMLResponse:
         try:
             claim = service.get_claim(claim_id)
@@ -2022,7 +2050,16 @@ def create_app(
             },
         )
 
-    @app.get("/verify/claim/{claim_id}", response_class=HTMLResponse)
+    @app.get("/verify/claim/{claim_id}", response_class=RedirectResponse)
+    async def legacy_verify_claim_page(
+        claim_id: UUID,
+    ) -> RedirectResponse:
+        return RedirectResponse(
+            f"/pact/verify/claim/{claim_id}",
+            status_code=308,
+        )
+
+    @app.get("/pact/verify/claim/{claim_id}", response_class=HTMLResponse)
     async def verify_claim_page(
         request: Request,
         claim_id: UUID,
