@@ -8,21 +8,21 @@ Registry metadata is public:
 
 .. code-block:: bash
 
-   curl https://registry.example/api/v1/registry
+   curl https://registry.example/pact/api/v1/registry
 
 Inspect a signed manifest or carrier file:
 
 .. code-block:: bash
 
    curl -F file=@work.txt -F mime_type=text/plain \
-     https://registry.example/api/v1/inspect
+     https://registry.example/pact/api/v1/inspect
 
 Fetch public profile and claim state:
 
 .. code-block:: bash
 
-   curl https://registry.example/api/v1/profiles/CLAIMANT_KEY_ID
-   curl https://registry.example/api/v1/claims/CLAIM_ID
+   curl https://registry.example/pact/api/v1/profiles/CLAIMANT_KEY_ID
+   curl https://registry.example/pact/api/v1/claims/CLAIM_ID
 
 State-changing endpoints use signed mutation envelopes. The CLI and browser
 workspace are the safest way to produce those envelopes. Direct integrations
@@ -35,7 +35,7 @@ public OPRF endpoint as part of that derivation:
 
 .. code-block:: bash
 
-   curl -X POST https://registry.example/api/v1/device-bindings/oprf \
+   curl -X POST https://registry.example/pact/api/v1/device-bindings/oprf \
      -H 'content-type: application/json' \
      -d '{"blinded":"BASE64URL_RISTRETTO255_ELEMENT"}'
 

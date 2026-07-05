@@ -1,19 +1,85 @@
 Quickstart
 ==========
 
-PACT provides library APIs for registry-scoped claimant identities,
-policies, signed manifests, local verification, text/HTML/XML carrier
-embedding, an initial C2PA integration layer for supported image and
-document containers, and a registry-core library layer with replay
-challenges, append-only event storage, certificates, rotations, revocations,
-and disputes. It also ships a CLI entrypoint plus FastAPI-based public API and
-proof-page surfaces for hosted and loopback-local deployment.
+Before diving into code, it helps to know what each PACT operation actually
+does — and in particular which steps touch the network, which are local-only,
+and what the distinction is between operations that share a name with similar
+concepts.
 
-Create and sign a manifest
+Operations overview
+-------------------
+
+**sign**
+  *Local only — no network.* Reads content, generates a 32-byte random nonce,
+  computes the salted commitment ``SHA-256(nonce ‖ SHA-256(content))``, and
+  produces a signed manifest. The content never leaves your machine.
+  Nothing is published. This step produces the artifact that all later steps use.
+
+**register-claim** (``pact registry register-claim`` / ``service.register_claim``)
+  *Network — writes to the registry.* Sends the already-signed manifest JSON to
+  the registry's ``/pact/api/v1/claims`` endpoint. The registry appends an event to
+  its append-only log. After this step the claim is publicly discoverable.
+  Raw file content is never sent — only the manifest. Requires a profile to
+  already be registered.
+
+**verify** (``pact verify`` / ``verify_manifest``)
+  *Local or light network.* Checks that the ES256 signature is valid and,
+  when content and a nonce are supplied, that the commitment matches. Can run
+  entirely offline given a ``--public-jwk`` file. Without a JWK file, the CLI
+  fetches the claimant's public key from the registry profile endpoint — but
+  it does not check revocation state, disputes, or trust tier. Those checks
+  are performed by ``verify_claim``, not ``verify_manifest``.
+
+**inspect** (``pact inspect`` / ``inspect_content``)
+  *Local carrier extraction.* Takes any file — text, HTML, PDF, image, or a
+  raw ``.manifest.json`` — and tries every known carrier format to extract an
+  embedded manifest, locator, or watermark. Returns what was found. Does not
+  verify signatures or contact the registry. Use ``inspect`` to answer "is
+  there a PACT manifest in this file?", then ``verify`` on what it returns.
+
+**recover** (``pact recover`` / ``/pact/api/v1/recover``)
+  *Network — server-side extraction.* Uploads a file to the registry's recover
+  endpoint, which runs carrier extraction server-side and resolves any found
+  claims against the registry in one step. Use ``recover`` when you want
+  extraction, signature checking, and registry resolution without running PACT
+  locally.
+
+register-profile vs. public-jwk
+---------------------------------
+
+These two commands both involve your identity's public key, but they do
+completely different things.
+
+**register-profile** (``pact registry register-profile``)
+  *Network — writes to the registry.* Derives a device-binding token via the
+  registry's OPRF endpoint, then signs and submits a profile mutation to
+  ``/pact/api/v1/profiles``. After this step the registry has a record of your
+  public key and the registry can verify your signatures. Your private key
+  stays local. This must be done before ``register-claim`` will be accepted.
+
+**public-jwk** (``pact identity public-jwk``)
+  *Local only — no network.* Reads your identity file and writes only the
+  public key as a JWK JSON file. Does not register anything, create a profile,
+  or contact any server. Two common uses:
+
+  - Pass the output to ``pact registry serve --admin-jwk-file`` to designate
+    your identity as a registry administrator.
+  - Pass the output to ``pact verify --public-jwk`` so a verifier can check
+    signatures offline without the registry being reachable.
+
+The short version: ``register-profile`` is a registry write that makes you
+discoverable. ``public-jwk`` is a local file export.
+
+---
+
+This guide covers the core workflow through the Python API. CLI and browser
+workspace workflows are covered in :doc:`server deployments <server>`.
+
+Sign and verify a manifest
 --------------------------
 
-The nonce is deliberately retained by the caller. It belongs in an eventual
-content carrier or private evidence package, not in the registry manifest.
+An identity is a registry-scoped P-256 key pair. Each registry gets a separate
+key so activity on one registry cannot be linked to another.
 
 .. code-block:: python
 
@@ -35,16 +101,11 @@ content carrier or private evidence package, not in the registry manifest.
    content = "An original work.\n".encode()
    nonce = secrets.token_bytes(32)
    identity = ClaimantIdentity.generate("https://registry.example")
+
    policy = Policy(
        (
-           PolicyEntry(
-               Permission.GENERATIVE_TRAINING,
-               PermissionValue.NOT_ALLOWED,
-           ),
-           PolicyEntry(
-               Permission.NO_COMMERCIAL_TRAINING,
-               PermissionValue.NOT_ALLOWED,
-           ),
+           PolicyEntry(Permission.GENERATIVE_TRAINING, PermissionValue.NOT_ALLOWED),
+           PolicyEntry(Permission.NO_COMMERCIAL_TRAINING, PermissionValue.NOT_ALLOWED),
        )
    )
 
@@ -64,6 +125,10 @@ content carrier or private evidence package, not in the registry manifest.
    report = verify_manifest(parsed, identity.public_jwk, content, nonce)
    assert report.valid
 
+The nonce is 32 random bytes held by the caller. It belongs in a content
+carrier or a private evidence package — not in the registry manifest. The
+registry stores only the commitment `SHA-256(nonce ‖ SHA-256(content))`.
+
 Persist an identity
 -------------------
 
@@ -77,53 +142,55 @@ Use the operating-system credential store when it is available:
    store.save(identity)
    restored = store.load(identity.registry_url)
 
-The explicit fallback is a password-encrypted PKCS#8 file:
+The password-encrypted PKCS#8 file is the explicit fallback. PACT never falls
+back silently from an unavailable keyring to an unencrypted file.
 
 .. code-block:: python
 
    from pathlib import Path
-
    from pact import EncryptedFileIdentityStore
 
    fallback = EncryptedFileIdentityStore(Path("~/.config/pact/identities").expanduser())
    fallback.save(identity, "use-a-password-manager-generated-secret")
    restored = fallback.load(identity.registry_url, "use-a-password-manager-generated-secret")
 
-The fallback password is never stored by PACT.
+The password is never stored by PACT.
 
 Embed a carrier
 ---------------
 
-Text carriers can attach the signed manifest visibly, invisibly, or both:
+Text carriers attach the signed manifest to the content itself so the claim
+travels with the file. There are three modes: a visible proof block at the top
+(`visible`), a zero-width invisible locator appended to the end (`invisible`),
+or both (`both`). The zero-width locator carries the claim UUID, registry
+fingerprint, nonce, and manifest digest as a compact cross-check. It is a
+redundancy aid, not a second signature.
 
 .. code-block:: python
 
    from pact import CarrierMode, embed_text_carrier, extract_text_carrier
 
-   protected = embed_text_carrier(
-       content,
-       signed,
-       nonce=nonce,
-       mode=CarrierMode.BOTH,
-   )
+   protected = embed_text_carrier(content, signed, nonce=nonce, mode=CarrierMode.BOTH)
    extracted = extract_text_carrier(protected)
    assert extracted.signed_manifest == signed
 
-Structured HTML and XML files have dedicated helpers:
+HTML and XML have dedicated helpers that insert the manifest into the document
+structure without touching visible content:
 
 .. code-block:: python
 
    from pact import embed_html_carrier, embed_xml_carrier
 
    protected_html = embed_html_carrier(html_document, signed, nonce=nonce, include_locator=True)
-   protected_xml = embed_xml_carrier(xml_document, signed, nonce=nonce, include_locator=True)
+   protected_xml  = embed_xml_carrier(xml_document,  signed, nonce=nonce, include_locator=True)
 
-Apply experimental text watermark plugins
------------------------------------------
+Experimental text watermarks
+-----------------------------
 
-The text watermark layer is deliberately conservative. It only runs when you
-explicitly confirm the change and it rejects content that looks unsafe to
-rewrite.
+The text watermark layer modifies prose content to embed a recoverable signal.
+It is conservative by design: it requires explicit confirmation, rejects content
+that looks like code or structured data, and is limited to context-safe
+transforms. All methods are experimental.
 
 .. code-block:: python
 
@@ -141,8 +208,7 @@ rewrite.
    )
    assert result.transformed_content != ""
 
-Use the CLI for text watermarking
----------------------------------
+The CLI equivalent:
 
 .. code-block:: bash
 
@@ -152,11 +218,11 @@ Use the CLI for text watermarking
      --output work-watermarked.txt \
      --confirm
 
-Embed a C2PA image credential
------------------------------
+C2PA image credentials
+-----------------------
 
-For supported image formats, PACT can delegate embedding and validation to the
-official C2PA SDK:
+For image formats supported by the official C2PA SDK, PACT delegates embedding
+and validation to that SDK:
 
 .. code-block:: python
 
@@ -164,8 +230,7 @@ official C2PA SDK:
 
    signer = C2paSignerMaterial(certificate_chain_pem, private_key_pem)
    embedded = embed_c2pa_image(
-       image_bytes,
-       "image/png",
+       image_bytes, "image/png",
        signed=signed,
        signer_material=signer,
        title="Protected image",
@@ -173,69 +238,37 @@ official C2PA SDK:
    inspected = read_c2pa_asset(embedded.asset_bytes, mime_type="image/png")
    assert inspected.active_manifest is not None
 
-Embed a prebuilt C2PA manifest into PDF or DOCX
------------------------------------------------
-
-For PDF and ZIP-based document formats, PACT can place an already-signed
-manifest store into the spec-defined container location:
+For PDF and DOCX, PACT provides container writers for placing an already-signed
+C2PA manifest store into the spec-defined location:
 
 .. code-block:: python
 
-   from pact import (
-       embed_c2pa_manifest_in_pdf,
-       embed_c2pa_manifest_in_zip_document,
-   )
+   from pact import embed_c2pa_manifest_in_pdf, embed_c2pa_manifest_in_zip_document, sign_c2pa_document
 
-   protected_pdf = embed_c2pa_manifest_in_pdf(pdf_bytes, manifest_store_bytes)
-   protected_docx = embed_c2pa_manifest_in_zip_document(
-       docx_bytes,
-       "docx",
-       manifest_store_bytes,
-   )
+   protected_pdf  = embed_c2pa_manifest_in_pdf(pdf_bytes, manifest_store_bytes)
+   protected_docx = embed_c2pa_manifest_in_zip_document(docx_bytes, "docx", manifest_store_bytes)
 
-Use this when your signing pipeline can already produce valid C2PA manifest
-store bytes but the Python SDK cannot embed them into the target file format.
-
-Sign and embed a PDF or DOCX through the hybrid CAI path
---------------------------------------------------------
-
-PACT can also drive the official CAI signer path for document formats that the
-Python wrapper does not expose directly:
-
-.. code-block:: python
-
-   from pact import C2paSignerMaterial, sign_c2pa_document
-
-   signer = C2paSignerMaterial(certificate_chain_pem, private_key_pem)
+   # Or drive the full hybrid sign-and-embed path:
    signed_pdf = sign_c2pa_document(
-       pdf_bytes,
-       "application/pdf",
+       pdf_bytes, "application/pdf",
        signed=signed,
-       signer_material=signer,
+       signer_material=C2paSignerMaterial(certificate_chain_pem, private_key_pem),
        title="Protected PDF",
    )
-   signed_docx = sign_c2pa_document(
-       docx_bytes,
-       "docx",
-       signed=signed,
-       signer_material=signer,
-       title="Protected document",
-   )
 
-For legacy binary formats such as ``.doc``, the helper returns a detached
-manifest store and leaves the original bytes unchanged.
+See :doc:`carriers <carriers>` for a full description of C2PA carrier modes,
+text containers, and the hybrid signer path.
 
-Use the registry core
----------------------
+Use the registry core directly
+------------------------------
 
-The registry layer is available as a pure library API. It issues replay and
-proof-of-work challenges, stores append-only events, and derives public
-profile evidence:
+The registry is available as a library. It handles replay challenges,
+proof-of-work verification, append-only event storage, and claimant certificate
+issuance.
 
 .. code-block:: python
 
    from pathlib import Path
-
    from pact import (
        ChallengePurpose,
        FileRegistryStore,
@@ -245,12 +278,8 @@ profile evidence:
    )
 
    authority = RegistryCertificateAuthority.initialize("https://registry.example")
-   store = FileRegistryStore(Path("./registry-data"))
-   service = RegistryService(
-       "https://registry.example",
-       store=store,
-       certificate_authority=authority,
-   )
+   store    = FileRegistryStore(Path("./registry-data"))
+   service  = RegistryService("https://registry.example", store=store, certificate_authority=authority)
 
    challenge = service.issue_challenge(ChallengePurpose.PROFILE_REGISTRATION, difficulty=4)
    request = MutationRequest.create(
@@ -258,179 +287,56 @@ profile evidence:
        challenge,
        payload={
            "display_name": "Alice",
-           "device_fingerprint": "pact-device-binding-v2.base64url-sha256-token",
+           "device_fingerprint": "pact-device-binding-v2.<base64url-32-byte-token>",
        },
-       proof_of_work_solution=0,  # supply a solved proof-of-work value
+       proof_of_work_solution=0,   # supply a solved value in real use
    )
    profile = service.register_profile(request)
-
    assert profile.key_id == identity.key_id
 
-In normal CLI and browser workflows, PACT derives the device-binding token for
-you. Direct API callers must provide a ``pact-device-binding-v2`` token signed
-inside the profile-registration mutation. The registry rejects profiles without
-that minimum unauthenticated-device continuity signal. The token does not prove
-that a physical device used the official OPRF endpoint; production registries
-should combine it with account auth, gateway abuse controls, and review
-workflows.
+In normal CLI and browser flows, PACT derives the `pact-device-binding-v2`
+token through the blinded OPRF endpoint. Direct API callers must supply a valid
+token. The registry rejects profiles without it.
 
-Run the hosted registry/API service
------------------------------------
-
-Use the CLI entrypoint to serve the JSON API plus public claim and profile
-pages:
-
-.. code-block:: bash
-
-   pact registry init \
-     --registry https://registry.example \
-     --data-dir ./registry-data \
-     --root-key-password 'store-this-offline'
-
-   pact registry serve \
-     --registry https://registry.example \
-     --data-dir ./registry-data \
-     --public-base-url https://registry.example \
-     --database ./registry-data/registry.sqlite3 \
-     --enable-workspace
-
-For a development reset or intentional local decommission, stop the server and
-run ``pact registry teardown`` with the same registry URL, data directory, and
-SQLite database path:
-
-.. code-block:: bash
-
-   pact registry teardown \
-     --registry https://registry.example \
-     --data-dir ./registry-data \
-     --database ./registry-data/registry.sqlite3
-
-The command deletes local CA/OPRF material, SQLite registry records, and this
-machine's device-binding record for that registry after two confirmations.
-
-Admin users are not created by ``pact registry init``. Create an admin PACT
-identity, export its public JWK, and restart the server with that public JWK:
-
-.. code-block:: bash
-
-   pact identity init \
-     --registry https://registry.example \
-     --identity-file ./secrets/admin.identity.pem \
-     --identity-password 'store-this-in-your-password-manager'
-
-   pact identity public-jwk \
-     --registry https://registry.example \
-     --identity-file ./secrets/admin.identity.pem \
-     --identity-password 'store-this-in-your-password-manager' \
-     --out ./secrets/admin.public.jwk.json
-
-   pact registry serve \
-     --registry https://registry.example \
-     --data-dir ./registry-data \
-     --public-base-url https://registry.example \
-     --database ./registry-data/registry.sqlite3 \
-     --admin-jwk-file ./secrets/admin.public.jwk.json \
-     --enable-workspace
-
-Once the server is running, the CLI can publish identities and claims without
-custom request scripts:
-
-.. code-block:: bash
-
-   pact registry register-profile \
-     --registry https://registry.example
-
-   pact sign ./work.txt \
-     --registry https://registry.example
-
-   pact registry register-claim ./work.manifest.json \
-     --registry https://registry.example
-
-This serves:
-
-- ``/api/v1/registry``
-- ``/api/v1/server/info``
-- ``/api/v1/inspect``
-- ``/api/v1/challenges``
-- ``/api/v1/device-bindings/oprf``
-- ``/api/v1/profiles/{key_id}``
-- ``/api/v1/profiles/{key_id}/evidence``
-- ``/api/v1/claims/{claim_id}``
-- ``/api/v1/disputes/{dispute_id}``
-- public HTML proof pages at ``/profiles/{key_id}``, ``/claims/{claim_id}``,
-  and ``/verify/claim/{claim_id}``
-
-Run the loopback-local web UI
+TrustMark image soft binding
 -----------------------------
 
-For a local-only browser workflow, bind to loopback. This starts the registry
-API, proof pages, and the Pyodide browser workspace:
-
-.. code-block:: bash
-
-   pact web \
-     --data-dir ./local-registry \
-     --port 8000 \
-     --database ./local-registry/registry.sqlite3
-
-That starts the same API and proof-page app on ``127.0.0.1`` with a local
-base URL. Open ``/pact`` to use the browser workflow instead of the CLI.
-
-Run only the browser workspace
-------------------------------
-
-You can also self-host only the browser interface and point it at a remote
-registry:
-
-.. code-block:: bash
-
-   pact web \
-     --remote-registry https://registry.example \
-     --port 8000
-
-In that mode, the local process serves static workspace assets and Pyodide
-feature packs. The browser sends signed mutations directly to the remote
-registry. The remote registry must allow the workspace origin with CORS, for
-example:
-
-.. code-block:: bash
-
-   pact registry serve \
-     --registry https://registry.example \
-     --data-dir ./registry-data \
-     --public-base-url https://registry.example \
-     --database ./registry-data/registry.sqlite3 \
-     --cors-allowed-origin http://127.0.0.1:8000
-
-Embed a TrustMark soft binding
-------------------------------
-
-For supported raster formats, PACT can embed a compact claim locator as a
-TrustMark soft binding:
+PACT can embed a compact 96-bit claim locator as a TrustMark soft binding
+alongside perceptual fingerprints for JPEG, PNG, TIFF, and WebP:
 
 .. code-block:: python
 
-   from pact import embed_image_soft_binding, verify_image_soft_binding
+   from pact import (
+       compare_image_perceptual_fingerprints,
+       create_image_perceptual_fingerprint,
+       embed_image_soft_binding,
+       decode_image_soft_binding,
+   )
 
    watermarked = embed_image_soft_binding(
-       image_bytes,
-       "image/png",
+       image_bytes, "image/png",
        claim_id=claim.claim_id,
        registry_root_fingerprint=claim.signed_manifest.manifest.registry_root_fingerprint,
    )
-   verification = verify_image_soft_binding(
-       watermarked.image_bytes,
-       "image/png",
-       registry_service=service,
-   )
-   assert verification.registry_match
+   decoded = decode_image_soft_binding(watermarked.image_bytes, "image/png")
+   assert decoded.locator is not None
 
-Create local training-use probes
---------------------------------
+   original    = create_image_perceptual_fingerprint(image_bytes, "image/png")
+   transformed = create_image_perceptual_fingerprint(transformed_bytes, "image/png")
+   match = compare_image_perceptual_fingerprints(original, transformed)
 
-PACT can create committed treatment/control probes before you collect provider
-responses. The registry does not receive the protected text, prompts,
-responses, or analysis package unless the user explicitly publishes them.
+The soft binding carries a locator, not the signature itself. Recovering a
+locator from a transformed image gives a starting point to look up the registry
+claim and then verify the signature, registry record, and content binding
+separately.
+
+Training-use probes
+--------------------
+
+PACT can produce canary-style probes that create cryptographic commitments to
+content before you collect provider responses. The registry never receives the
+protected text, prompts, responses, or evidence package unless the user
+explicitly publishes them.
 
 .. code-block:: bash
 
@@ -446,35 +352,27 @@ responses, or analysis package unless the user explicitly publishes them.
 
    pact probe export evidence.json --output evidence-export.json
 
-The ``responses.jsonl`` file contains one JSON object per provider response,
-for example ``{"probe_id": "...", "response": "..."}``.
+`responses.jsonl` contains one JSON object per provider response:
+`{"probe_id": "...", "response": "..."}`. Analysis includes confidence
+intervals and corrected p-values. The score is an explanation aid, not a legal
+assertion that a provider trained on specific material.
 
-Probe analysis includes confidence intervals and corrected p-values. Library
-callers can pass the probe report, watermark or canary detections, image
-matches, and registry verification into ``create_training_use_risk_report`` to
-produce a combined evidence summary.
+CLI reference
+-------------
 
-Use the CLI for manifest workflows
-----------------------------------
+The `pact` CLI exposes all of the above workflows without writing Python:
 
-``pact inspect`` accepts signed manifest JSON or raw carrier files. For raw
-media, it tries supported text, HTML, XML, image watermark, C2PA image/PDF, and
-ZIP-based document carriers, then resolves registered claims when the active
-registry has the referenced claim.
-
-The CLI exposes:
-
-- ``pact identity init|show|public-jwk|export|import|rotate``
+- ``pact identity init|show|export|import|rotate``
 - ``pact sign``
+- ``pact verify``
+- ``pact inspect``
 - ``pact privacy audit``
 - ``pact watermark image``
 - ``pact watermark text``
-- ``pact verify``
-- ``pact inspect``
 - ``pact probe create|analyze|export``
-- ``pact registry init``
-- ``pact registry serve``
-- ``pact registry teardown``
-- ``pact registry register-profile``
-- ``pact registry register-claim``
+- ``pact registry init|serve|register-profile|register-claim``
 - ``pact web``
+
+Run ``pact <command> --help`` for per-command options. ``pact inspect`` accepts
+signed manifest JSON or raw carrier files; it tries all supported carriers in
+order, then resolves the registered claim when a live registry is configured.

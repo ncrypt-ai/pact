@@ -1,89 +1,67 @@
-Server deployments
+Server Deployments
 ==================
 
-PACT exposes the same registry API and proof pages in two deployment shapes:
+PACT's registry, API, and proof pages run as the same FastAPI application in
+two deployment shapes: a SQLite-backed monolith for local and small self-hosted
+registries, and a Lambda/Postgres layout for serverless AWS deployments. This
+document covers both.
 
-- a monolith FastAPI app for local or small self-hosted registries;
-- an AWS Lambda/API Gateway layout for serverless deployments.
+Monolith
+--------
 
-Monolith runtime
-----------------
+The monolith runs via ``pact registry serve`` and uses SQLite for storage.
 
-The monolith uses SQLite. The database can be ``:memory`` for ephemeral testing
-or a file path for a lightweight persistent registry.
-
-For local setup, ``pact registry init`` reads ``PACT_DATA_DIR``,
-``PACT_REGISTRY_URL``, and ``PACT_ROOT_KEY_PASSWORD`` when they are set. If
-the data directory, registry URL, or root key password is still missing, the CLI
-prompts for it. File-backed identity commands also read
-``PACT_IDENTITY_PASSWORD`` before prompting.
+**Initialize the registry CA** (run once):
 
 .. code-block:: bash
 
    pact registry init \
-     --registry http://127.0.0.1:8000 \
-     --data-dir .pact-registry
+     --registry https://registry.example \
+     --data-dir ./registry-data
 
-   pact registry serve \
-     --registry http://127.0.0.1:8000 \
-     --data-dir .pact-registry \
-     --public-base-url http://127.0.0.1:8000 \
-     --host 127.0.0.1 \
-     --port 8000 \
-     --database :memory
+This generates an offline root key and an online intermediate key. The root key
+is not needed at runtime — keep it encrypted and store it separately. The
+``--data-dir`` flag reads ``PACT_DATA_DIR`` from the environment when omitted,
+and the CLI prompts for anything still missing.
 
-Use ``--database .pact-registry/registry.sqlite3`` for a local persistent
-SQLite database. ``:memory`` is only for development and tests; a restart loses
-all claims, profiles, challenges, reports, and disputes.
-
-``pact registry init`` also creates ``ca/oprf_server_secret`` under the data
-directory. ``pact registry serve`` uses that file by default, or
-``PACT_OPRF_SERVER_SECRET``/``--oprf-server-secret`` when explicitly supplied.
-Keep this secret separate from the registry CA keys and rotate it deliberately.
-
-To intentionally remove local persistent state for a registry, stop the server
-and run ``pact registry teardown`` with the same registry URL, data directory,
-and SQLite database path:
+**Serve the registry:**
 
 .. code-block:: bash
 
-   pact registry teardown \
-     --registry http://127.0.0.1:8000 \
-     --data-dir .pact-registry \
-     --database .pact-registry/registry.sqlite3
+   pact registry serve \
+     --registry https://registry.example \
+     --data-dir ./registry-data \
+     --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3
 
-The command deletes local CA/OPRF files, SQLite database files, and this
-machine's local device-binding record for that registry. It prints the planned
-deletions and requires two confirmations. For noninteractive local automation,
-pass ``--confirm-registry`` with the normalized registry URL and
-``--confirm-delete`` with ``delete registry <registry-url>``.
+Use ``--database :memory`` for development and tests only — a restart loses all
+data. The registry landing page is served at ``/pact``. Pass
+``--enable-workspace`` to also serve the browser workspace at ``/pact/web``.
 
 Registry administrators
 -----------------------
 
-A PACT registry administrator is a PACT signing identity whose public JWK is
-loaded by the server at startup. It is not created by ``pact registry init``,
-and it is not the same thing as a Cognito user. ``pact registry init`` creates
-registry certificate-authority material. Admin identities are created and kept
-separately, then their public JWK files are passed to ``pact registry serve``
-or the local ``pact web`` command.
+A registry administrator is a PACT identity whose public JWK is loaded at
+startup. Admins are not created by ``pact registry init``; they are separate
+identities that authorize elevated operations such as approving hosted-account
+trust tiers and resolving disputes.
 
-Create one admin identity and write the public JWK file:
+**Create an admin identity and export its public key:**
 
 .. code-block:: bash
 
    pact identity init \
      --registry https://registry.example \
-     --identity-file ./secrets/admin.identity.pem \
+     --identity-file ./secrets/admin.pem \
      --identity-password 'store-this-in-your-password-manager'
 
    pact identity public-jwk \
      --registry https://registry.example \
-     --identity-file ./secrets/admin.identity.pem \
+     --identity-file ./secrets/admin.pem \
      --identity-password 'store-this-in-your-password-manager' \
      --out ./secrets/admin.public.jwk.json
 
-Start the local monolith with that admin:
+**Start the server with the admin key:**
 
 .. code-block:: bash
 
@@ -95,63 +73,28 @@ Start the local monolith with that admin:
      --admin-jwk-file ./secrets/admin.public.jwk.json
 
 Repeat ``--admin-jwk-file`` for each administrator. The server stores only the
-public JWK. The private admin identity stays with the operator and is used by
-commands such as:
+public JWK; the private identity stays with the operator.
+
+Admin actions use the CLI and the private identity:
 
 .. code-block:: bash
 
    pact registry authorize-hosted-account CLAIMANT_KEY_ID \
      --registry https://registry.example \
-     --identity-file ./secrets/admin.identity.pem \
+     --identity-file ./secrets/admin.pem \
      --identity-password 'store-this-in-your-password-manager'
-
-For AWS, keep the same boundary: Cognito/API Gateway can authenticate HTTP
-callers at the edge, but PACT admin actions are authorized by the signed
-mutation body and the admin public JWKs configured in the registry service.
-For ``deploy/aws/registry-compute.sam.yaml``, pass ``AdminPublicJwks`` as a
-JSON array:
-
-.. code-block:: bash
-
-   ADMIN_PUBLIC_JWKS="$(
-     python -c 'import json,sys; print(json.dumps([json.load(open(path)) for path in sys.argv[1:]]))' \
-       ./secrets/admin.public.jwk.json
-   )"
-
-   sam deploy \
-     --template-file .aws-sam/build/template.yaml \
-     --parameter-overrides \
-       AdminPublicJwks="$ADMIN_PUBLIC_JWKS"
-
-Multiple admins are just multiple objects in that array. The values are public
-keys, not private key material, but they still control who can perform admin
-registry actions.
 
 Browser workspace
 -----------------
 
-The interactive browser workspace is optional. A registry can serve only the
-JSON API and proof pages, or it can also expose ``/pact``:
+The browser workspace is optional. It runs PACT's Python signing logic in
+Pyodide inside a Web Worker. Signing is local; only signed manifest JSON is
+sent to the registry, not raw file content. Enable it with
+``--enable-workspace`` and open ``/pact/web``.
 
-.. code-block:: bash
-
-   pact registry serve \
-     --registry http://127.0.0.1:8000 \
-     --data-dir .pact-registry \
-     --public-base-url http://127.0.0.1:8000 \
-     --host 127.0.0.1 \
-     --port 8000 \
-     --database :memory \
-     --enable-workspace
-
-The workspace runs PACT's Python logic in Pyodide inside a Web Worker. The
-JavaScript layer is limited to browser plumbing: file input/output, registry
-requests, local browser storage, and page updates. Feature packs are loaded on
-demand so identity, manifest, watermark, probe, C2PA carrier, PDF, and document
-workflows can stay aligned with the CLI without loading every dependency at
-startup.
-
-The workspace can also be hosted without a local registry service:
+You can also host the workspace separately from the registry and point it at a
+remote registry. In this mode, the local process serves only the static
+workspace assets:
 
 .. code-block:: bash
 
@@ -159,81 +102,88 @@ The workspace can also be hosted without a local registry service:
      --remote-registry https://registry.example \
      --port 8000
 
-In this mode the browser sends signed requests directly to the remote registry.
 The remote registry must allow the workspace origin:
 
 .. code-block:: bash
 
    pact registry serve \
      --registry https://registry.example \
-     --data-dir .pact-registry \
+     --data-dir ./registry-data \
      --public-base-url https://registry.example \
+     --database ./registry-data/registry.sqlite3 \
      --cors-allowed-origin http://127.0.0.1:8000
 
-``pact[server]`` installs the registry API/proof-page dependencies.
-``pact[web]`` installs the same server dependencies needed to host the
-interactive workspace. C2PA and PDF/document carrier functionality remain in
-``pact[c2pa]`` and are loaded by the browser workspace as feature packs where
-the runtime supports them.
+The ``pact[server]`` extra installs registry and proof-page dependencies.
+``pact[web]`` adds the assets needed to host the interactive workspace.
+C2PA and image-watermark functionality loads as on-demand feature packs.
 
 Self-hosted documentation
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The web app can also serve prebuilt Sphinx documentation at ``/docs/`` when
-``docs/_build/html/index.html`` is present in the checkout:
+The web app serves prebuilt Sphinx docs at ``/pact/docs/`` when
+``docs/_build/html/index.html`` is present. Build them locally:
 
 .. code-block:: bash
 
    uv run sphinx-build -b html docs docs/_build/html
 
-The registry homepage links to the documentation only when the built HTML is
-available. ``/api/v1/server/info`` also reports ``documentation_url`` for
-deployments that mount the docs.
+AWS serverless
+--------------
 
-AWS serverless runtime
-----------------------
+The AWS deployment runs the same FastAPI application as the monolith in a
+Lambda container with Postgres for storage. Your existing API Gateway, Cognito
+authorizer, DNS, certificates, and load balancer stay in place.
 
-The AWS deployment model uses:
+Architecture:
 
-- one Lambda container running the same FastAPI app as the monolith;
-- externally managed API Gateway, Cognito, and load balancer resources;
-- externally managed gateway/load-balancer rate limiting through AWS WAF;
-- Postgres for registry events and batches;
-- a dedicated high-entropy OPRF server secret, managed separately from the
-  registry CA keys;
-- environment-driven runtime configuration.
+- Lambda container running the PACT FastAPI app
+- Externally managed API Gateway or ALB (not created by the template)
+- Postgres for registry events (RDS, Aurora Serverless, or compatible)
+- AWS WAF for primary rate limiting (see below)
+- Dedicated OPRF server secret, separate from the registry CA keys
 
-``default_routes`` is the open-source route and permission map. It marks
-public routes, claimant-signed mutation routes, and admin routes. Existing API
-Gateway deployments should route ``ANY /`` and ``ANY /{proxy+}`` to the Lambda
-integration so FastAPI remains the source of truth for the monolith and AWS
-surfaces.
+**Build and deploy:**
 
-The running web app exposes the same route map at
-``/api/v1/server/routes`` so operators and clients can discover the public
-URLs and mutation permissions supported by a deployment.
+.. code-block:: bash
 
-Use ``deploy/aws/registry-compute.sam.yaml`` for current AWS deployments. The
-repository does not ship a full-stack API Gateway/Cognito template; those
-resources stay outside the PACT template so FastAPI remains the source of truth
-for the route surface.
-``/api/v1/server/info`` reports the package version and deployed commit hash.
-Set ``PACT_COMMIT_SHA`` during deployment so serverless or container builds do
-not depend on a local ``.git`` directory.
-``/api/v1/inspect`` is public and accepts multipart uploads for signed
-manifest JSON or raw carrier media. It reports embedded references and, when
-the referenced claim exists in the registry, registry verification evidence.
-``/api/v1/recover`` is also public for source-candidate review. Both endpoints
-enforce application upload limits and parsing timeouts; deployments should
-still enforce lower gateway/proxy limits that match their expected workload.
+   sam build --template-file deploy/aws/registry-compute.sam.yaml
+   sam deploy --guided --template-file .aws-sam/build/template.yaml
 
-Avoidance report submission is not anonymous. A caller must have a registered
-profile and sign an ``account_authorization`` request proof. Dispute and report
-reads are public so reviewers can see the issue, total dispute count, and
-reporter credibility context.
+Connect the existing gateway or load balancer to the ``RegistryFunctionArn``
+output. For API Gateway, pass your stage ARN as ``ApiGatewaySourceArn``. For
+ALB Lambda targets, pass the target group ARN as ``LoadBalancerTargetGroupArn``.
 
-The Lambda entrypoint is ``pact.server.lambda_app.lambda_handler``. It expects
-the ``pact[aws]`` optional dependencies and these environment variables:
+**Pass admin keys at deploy time:**
+
+.. code-block:: bash
+
+   ADMIN_PUBLIC_JWKS="$(python -c 'import json,sys; print(json.dumps([json.load(open(p)) for p in sys.argv[1:]]))' ./secrets/admin.public.jwk.json)"
+
+   sam deploy \
+     --template-file .aws-sam/build/template.yaml \
+     --parameter-overrides AdminPublicJwks="$ADMIN_PUBLIC_JWKS"
+
+**Attach WAF rate limits** to your existing API Gateway stage or ALB:
+
+.. code-block:: bash
+
+   aws cloudformation deploy \
+     --template-file deploy/aws/gateway-rate-limit.yaml \
+     --stack-name pact-rate-limits \
+     --parameter-overrides ApiGatewayStageArn=arn:aws:execute-api:...
+
+The WAF template is the **primary rate-limiting control** for Lambda
+deployments. The in-process rate limiter does not coordinate across concurrent
+Lambda execution environments; it is defense-in-depth only.
+
+Note: ``deploy/aws/registry.sam.yaml`` is a legacy partial example. Use
+``registry-compute.sam.yaml`` for all new deployments.
+
+Environment variables
+~~~~~~~~~~~~~~~~~~~~~
+
+The Lambda entrypoint (``pact.server.lambda_app.lambda_handler``) is configured
+entirely via environment variables:
 
 .. code-block:: bash
 
@@ -249,100 +199,57 @@ the ``pact[aws]`` optional dependencies and these environment variables:
    PACT_ROOT_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_CERTIFICATE_PEM=...
    PACT_INTERMEDIATE_PRIVATE_KEY_PEM=...
-   PACT_OPRF_SERVER_SECRET=...
+   PACT_OPRF_SERVER_SECRET=...          # high-entropy, separate from CA keys
    PACT_ADMIN_PUBLIC_JWKS='[{"kty":"EC","crv":"P-256","x":"...","y":"..."}]'
    PACT_ALLOWED_HOSTS=registry.example
    PACT_CORS_ORIGINS=https://workspace.example
-   PACT_COMMIT_SHA=...
+   PACT_COMMIT_SHA=...                  # set during build; avoids needing .git at runtime
 
-The repository includes a Lambda container package at
-``services/lambdas/registry/Dockerfile`` and a compute-only SAM template at
-``deploy/aws/registry-compute.sam.yaml``. That template creates the Lambda
-runtime and optional invoke permissions for an existing API Gateway or ALB. It
-does not create API Gateway, Cognito, DNS, certificates, or the load balancer.
+``PACT_COMMIT_SHA`` is reported at ``/pact/api/v1/server/info`` and is useful for
+confirming which build is running without SSH access.
 
-Use ``deploy/aws/gateway-rate-limit.yaml`` to attach a regional WAF WebACL to
-an existing API Gateway stage ARN, an existing ALB ARN, or both. It includes a
-global IP rate limit, a lower mutation-route IP rate limit, and AWS managed
-common and known-bad-input rule groups. This is required for AWS Lambda
-deployments because the in-process limiter is only a defense-in-depth fallback
-and does not coordinate across concurrent Lambda execution environments.
-The same limitation applies to multi-worker ``uvicorn`` or container
-deployments: each worker has its own in-memory limiter, so production rate
-limits must live at the gateway, load balancer, WAF, or another shared layer.
+Route map
+~~~~~~~~~
 
-Build and deploy from the repository root:
+The route and permission map is self-documenting at runtime:
 
 .. code-block:: bash
 
-   sam build --template-file deploy/aws/registry-compute.sam.yaml
-   sam deploy --guided --template-file .aws-sam/build/template.yaml
+   curl https://registry.example/pact/api/v1/server/routes
 
-Then configure the existing gateway/load balancer to invoke the
-``RegistryFunctionArn`` output. For API Gateway, grant the template an
-``ApiGatewaySourceArn`` such as ``arn:aws:execute-api:REGION:ACCOUNT:API/*/*/*``
-or add equivalent invoke permission yourself. For ALB Lambda targets, pass the
-target group ARN as ``LoadBalancerTargetGroupArn`` or add equivalent invoke
-permission yourself.
+Public routes (no authentication required): registry metadata, server info,
+inspection/recovery, challenges, the OPRF endpoint, the ``/pact`` landing page,
+public proof pages under ``/pact``, profile evidence, claim data, public
+disputes and reports.
 
-The SAM deployment expects an existing Postgres DSN and existing certificate
-material. The template keeps those values as parameters so operators can wire
-in RDS, Aurora Serverless, or another managed Postgres endpoint without
-changing application code.
+Mutation routes require a signed mutation request. Admin routes additionally
+require the admin identity signature.
 
 Deployment checklist
-~~~~~~~~~~~~~~~~~~~~
+--------------------
 
-Before treating a registry as public, confirm:
+Before treating a registry as public, verify:
 
-- the API Gateway or ALB forwards ``ANY /`` and ``ANY /{proxy+}`` to the Lambda;
-- the Cognito authorizer, if used, matches the route scopes from
-  ``/api/v1/server/routes``;
-- public routes are intentionally public, including registry metadata,
-  inspection/recovery, challenges, proof pages, public dispute/report reads,
-  and the device-binding OPRF endpoint;
-- mutation routes require signed mutation requests and, where applicable,
-  gateway authorization;
-- report submissions require a signed registered-profile proof;
-- AWS WAF rate limiting is attached to the API Gateway stage ARN, ALB ARN, or
-  both;
-- CORS origins and allowed hosts are exact deployment values, not wildcards;
-- forwarding headers are stripped and rewritten by the gateway/load balancer,
-  and the app trusts them only from configured proxy peers;
-- upload and request logs do not retain private claim content unnecessarily;
-- registry CA material comes from your secret manager and is not baked into an
-  image or template;
-- database backups, retention, and dispute handling are documented for users.
+- API Gateway or ALB routes ``ANY /`` and ``ANY /{proxy+}`` to the Lambda
+- Cognito authorizer scopes (if used) match the route map at
+  ``/pact/api/v1/server/routes``
+- Public routes are intentionally accessible, including the OPRF endpoint,
+  inspection, and public proof pages
+- AWS WAF rate limiting is attached to the API Gateway stage ARN or ALB ARN
+- ``PACT_CORS_ORIGINS`` and ``PACT_ALLOWED_HOSTS`` are exact deployment values,
+  not wildcards
+- Forwarding headers are stripped and rewritten by the gateway; the app trusts
+  them only from configured proxy peers
+- Upload and inspection logs do not retain private claim content
+- Registry CA material comes from a secret manager and is not baked into an
+  image or template
+- ``PACT_OPRF_SERVER_SECRET`` is set to a dedicated secret separate from CA keys
+- Database backups, retention, and CA key rotation procedures are documented
 
-Validation commands:
+Validate templates and tests:
 
 .. code-block:: bash
 
    uv run cfn-lint deploy/aws/registry-compute.sam.yaml deploy/aws/gateway-rate-limit.yaml
    uv run python -m pytest tests -q
    uv run sphinx-build -W -b html docs docs/_build/html
-
-Privacy and publication boundary
---------------------------------
-
-The browser workspace signs content locally and sends only signed manifest
-JSON to the registry. It does not upload raw plaintext or binary file content
-when publishing a claim. Browser/device fingerprinting is used only as a local
-device-continuity signal. Before registration, the browser derives
-``HMAC(local_secret, registry_root_fingerprint || browser_fingerprint)`` and
-uses a blinded OPRF request to obtain a private, registry-scoped
-``pact-device-binding-v2`` token. WebAuthn PRF is the preferred browser local
-secret source when available; the profile passcode is the normal fallback. The
-CLI uses the same token format while keeping raw hardware-derived material
-local.
-
-Every claimant profile must include this token to qualify for the baseline
-``unauthenticated_device`` tier. It is not an elevated trust label and it is not
-proof of a unique person. It is the minimum device-continuity proof the registry
-accepts for a profile.
-
-Public profile responses and proof pages omit the stored token.
-
-Plain-text carrier embeddings include a PACT legal notice in the visible proof
-block. Carrier extraction strips that notice before returning the signed
-content body, so verification continues to cover the user-selected content.
