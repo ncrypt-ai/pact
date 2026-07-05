@@ -681,7 +681,7 @@ function renderClaim(target, claim, disputes = []) {
 }
 
 function renderDisputes(target, disputes) {
-  renderList(
+  const element = renderList(
     target,
     "Disputes",
     disputes.map((dispute) => [
@@ -695,6 +695,49 @@ function renderDisputes(target, disputes) {
     ]),
     "No disputes found."
   );
+  for (const dispute of disputes) {
+    if (dispute.status !== "open") {
+      continue;
+    }
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const uphold = document.createElement("button");
+    uphold.type = "button";
+    uphold.textContent = "Uphold dispute";
+    uphold.onclick = () => resolveDisputeFromUi(target, dispute, "upheld");
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.textContent = "Reject dispute";
+    reject.onclick = () => resolveDisputeFromUi(target, dispute, "rejected");
+    actions.append(uphold, reject);
+    element.append(actions);
+  }
+}
+
+function resolveDisputeFromUi(target, dispute, status) {
+  run(async () => {
+    const resolutionNote = window.prompt("Resolution note");
+    if (!resolutionNote || !resolutionNote.trim()) {
+      throw new Error("Enter a resolution note.");
+    }
+    const request = await signedMutation(
+      "dispute_resolution",
+      {
+        status,
+        resolution_note: resolutionNote.trim()
+      },
+      requireIdentity().key_id
+    );
+    const resolved = await registryJson(
+      `/pact/api/v1/disputes/${dispute.dispute_id}/resolve`,
+      {
+        method: "POST",
+        body: JSON.stringify(request)
+      }
+    );
+    renderDisputes(target, [resolved]);
+    message("Dispute resolved.");
+  });
 }
 
 function claimIdFromInspection(result) {
