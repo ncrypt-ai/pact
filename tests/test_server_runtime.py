@@ -79,7 +79,7 @@ def test_aws_lambda_route_metadata_maps_auth_and_scopes() -> None:
 
     assert route_by_name["registry_info"].auth is RouteAuth.PUBLIC
     assert route_by_name["registry_info"].cognito_scope is None
-    assert route_by_name["server_routes"].path == "/api/v1/server/routes"
+    assert route_by_name["server_routes"].path == "/pact/api/v1/server/routes"
     assert route_by_name["register_claim"].lambda_name == "pact-register-claim"
     assert route_by_name["register_claim"].cognito_scope == "pact/claims:write"
     assert route_by_name["resolve_dispute"].auth is RouteAuth.ADMIN

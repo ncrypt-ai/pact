@@ -55,6 +55,8 @@ class CredentialBackend(Protocol):
         self, service: str, username: str, password: str
     ) -> None: ...
 
+    def delete_password(self, service: str, username: str) -> None: ...
+
 
 def _default_device_binding_dir() -> Path:
     configured = os.getenv("PACT_DEVICE_BINDING_DIR")
@@ -584,6 +586,16 @@ class EncryptedFileIdentityStore:
             password,
         )
 
+    def delete(self, registry_url: str) -> bool:
+        """Remove the encrypted identity file for a registry."""
+
+        path = self._path(registry_url)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
 
 class KeyringIdentityStore:
     """Claimant identity storage backed by the operating-system keyring."""
@@ -606,6 +618,27 @@ class KeyringIdentityStore:
     def _account(registry_url: str) -> str:
         normalized = normalize_registry_url(registry_url)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def target(self, registry_url: str) -> str:
+        """Return a non-secret label for the keyring entry."""
+
+        return f"{self.service}:{self._account(registry_url)}"
+
+    def exists(self, registry_url: str) -> bool:
+        """Return whether a registry identity is present in the keyring."""
+
+        try:
+            return (
+                self.backend.get_password(
+                    self.service,
+                    self._account(registry_url),
+                )
+                is not None
+            )
+        except Exception as error:
+            raise IdentityStorageError(
+                "OS credential lookup failed"
+            ) from error
 
     def save(self, identity: ClaimantIdentity) -> None:
         """Save an unencrypted PEM inside the protected OS credential store."""
@@ -653,3 +686,17 @@ class KeyringIdentityStore:
                 "stored claimant identity is not an EC key"
             )
         return ClaimantIdentity(registry_url, key)
+
+    def delete(self, registry_url: str) -> bool:
+        """Remove the registry identity from the keyring."""
+
+        account = self._account(registry_url)
+        try:
+            if self.backend.get_password(self.service, account) is None:
+                return False
+            self.backend.delete_password(self.service, account)
+        except Exception as error:
+            raise IdentityStorageError(
+                "OS credential deletion failed"
+            ) from error
+        return True

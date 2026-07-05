@@ -34,6 +34,7 @@ from pact.identity import (
     EncryptedFileIdentityStore,
     IdentityError,
     IdentityNotFoundError,
+    IdentityStorageError,
     KeyringIdentityStore,
     LocalDeviceBindingStore,
     normalize_registry_url,
@@ -294,7 +295,7 @@ def _request_file(
 
 
 def _registry_info(registry_url: str) -> dict[str, object]:
-    return _request_json(registry_url, "/api/v1/registry")
+    return _request_json(registry_url, "/pact/api/v1/registry")
 
 
 def _registry_root_fingerprint(args: argparse.Namespace) -> str:
@@ -313,7 +314,7 @@ def _registry_root_fingerprint(args: argparse.Namespace) -> str:
         )
     if not isinstance(value, str):
         raise SystemExit(
-            f"{registry_url}/api/v1/registry did not include root_fingerprint"
+            f"{registry_url}/pact/api/v1/registry did not include root_fingerprint"
         )
     return value
 
@@ -322,7 +323,7 @@ def _profile_public_jwk(
     registry_url: str,
     key_id: str,
 ) -> dict[str, object]:
-    profile = _request_json(registry_url, f"/api/v1/profiles/{key_id}")
+    profile = _request_json(registry_url, f"/pact/api/v1/profiles/{key_id}")
     public_jwk = profile.get("public_jwk")
     if not isinstance(public_jwk, dict):
         raise SystemExit("registry profile did not include public_jwk")
@@ -383,7 +384,7 @@ def _profile_auth_headers(
     challenge = _challenge_from_response(
         _request_json(
             registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.ACCOUNT_AUTHORIZATION.value,
                 "bound_key_id": identity.key_id,
@@ -435,7 +436,7 @@ def _registry_device_binding_token(
     root_fingerprint = info.get("root_fingerprint")
     if not isinstance(root_fingerprint, str):
         raise SystemExit(
-            f"{registry_url}/api/v1/registry did not include root_fingerprint"
+            f"{registry_url}/pact/api/v1/registry did not include root_fingerprint"
         )
     local_input = binding_store.private_binding_input(
         registry_url,
@@ -446,7 +447,7 @@ def _registry_device_binding_token(
             local_input=local_input,
             evaluator=lambda point: _request_json(
                 registry_url,
-                "/api/v1/device-bindings/oprf",
+                "/pact/api/v1/device-bindings/oprf",
                 payload=dict(point),
             ),
         )
@@ -637,16 +638,21 @@ def _existing_registry_teardown_targets(
     device_binding_files: list[str] = []
     if binding_store.load(registry_url) is not None:
         device_binding_files.append(str(binding_store.path(registry_url)))
+    keyring_identities: list[str] = []
+    keyring_store = KeyringIdentityStore()
+    if keyring_store.exists(registry_url):
+        keyring_identities.append(keyring_store.target(registry_url))
     return {
         "ca_files": ca_files,
         "database_files": database_files,
         "device_binding_files": device_binding_files,
+        "keyring_identities": keyring_identities,
     }
 
 
 def _browser_cleanup_url(registry_url: str) -> str:
     return (
-        f"{registry_url}/workspace?"
+        f"{registry_url}/pact/web?"
         f"teardown_registry={quote(registry_url, safe='')}"
     )
 
@@ -709,6 +715,8 @@ def _cmd_registry_teardown(args: argparse.Namespace) -> int:
         )
     except DeviceBindingError as error:
         raise _device_binding_error(error) from error
+    except IdentityStorageError as error:
+        raise SystemExit(str(error)) from error
     _confirm_registry_teardown(
         args,
         registry_url=registry_url,
@@ -721,6 +729,7 @@ def _cmd_registry_teardown(args: argparse.Namespace) -> int:
         "ca_files": [],
         "database_files": [],
         "device_binding_files": [],
+        "keyring_identities": [],
     }
     for path in _authority_paths(data_dir).values():
         try:
@@ -747,6 +756,14 @@ def _cmd_registry_teardown(args: argparse.Namespace) -> int:
             removed["device_binding_files"].append(str(binding_path))
     except DeviceBindingError as error:
         raise _device_binding_error(error) from error
+
+    try:
+        keyring_store = KeyringIdentityStore()
+        keyring_target = keyring_store.target(registry_url)
+        if keyring_store.delete(registry_url):
+            removed["keyring_identities"].append(keyring_target)
+    except IdentityStorageError as error:
+        raise SystemExit(str(error)) from error
 
     print(
         _serialize_json(
@@ -910,8 +927,9 @@ def _import_source_identity(
     if not isinstance(data, dict):
         raise SystemExit("identity recovery JSON must be an object")
     registry_value = cast(str | None, getattr(args, "registry", None))
-    registry_source = registry_value or os.getenv("PACT_REGISTRY_URL")
-    if registry_source is None:
+    if registry_value:
+        registry_source = registry_value
+    else:
         imported_registry = data.get("registry_url")
         if not isinstance(imported_registry, str):
             raise SystemExit(
@@ -1155,7 +1173,7 @@ def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.PROFILE_REGISTRATION.value,
                 "difficulty": args.difficulty,
@@ -1164,7 +1182,7 @@ def _cmd_registry_register_profile(args: argparse.Namespace) -> int:
     )
     profile = _request_json(
         identity.registry_url,
-        "/api/v1/profiles",
+        "/pact/api/v1/profiles",
         payload=_signed_mutation_body(identity, challenge, payload),
     )
     print(_serialize_json(profile))
@@ -1186,7 +1204,7 @@ def _cmd_registry_register_claim(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.CLAIM_REGISTRATION.value,
                 "difficulty": args.difficulty,
@@ -1196,7 +1214,7 @@ def _cmd_registry_register_claim(args: argparse.Namespace) -> int:
     )
     claim = _request_json(
         identity.registry_url,
-        "/api/v1/claims",
+        "/pact/api/v1/claims",
         payload=_signed_mutation_body(
             identity,
             challenge,
@@ -1235,7 +1253,7 @@ def _cmd_registry_verify_domain(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.DOMAIN_VERIFICATION.value,
                 "difficulty": args.difficulty,
@@ -1245,7 +1263,7 @@ def _cmd_registry_verify_domain(args: argparse.Namespace) -> int:
     )
     profile = _request_json(
         identity.registry_url,
-        "/api/v1/domains/verify",
+        "/pact/api/v1/domains/verify",
         payload=_signed_mutation_body(
             identity,
             challenge,
@@ -1270,7 +1288,7 @@ def _cmd_registry_authorize_hosted_account(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.ACCOUNT_AUTHORIZATION.value,
                 "difficulty": args.difficulty,
@@ -1280,7 +1298,7 @@ def _cmd_registry_authorize_hosted_account(args: argparse.Namespace) -> int:
     )
     profile = _request_json(
         identity.registry_url,
-        f"/api/v1/profiles/{target_key_id}/hosted-authorize",
+        f"/pact/api/v1/profiles/{target_key_id}/hosted-authorize",
         payload=_signed_mutation_body(identity, challenge, payload),
     )
     print(_serialize_json(profile))
@@ -1296,7 +1314,7 @@ def _cmd_registry_complete_hosted_login(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION.value,
                 "difficulty": args.difficulty,
@@ -1306,7 +1324,7 @@ def _cmd_registry_complete_hosted_login(args: argparse.Namespace) -> int:
     )
     profile = _request_json(
         identity.registry_url,
-        "/api/v1/profiles/me/hosted-login",
+        "/pact/api/v1/profiles/me/hosted-login",
         payload=_signed_mutation_body(identity, challenge, payload),
     )
     print(_serialize_json(profile))
@@ -1325,7 +1343,7 @@ def _cmd_registry_attest_third_party(args: argparse.Namespace) -> int:
     challenge = _challenge_from_response(
         _request_json(
             identity.registry_url,
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             payload={
                 "purpose": ChallengePurpose.THIRD_PARTY_ATTESTATION.value,
                 "difficulty": args.difficulty,
@@ -1335,7 +1353,7 @@ def _cmd_registry_attest_third_party(args: argparse.Namespace) -> int:
     )
     profile = _request_json(
         identity.registry_url,
-        f"/api/v1/profiles/{target_key_id}/third-party-attest",
+        f"/pact/api/v1/profiles/{target_key_id}/third-party-attest",
         payload=_signed_mutation_body(identity, challenge, payload),
     )
     print(_serialize_json(profile))
@@ -1356,7 +1374,7 @@ def _cmd_recover(args: argparse.Namespace) -> int:
     mime_type = cast(str | None, args.mime_type) or _infer_mime_type(target)
     result = _request_file(
         registry_url,
-        "/api/v1/recover",
+        "/pact/api/v1/recover",
         file_path=target,
         mime_type=mime_type,
     )
@@ -1396,13 +1414,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
         )
     result = _request_json(
         registry_url,
-        "/api/v1/reports/avoidance",
+        "/pact/api/v1/reports/avoidance",
         payload=payload,
         headers=_profile_auth_headers(
             registry_url,
             identity,
             method="POST",
-            path="/api/v1/reports/avoidance",
+            path="/pact/api/v1/reports/avoidance",
             body=payload,
         ),
     )
@@ -1934,7 +1952,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--registry-root-fingerprint",
         help=(
             "Expected registry root certificate fingerprint. Usually omitted; "
-            "the CLI fetches it from /api/v1/registry."
+            "the CLI fetches it from /pact/api/v1/registry."
         ),
     )
     sign.add_argument(
@@ -2438,9 +2456,10 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=HelpFormatter,
         help="Delete persistent local state for one registry.",
         description=(
-            "Delete local CA/OPRF material, SQLite registry records, and the "
-            "local device binding for one registry. The command prints the "
-            "planned deletions and requires two confirmations."
+            "Delete local CA/OPRF material, SQLite registry records, the "
+            "local device binding, and the keyring identity for one registry. "
+            "The command prints the planned deletions and requires two "
+            "confirmations."
         ),
     )
     teardown.add_argument(
