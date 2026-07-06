@@ -5,6 +5,8 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+**Production site:** [https://ncryptai.com/pact](https://ncryptai.com/pact)
+
 **Policy Authenticated Content Token** — a toolkit for signing content claims,
 attaching them to files, and verifying them against a trust registry.
 
@@ -318,7 +320,6 @@ uv run ruff format --check .
 uv run ruff check .
 uv run ty check
 uv run python -m pytest tests -q
-uv run cfn-lint deploy/aws/registry-compute.sam.yaml deploy/aws/gateway-rate-limit.yaml
 uv run sphinx-build -W -b html docs docs/_build/html
 uv build
 ```

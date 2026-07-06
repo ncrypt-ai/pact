@@ -221,9 +221,10 @@ The HTTP layer enforces:
 - Trusted-proxy CIDR validation before trusting forwarded IP headers
 
 **Multi-instance note:** the in-process rate limiter does not coordinate across
-multiple processes or Lambda execution environments. AWS deployments must attach
-WAF rate limiting via ``deploy/aws/gateway-rate-limit.yaml``. See
-:doc:`server <server>` for the full deployment checklist.
+multiple processes or Lambda execution environments. AWS deployments should use
+AWS WAF, API Gateway throttling, or another edge-level rate limiter as the
+primary traffic control. See :doc:`server <server>` for the full deployment
+checklist.
 
 C2PA trust boundary
 --------------------

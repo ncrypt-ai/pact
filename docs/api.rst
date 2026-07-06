@@ -188,9 +188,6 @@ Server
 .. automodule:: pact.server.config
    :members:
 
-.. automodule:: pact.server.aws
-   :members:
-
 .. automodule:: pact.server.runtime
    :members:
 

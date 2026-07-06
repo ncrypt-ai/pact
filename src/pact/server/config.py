@@ -48,6 +48,8 @@ class CognitoAuthorizerConfig:
     app_client_id: str
     region: str
     issuer: str | None = None
+    hosted_ui_domain: str | None = None
+    callback_url: str | None = None
 
     def to_dict(self) -> dict[str, str]:
         """Serialize Cognito authorizer settings."""
@@ -59,6 +61,10 @@ class CognitoAuthorizerConfig:
         }
         if self.issuer is not None:
             result["issuer"] = self.issuer
+        if self.hosted_ui_domain is not None:
+            result["hosted_ui_domain"] = self.hosted_ui_domain
+        if self.callback_url is not None:
+            result["callback_url"] = self.callback_url
         return result
 
 
@@ -416,6 +422,8 @@ def _cognito_from_env() -> CognitoAuthorizerConfig | None:
         app_client_id=app_client_id,
         region=region,
         issuer=os.getenv("PACT_COGNITO_ISSUER"),
+        hosted_ui_domain=os.getenv("PACT_COGNITO_HOSTED_UI_DOMAIN"),
+        callback_url=os.getenv("PACT_COGNITO_CALLBACK_URL"),
     )
 
 

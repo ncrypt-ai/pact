@@ -1,6 +1,5 @@
 """Server runtime configuration exports."""
 
-from pact.server.aws import AwsLambdaRoute, aws_lambda_routes
 from pact.server.config import (
     AuthProvider,
     CognitoAuthorizerConfig,
@@ -17,7 +16,6 @@ from pact.server.runtime import create_registry_store
 
 __all__ = [
     "AuthProvider",
-    "AwsLambdaRoute",
     "CognitoAuthorizerConfig",
     "DeploymentMode",
     "LogFormat",
@@ -27,7 +25,6 @@ __all__ = [
     "RuntimeConfig",
     "SecurityProfile",
     "StoreBackend",
-    "aws_lambda_routes",
     "configure_logging",
     "create_registry_store",
     "default_routes",
