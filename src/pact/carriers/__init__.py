@@ -1,57 +1,31 @@
 """Public carrier exports for text, structured, and C2PA assets."""
 
-from pact.carriers.c2pa import (
-    C2paAsset,
-    C2paError,
-    C2paReadResult,
-    C2paSignerMaterial,
-    ExternalManifestReference,
-    build_c2pa_manifest_definition,
-    build_external_manifest_reference,
-    c2pa_pdf_embedding_supported,
-    c2pa_supported_builder_mime_types,
-    c2pa_supported_embedded_document_mime_types,
-    c2pa_supported_embedded_image_mime_types,
-    c2pa_supported_reader_mime_types,
-    embed_c2pa_image,
-    embed_c2pa_manifest_in_pdf,
-    embed_c2pa_manifest_in_zip_document,
-    extract_c2pa_manifest_from_pdf,
-    extract_c2pa_manifest_from_zip_document,
-    pdf_external_manifest_reference,
-    read_c2pa_asset,
-    sign_c2pa_document,
-    sign_c2pa_manifest_store,
-)
-from pact.carriers.structured import (
-    PACT_XML_NAMESPACE,
-    StructuredCarrierExtraction,
-    embed_html_carrier,
-    embed_xml_carrier,
-    extract_html_carrier,
-    extract_xml_carrier,
-)
-from pact.carriers.text import (
-    CarrierError,
-    CarrierMode,
-    InvisibleLocator,
-    TextCarrierExtraction,
-    embed_text_carrier,
-    extract_text_carrier,
-)
+from importlib import import_module
 
-__all__ = [
+_TEXT_EXPORTS = {
     "CarrierError",
     "CarrierMode",
+    "InvisibleLocator",
+    "TextCarrierExtraction",
+    "embed_text_carrier",
+    "extract_text_carrier",
+}
+
+_STRUCTURED_EXPORTS = {
+    "PACT_XML_NAMESPACE",
+    "StructuredCarrierExtraction",
+    "embed_html_carrier",
+    "embed_xml_carrier",
+    "extract_html_carrier",
+    "extract_xml_carrier",
+}
+
+_C2PA_EXPORTS = {
     "C2paAsset",
     "C2paError",
     "C2paReadResult",
     "C2paSignerMaterial",
     "ExternalManifestReference",
-    "InvisibleLocator",
-    "PACT_XML_NAMESPACE",
-    "StructuredCarrierExtraction",
-    "TextCarrierExtraction",
     "build_c2pa_manifest_definition",
     "build_external_manifest_reference",
     "c2pa_pdf_embedding_supported",
@@ -62,19 +36,13 @@ __all__ = [
     "embed_c2pa_image",
     "embed_c2pa_manifest_in_pdf",
     "embed_c2pa_manifest_in_zip_document",
-    "embed_html_carrier",
-    "embed_text_carrier",
-    "embed_xml_carrier",
     "extract_c2pa_manifest_from_pdf",
     "extract_c2pa_manifest_from_zip_document",
     "pdf_external_manifest_reference",
     "read_c2pa_asset",
     "sign_c2pa_document",
     "sign_c2pa_manifest_store",
-    "extract_html_carrier",
-    "extract_text_carrier",
-    "extract_xml_carrier",
-]
+}
 
 _C2PA_TEXT_EXPORTS = {
     "C2paTextAsset",
@@ -97,14 +65,22 @@ _C2PA_TEXT_EXPORTS = {
     "validate_c2pa_text_manifest_store",
 }
 
-__all__.extend(sorted(_C2PA_TEXT_EXPORTS))
+_EXPORT_MODULES = {
+    **dict.fromkeys(_TEXT_EXPORTS, "pact.carriers.text"),
+    **dict.fromkeys(_STRUCTURED_EXPORTS, "pact.carriers.structured"),
+    **dict.fromkeys(_C2PA_EXPORTS, "pact.carriers.c2pa"),
+    **dict.fromkeys(_C2PA_TEXT_EXPORTS, "pact.carriers.c2pa_text"),
+}
+
+__all__ = sorted(_EXPORT_MODULES)
 
 
 def __getattr__(name: str) -> object:
-    """Load optional C2PA text exports when requested."""
+    """Load carrier exports only when the caller requests them."""
 
-    if name in _C2PA_TEXT_EXPORTS:
-        from pact.carriers import c2pa_text
-
-        return getattr(c2pa_text, name)
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is not None:
+        value = getattr(import_module(module_name), name)
+        globals()[name] = value
+        return value
     raise AttributeError(name)

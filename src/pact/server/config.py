@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -47,9 +48,11 @@ class CognitoAuthorizerConfig:
     app_client_id: str
     region: str
     issuer: str | None = None
+    hosted_ui_domain: str | None = None
+    callback_url: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible Cognito authorizer config."""
+        """Serialize Cognito authorizer settings."""
 
         result = {
             "user_pool_id": self.user_pool_id,
@@ -58,6 +61,10 @@ class CognitoAuthorizerConfig:
         }
         if self.issuer is not None:
             result["issuer"] = self.issuer
+        if self.hosted_ui_domain is not None:
+            result["hosted_ui_domain"] = self.hosted_ui_domain
+        if self.callback_url is not None:
+            result["callback_url"] = self.callback_url
         return result
 
 
@@ -71,7 +78,7 @@ class SecurityProfile:
     cognito: CognitoAuthorizerConfig | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible security profile."""
+        """Serialize deployment security settings."""
 
         return {
             "auth_provider": self.auth_provider.value,
@@ -95,7 +102,7 @@ class RouteConfig:
     permission: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible route config."""
+        """Serialize one route entry from the public route map."""
 
         return {
             "name": self.name,
@@ -118,6 +125,8 @@ class RuntimeConfig:
     file_store_directory: str | None = None
     sqlite_database: str = ":memory:"
     postgres_dsn: str | None = None
+    oprf_server_secret: str | None = None
+    admin_public_jwks: tuple[dict[str, object], ...] = ()
     security: SecurityProfile = SecurityProfile()
     logging: LoggingConfig = LoggingConfig()
     routes: tuple[RouteConfig, ...] = ()
@@ -144,13 +153,15 @@ class RuntimeConfig:
             file_store_directory=os.getenv("PACT_FILE_STORE_DIRECTORY"),
             sqlite_database=os.getenv("PACT_SQLITE_DATABASE", ":memory:"),
             postgres_dsn=os.getenv("PACT_POSTGRES_DSN"),
+            oprf_server_secret=os.getenv("PACT_OPRF_SERVER_SECRET"),
+            admin_public_jwks=_admin_public_jwks_from_env(),
             security=security,
             logging=LoggingConfig.from_env(),
             routes=default_routes(),
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible runtime config."""
+        """Serialize runtime settings safe for diagnostics."""
 
         return {
             "registry_url": self.registry_url,
@@ -160,6 +171,10 @@ class RuntimeConfig:
             "file_store_directory": self.file_store_directory,
             "sqlite_database": self.sqlite_database,
             "postgres_dsn_configured": self.postgres_dsn is not None,
+            "oprf_server_secret_configured": (
+                self.oprf_server_secret is not None
+            ),
+            "admin_public_jwk_count": len(self.admin_public_jwks),
             "security": self.security.to_dict(),
             "logging": self.logging.to_dict(),
             "routes": [route.to_dict() for route in self.routes],
@@ -170,53 +185,53 @@ def default_routes() -> tuple[RouteConfig, ...]:
     """Return the open route and permission map for the registry API."""
 
     return (
-        RouteConfig("home", "GET", "/", RouteAuth.PUBLIC, "home"),
+        RouteConfig("home", "GET", "/pact", RouteAuth.PUBLIC, "home"),
         RouteConfig(
             "registry_info",
             "GET",
-            "/api/v1/registry",
+            "/pact/api/v1/registry",
             RouteAuth.PUBLIC,
             "registry_info",
         ),
         RouteConfig(
             "server_routes",
             "GET",
-            "/api/v1/server/routes",
+            "/pact/api/v1/server/routes",
             RouteAuth.PUBLIC,
             "server_routes",
         ),
         RouteConfig(
             "server_info",
             "GET",
-            "/api/v1/server/info",
+            "/pact/api/v1/server/info",
             RouteAuth.PUBLIC,
             "server_info",
         ),
         RouteConfig(
             "inspect",
             "POST",
-            "/api/v1/inspect",
+            "/pact/api/v1/inspect",
             RouteAuth.PUBLIC,
             "inspect",
         ),
         RouteConfig(
             "issue_challenge",
             "POST",
-            "/api/v1/challenges",
+            "/pact/api/v1/challenges",
             RouteAuth.PUBLIC,
             "issue_challenge",
         ),
         RouteConfig(
             "device_binding_oprf",
             "POST",
-            "/api/v1/device-bindings/oprf",
+            "/pact/api/v1/device-bindings/oprf",
             RouteAuth.PUBLIC,
             "device_binding_oprf",
         ),
         RouteConfig(
             "register_profile",
             "POST",
-            "/api/v1/profiles",
+            "/pact/api/v1/profiles",
             RouteAuth.CLAIMANT_SIGNATURE,
             "register_profile",
             "profiles:write",
@@ -224,21 +239,21 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "get_profile",
             "GET",
-            "/api/v1/profiles/{key_id}",
+            "/pact/api/v1/profiles/{key_id}",
             RouteAuth.PUBLIC,
             "get_profile",
         ),
         RouteConfig(
             "get_profile_evidence",
             "GET",
-            "/api/v1/profiles/{key_id}/evidence",
+            "/pact/api/v1/profiles/{key_id}/evidence",
             RouteAuth.PUBLIC,
             "get_profile_evidence",
         ),
         RouteConfig(
             "issue_certificate",
             "POST",
-            "/api/v1/certificates",
+            "/pact/api/v1/certificates",
             RouteAuth.CLAIMANT_SIGNATURE,
             "issue_certificate",
             "certificates:write",
@@ -246,7 +261,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "register_claim",
             "POST",
-            "/api/v1/claims",
+            "/pact/api/v1/claims",
             RouteAuth.CLAIMANT_SIGNATURE,
             "register_claim",
             "claims:write",
@@ -254,28 +269,28 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "get_claim",
             "GET",
-            "/api/v1/claims/{claim_id}",
+            "/pact/api/v1/claims/{claim_id}",
             RouteAuth.PUBLIC,
             "get_claim",
         ),
         RouteConfig(
             "list_claim_reports",
             "GET",
-            "/api/v1/claims/{claim_id}/reports",
+            "/pact/api/v1/claims/{claim_id}/reports",
             RouteAuth.PUBLIC,
             "list_claim_reports",
         ),
         RouteConfig(
             "get_claim_spread",
             "GET",
-            "/api/v1/claims/{claim_id}/spread",
+            "/pact/api/v1/claims/{claim_id}/spread",
             RouteAuth.PUBLIC,
             "get_claim_spread",
         ),
         RouteConfig(
             "revoke_claim",
             "POST",
-            "/api/v1/claims/{claim_id}/revoke",
+            "/pact/api/v1/claims/{claim_id}/revoke",
             RouteAuth.CLAIMANT_SIGNATURE,
             "revoke_claim",
             "claims:revoke",
@@ -283,28 +298,29 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "recover_source_candidates",
             "POST",
-            "/api/v1/recover",
+            "/pact/api/v1/recover",
             RouteAuth.PUBLIC,
             "recover_source_candidates",
         ),
         RouteConfig(
             "submit_avoidance_report",
             "POST",
-            "/api/v1/reports/avoidance",
-            RouteAuth.PUBLIC,
+            "/pact/api/v1/reports/avoidance",
+            RouteAuth.CLAIMANT_SIGNATURE,
             "submit_avoidance_report",
+            "reports:write",
         ),
         RouteConfig(
             "get_avoidance_report",
             "GET",
-            "/api/v1/reports/{report_id}",
+            "/pact/api/v1/reports/{report_id}",
             RouteAuth.PUBLIC,
             "get_avoidance_report",
         ),
         RouteConfig(
             "rotate_key",
             "POST",
-            "/api/v1/rotations",
+            "/pact/api/v1/rotations",
             RouteAuth.CLAIMANT_SIGNATURE,
             "rotate_key",
             "profiles:rotate",
@@ -312,7 +328,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "verify_domain",
             "POST",
-            "/api/v1/domains/verify",
+            "/pact/api/v1/domains/verify",
             RouteAuth.CLAIMANT_SIGNATURE,
             "verify_domain",
             "domains:write",
@@ -320,7 +336,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "authorize_hosted_account",
             "POST",
-            "/api/v1/profiles/{key_id}/hosted-authorize",
+            "/pact/api/v1/profiles/{key_id}/hosted-authorize",
             RouteAuth.ADMIN,
             "authorize_hosted_account",
             "profiles:hosted_authorize",
@@ -328,7 +344,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "complete_hosted_account_login",
             "POST",
-            "/api/v1/profiles/me/hosted-login",
+            "/pact/api/v1/profiles/me/hosted-login",
             RouteAuth.CLAIMANT_SIGNATURE,
             "complete_hosted_account_login",
             "profiles:hosted_login",
@@ -336,7 +352,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "attest_third_party_account",
             "POST",
-            "/api/v1/profiles/{key_id}/third-party-attest",
+            "/pact/api/v1/profiles/{key_id}/third-party-attest",
             RouteAuth.CLAIMANT_SIGNATURE,
             "attest_third_party_account",
             "profiles:third_party_attest",
@@ -344,7 +360,7 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "open_dispute",
             "POST",
-            "/api/v1/disputes",
+            "/pact/api/v1/disputes",
             RouteAuth.CLAIMANT_SIGNATURE,
             "open_dispute",
             "disputes:write",
@@ -352,14 +368,14 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "get_dispute",
             "GET",
-            "/api/v1/disputes/{dispute_id}",
+            "/pact/api/v1/disputes/{dispute_id}",
             RouteAuth.PUBLIC,
             "get_dispute",
         ),
         RouteConfig(
             "resolve_dispute",
             "POST",
-            "/api/v1/disputes/{dispute_id}/resolve",
+            "/pact/api/v1/disputes/{dispute_id}/resolve",
             RouteAuth.ADMIN,
             "resolve_dispute",
             "disputes:resolve",
@@ -367,21 +383,21 @@ def default_routes() -> tuple[RouteConfig, ...]:
         RouteConfig(
             "public_profile",
             "GET",
-            "/profiles/{key_id}",
+            "/pact/profiles/{key_id}",
             RouteAuth.PUBLIC,
             "public_profile",
         ),
         RouteConfig(
             "public_claim",
             "GET",
-            "/claims/{claim_id}",
+            "/pact/claims/{claim_id}",
             RouteAuth.PUBLIC,
             "public_claim",
         ),
         RouteConfig(
             "verify_claim_page",
             "GET",
-            "/verify/claim/{claim_id}",
+            "/pact/verify/claim/{claim_id}",
             RouteAuth.PUBLIC,
             "verify_claim_page",
         ),
@@ -406,4 +422,21 @@ def _cognito_from_env() -> CognitoAuthorizerConfig | None:
         app_client_id=app_client_id,
         region=region,
         issuer=os.getenv("PACT_COGNITO_ISSUER"),
+        hosted_ui_domain=os.getenv("PACT_COGNITO_HOSTED_UI_DOMAIN"),
+        callback_url=os.getenv("PACT_COGNITO_CALLBACK_URL"),
     )
+
+
+def _admin_public_jwks_from_env() -> tuple[dict[str, object], ...]:
+    value = os.getenv("PACT_ADMIN_PUBLIC_JWKS")
+    if not value:
+        return ()
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        raise ValueError("PACT_ADMIN_PUBLIC_JWKS must be a JSON array")
+    result: list[dict[str, object]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError("PACT_ADMIN_PUBLIC_JWKS entries must be objects")
+        result.append(dict(item))
+    return tuple(result)

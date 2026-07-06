@@ -18,8 +18,16 @@ from urllib.parse import urlsplit, urlunsplit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from pact.crypto import jwk_thumbprint, public_jwk
+from pact.crypto import (
+    CryptographyError,
+    base64url_decode,
+    base64url_encode,
+    jwk_thumbprint,
+    public_jwk,
+)
 from pact.oprf import device_binding_input
+
+CONTINUITY_SECRET_BYTES = 32
 
 
 class IdentityError(ValueError):
@@ -46,6 +54,8 @@ class CredentialBackend(Protocol):
     def set_password(
         self, service: str, username: str, password: str
     ) -> None: ...
+
+    def delete_password(self, service: str, username: str) -> None: ...
 
 
 def _default_device_binding_dir() -> Path:
@@ -153,11 +163,12 @@ class DeviceIdentityBinding:
     registry_url: str
     device_fingerprint: str
     key_id: str
+    continuity_secret: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible binding record."""
+        """Serialize the local device-to-identity binding."""
 
-        return asdict(self)
+        return {key: value for key, value in asdict(self).items() if value}
 
 
 class LocalDeviceBindingStore:
@@ -171,6 +182,11 @@ class LocalDeviceBindingStore:
         name = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         return self.directory / f"{name}.json"
 
+    def path(self, registry_url: str) -> Path:
+        """Return the local binding path for a registry."""
+
+        return self._path(registry_url)
+
     def fingerprint(self, registry_url: str) -> str:
         """Return a hardware-derived fingerprint scoped to one registry."""
 
@@ -181,6 +197,20 @@ class LocalDeviceBindingStore:
             hashlib.sha256,
         ).hexdigest()
 
+    def new_continuity_secret(self) -> str:
+        return base64url_encode(os.urandom(CONTINUITY_SECRET_BYTES))
+
+    def _profile_fingerprint(self, key_id: str) -> str:
+        return f"profile:{key_id}"
+
+    def _continuity_secret_bytes(self, value: str) -> bytes:
+        try:
+            return base64url_decode(value, length=CONTINUITY_SECRET_BYTES)
+        except CryptographyError as error:
+            raise DeviceBindingError(
+                "local continuity secret must be 32 bytes of base64url"
+            ) from error
+
     def private_binding_input(
         self,
         registry_url: str,
@@ -188,6 +218,15 @@ class LocalDeviceBindingStore:
     ) -> bytes:
         """Return local private input for the registry OPRF token."""
 
+        binding = self.load(registry_url)
+        if binding is not None and binding.continuity_secret:
+            return device_binding_input(
+                local_secret=self._continuity_secret_bytes(
+                    binding.continuity_secret
+                ),
+                registry_root_fingerprint=registry_root_fingerprint,
+                device_fingerprint=self._profile_fingerprint(binding.key_id),
+            )
         return device_binding_input(
             local_secret=_hardware_fingerprint_material(),
             registry_root_fingerprint=registry_root_fingerprint,
@@ -224,11 +263,32 @@ class LocalDeviceBindingStore:
             raise DeviceBindingError(
                 "local device identity binding fields must be strings"
             )
+        continuity_secret = value.get("continuity_secret")
+        if continuity_secret is not None and not isinstance(
+            continuity_secret,
+            str,
+        ):
+            raise DeviceBindingError(
+                "local continuity secret must be a string"
+            )
+        if continuity_secret:
+            self._continuity_secret_bytes(continuity_secret)
         return DeviceIdentityBinding(
             registry_url=registry,
             device_fingerprint=fingerprint,
             key_id=key_id,
+            continuity_secret=continuity_secret,
         )
+
+    def delete(self, registry_url: str) -> bool:
+        """Delete the local binding for a registry, if present."""
+
+        path = self._path(registry_url)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def bind_new_identity(
         self, identity: ClaimantIdentity
@@ -245,6 +305,7 @@ class LocalDeviceBindingStore:
             registry_url=identity.registry_url,
             device_fingerprint=self.fingerprint(identity.registry_url),
             key_id=identity.key_id,
+            continuity_secret=self.new_continuity_secret(),
         )
         self._save(binding)
         return binding
@@ -270,6 +331,7 @@ class LocalDeviceBindingStore:
     def bind_imported_identity(
         self,
         identity: ClaimantIdentity,
+        continuity_secret: str | None = None,
     ) -> DeviceIdentityBinding:
         """Bind an imported identity unless this device is bound elsewhere."""
 
@@ -280,11 +342,28 @@ class LocalDeviceBindingStore:
                 "this registry; rotate the existing identity instead"
             )
         if existing is not None:
+            if (
+                continuity_secret
+                and existing.continuity_secret != continuity_secret
+            ):
+                self._continuity_secret_bytes(continuity_secret)
+                updated = DeviceIdentityBinding(
+                    registry_url=existing.registry_url,
+                    device_fingerprint=existing.device_fingerprint,
+                    key_id=existing.key_id,
+                    continuity_secret=continuity_secret,
+                )
+                self._save(updated)
+                return updated
             return existing
+        if continuity_secret:
+            self._continuity_secret_bytes(continuity_secret)
         binding = DeviceIdentityBinding(
             registry_url=identity.registry_url,
             device_fingerprint=self.fingerprint(identity.registry_url),
             key_id=identity.key_id,
+            continuity_secret=continuity_secret
+            or self.new_continuity_secret(),
         )
         self._save(binding)
         return binding
@@ -309,6 +388,9 @@ class LocalDeviceBindingStore:
             registry_url=current.registry_url,
             device_fingerprint=self.fingerprint(current.registry_url),
             key_id=replacement.key_id,
+            continuity_secret=existing.continuity_secret
+            if existing is not None
+            else self.new_continuity_secret(),
         )
         self._save(binding)
         return binding
@@ -504,6 +586,16 @@ class EncryptedFileIdentityStore:
             password,
         )
 
+    def delete(self, registry_url: str) -> bool:
+        """Remove the encrypted identity file for a registry."""
+
+        path = self._path(registry_url)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
 
 class KeyringIdentityStore:
     """Claimant identity storage backed by the operating-system keyring."""
@@ -526,6 +618,27 @@ class KeyringIdentityStore:
     def _account(registry_url: str) -> str:
         normalized = normalize_registry_url(registry_url)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def target(self, registry_url: str) -> str:
+        """Return a non-secret label for the keyring entry."""
+
+        return f"{self.service}:{self._account(registry_url)}"
+
+    def exists(self, registry_url: str) -> bool:
+        """Return whether a registry identity is present in the keyring."""
+
+        try:
+            return (
+                self.backend.get_password(
+                    self.service,
+                    self._account(registry_url),
+                )
+                is not None
+            )
+        except Exception as error:
+            raise IdentityStorageError(
+                "OS credential lookup failed"
+            ) from error
 
     def save(self, identity: ClaimantIdentity) -> None:
         """Save an unencrypted PEM inside the protected OS credential store."""
@@ -573,3 +686,17 @@ class KeyringIdentityStore:
                 "stored claimant identity is not an EC key"
             )
         return ClaimantIdentity(registry_url, key)
+
+    def delete(self, registry_url: str) -> bool:
+        """Remove the registry identity from the keyring."""
+
+        account = self._account(registry_url)
+        try:
+            if self.backend.get_password(self.service, account) is None:
+                return False
+            self.backend.delete_password(self.service, account)
+        except Exception as error:
+            raise IdentityStorageError(
+                "OS credential deletion failed"
+            ) from error
+        return True

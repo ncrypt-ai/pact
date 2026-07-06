@@ -8,21 +8,21 @@ Registry metadata is public:
 
 .. code-block:: bash
 
-   curl https://registry.example/api/v1/registry
+   curl https://registry.example/pact/api/v1/registry
 
 Inspect a signed manifest or carrier file:
 
 .. code-block:: bash
 
    curl -F file=@work.txt -F mime_type=text/plain \
-     https://registry.example/api/v1/inspect
+     https://registry.example/pact/api/v1/inspect
 
 Fetch public profile and claim state:
 
 .. code-block:: bash
 
-   curl https://registry.example/api/v1/profiles/CLAIMANT_KEY_ID
-   curl https://registry.example/api/v1/claims/CLAIM_ID
+   curl https://registry.example/pact/api/v1/profiles/CLAIMANT_KEY_ID
+   curl https://registry.example/pact/api/v1/claims/CLAIM_ID
 
 State-changing endpoints use signed mutation envelopes. The CLI and browser
 workspace are the safest way to produce those envelopes. Direct integrations
@@ -35,13 +35,23 @@ public OPRF endpoint as part of that derivation:
 
 .. code-block:: bash
 
-   curl -X POST https://registry.example/api/v1/device-bindings/oprf \
+   curl -X POST https://registry.example/pact/api/v1/device-bindings/oprf \
      -H 'content-type: application/json' \
-     -d '{"x":"BASE64URL_P256_X","y":"BASE64URL_P256_Y"}'
+     -d '{"blinded":"BASE64URL_RISTRETTO255_ELEMENT"}'
 
-The OPRF endpoint receives a blinded P-256 point. It should not receive raw
-browser traits, raw hardware values, profile passcodes, or local secret
-material.
+The OPRF endpoint receives a blinded Ristretto255 element evaluated through the
+pure-Python ``oblivious`` package. It should not receive raw browser traits,
+raw hardware values, profile passcodes, or local secret material. The resulting
+token is a private continuity signal for honest clients. It is not, by itself,
+cryptographic proof that a physical browser or device completed the endpoint
+flow.
+
+Avoidance report submissions require a registered profile proof. Direct API
+integrations request an ``account_authorization`` challenge, solve its
+proof-of-work, and sign the canonical request body with the registered profile
+key. The server records the reporter from that signature rather than trusting a
+JSON field. Submitted reports are not public by default; public report listing
+is a separate moderation/publication step.
 
 Public package
 --------------
@@ -176,9 +186,6 @@ Server
 ------
 
 .. automodule:: pact.server.config
-   :members:
-
-.. automodule:: pact.server.aws
    :members:
 
 .. automodule:: pact.server.runtime

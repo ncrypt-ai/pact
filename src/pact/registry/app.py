@@ -2,7 +2,7 @@
 
 import hashlib
 import ipaddress
-import random
+import secrets
 import socket
 import struct
 import threading
@@ -28,9 +28,14 @@ from pact.crypto import (
     sign_es256,
     verify_es256,
 )
+from pact.fingerprints import compare_content_fingerprints
 from pact.identity import ClaimantIdentity, normalize_registry_url
 from pact.manifest import SignedManifest, verify_manifest
-from pact.oprf import device_oprf_server_scalar, evaluate_device_oprf
+from pact.oprf import (
+    DEVICE_BINDING_TOKEN_PREFIX,
+    device_oprf_server_scalar,
+    evaluate_device_oprf,
+)
 from pact.privacy import PrivacyAuditError, audit_registry_claim_payload
 from pact.registry.store import (
     RegistryEvent,
@@ -39,8 +44,6 @@ from pact.registry.store import (
     RegistryStoreError,
 )
 from pact.watermarks.base import TrustMarkLocator
-
-_DEVICE_BINDING_TOKEN_PREFIX = "pact-device-binding-v2."
 
 
 class RegistryError(ValueError):
@@ -91,13 +94,13 @@ def _highest_report_label(
 def _validated_device_binding_token(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise RegistryError("device_fingerprint must be a nonempty string")
-    if not value.startswith(_DEVICE_BINDING_TOKEN_PREFIX):
+    if not value.startswith(DEVICE_BINDING_TOKEN_PREFIX):
         raise RegistryError(
             "device_fingerprint must be a pact-device-binding-v2 token"
         )
     try:
         base64url_decode(
-            value.removeprefix(_DEVICE_BINDING_TOKEN_PREFIX),
+            value.removeprefix(DEVICE_BINDING_TOKEN_PREFIX),
             length=32,
         )
     except ValueError as error:
@@ -335,7 +338,7 @@ def _skip_dns_name(packet: bytes, offset: int) -> int:
 def resolve_dns_txt(name: str, *, timeout: float = 3.0) -> tuple[str, ...]:
     """Resolve TXT records using the system recursive DNS resolvers."""
 
-    query_id = random.randrange(0, 65536)
+    query_id = secrets.randbelow(65536)
     query = (
         struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
         + _dns_name_wire(name)
@@ -502,7 +505,7 @@ class MutationChallenge:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible challenge payload."""
+        """Serialize the challenge issued to a claimant."""
 
         result: dict[str, object] = {
             "registry_url": self.registry_url,
@@ -518,7 +521,7 @@ class MutationChallenge:
         return result
 
     def canonical_bytes(self) -> bytes:
-        """Return the canonical bytes covered by the client signature."""
+        """Canonical bytes covered by the client signature."""
 
         return canonical_json(self.to_dict())
 
@@ -922,6 +925,27 @@ class RegisteredClaim:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaimFingerprintMatch:
+    """Advisory similarity result between a submitted proof and a claim."""
+
+    claim: RegisteredClaim
+    score: float
+    fingerprint_matches: tuple[dict[str, object], ...]
+
+    def to_dict(self) -> dict[str, object]:
+        manifest = self.claim.signed_manifest.manifest
+        return {
+            "claim_id": str(self.claim.claim_id),
+            "claimant_key_id": self.claim.claimant_key_id,
+            "registered_at": self.claim.registered_at.isoformat(),
+            "mime_type": manifest.mime_type,
+            "source_url": manifest.source_url,
+            "score": self.score,
+            "matches": list(self.fingerprint_matches),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class DisputeRecord:
     """A public dispute thread attached to a claim."""
 
@@ -935,6 +959,28 @@ class DisputeRecord:
     resolved_at: datetime | None = None
     resolution_note: str | None = None
     resolved_by_key_id: str | None = None
+
+    def to_public_dict(
+        self,
+        *,
+        claim_dispute_count: int,
+        reporter_credibility: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "dispute_id": str(self.dispute_id),
+            "claim_id": str(self.claim_id),
+            "opened_by_key_id": self.opened_by_key_id,
+            "opened_at": _isoformat(self.opened_at),
+            "reason": self.reason,
+            "misuse_url": self.misuse_url,
+            "status": self.status.value,
+            "resolved_at": None
+            if self.resolved_at is None
+            else _isoformat(self.resolved_at),
+            "resolution_note": self.resolution_note,
+            "claim_dispute_count": claim_dispute_count,
+            "reporter_credibility": reporter_credibility,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -961,12 +1007,16 @@ class AvoidanceReport:
     owner_visible: bool = True
     public_visible: bool = False
 
-    def to_public_dict(self) -> dict[str, object]:
-        """Return the public-safe report summary."""
-
+    def to_public_dict(
+        self,
+        *,
+        reporter_credibility: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         return {
             "report_id": str(self.report_id),
             "claim_id": str(self.claim_id),
+            "reporter_key_id": self.reporter_key_id,
+            "reporter_type": self.reporter_type,
             "observed_domain": self.observed_domain,
             "observed_at": _isoformat(self.observed_at),
             "submitted_at": _isoformat(self.submitted_at),
@@ -974,7 +1024,9 @@ class AvoidanceReport:
             "report_label": self.report_label.value,
             "status": self.status.value,
             "reverse_lookup_score": self.reverse_lookup_score,
+            "description": self.description,
             "public_note": self.public_note,
+            "reporter_credibility": reporter_credibility or {},
         }
 
 
@@ -1007,7 +1059,7 @@ class SpreadSummary:
     highest_confidence: AvoidanceReportLabel | None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible spread summary."""
+        """Serialize public spread-report state."""
 
         return {
             "claim_id": str(self.claim_id),
@@ -1093,6 +1145,28 @@ class EvidenceProfile:
             labels.append(TrustLabel.REVOKED)
         return tuple(labels)
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize evidence with derived public trust fields."""
+
+        return {
+            "key_age_days": self.key_age_days,
+            "active_claim_count": self.active_claim_count,
+            "revoked_claim_count": self.revoked_claim_count,
+            "verified_domains": list(self.verified_domains),
+            "certificate_count": self.certificate_count,
+            "rotation_count": self.rotation_count,
+            "open_disputes": self.open_disputes,
+            "upheld_disputes": self.upheld_disputes,
+            "rejected_disputes": self.rejected_disputes,
+            "hosted_account": self.hosted_account,
+            "device_continuity": self.device_continuity,
+            "hardware_attested": self.hardware_attested,
+            "third_party_attested": self.third_party_attested,
+            "documented_rights": self.documented_rights,
+            "trust_tier": self.trust_tier.value,
+            "trust_labels": [label.value for label in self.trust_labels],
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ClaimVerificationReport:
@@ -1131,8 +1205,37 @@ class ClaimVerificationReport:
             VerificationLabel.CLAIM_VERIFIED_CONTENT_PRIVATE,
         }
 
+    @property
+    def registry_claim_valid(self) -> bool:
+        return (
+            self.registry_included
+            and self.manifest_signature_valid
+            and not self.revoked
+            and not self.errors
+        )
+
+    @property
+    def policy_valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def overall_verdict(self) -> str:
+        if self.revoked:
+            return "revoked"
+        if self.disputed:
+            return "disputed"
+        if not self.manifest_signature_valid:
+            return "signature_invalid"
+        if self.content_binding_valid is True:
+            return "content_verified"
+        if self.content_binding_valid is False:
+            return "content_mismatch"
+        if not self.public_nonce_available:
+            return "private_content_unchecked"
+        return "signature_only"
+
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible verification report."""
+        """Serialize the registry verification report."""
 
         return {
             "claim_id": str(self.claim_id),
@@ -1140,10 +1243,13 @@ class ClaimVerificationReport:
             "trust_tier": self.trust_tier.value,
             "trust_labels": [label.value for label in self.trust_labels],
             "registry_included": self.registry_included,
+            "registry_claim_valid": self.registry_claim_valid,
             "manifest_signature_valid": self.manifest_signature_valid,
             "content_binding_valid": self.content_binding_valid,
             "content_binding_checked": self.content_binding_checked,
             "public_nonce_available": self.public_nonce_available,
+            "policy_valid": self.policy_valid,
+            "overall_verdict": self.overall_verdict,
             "revoked": self.revoked,
             "disputed": self.disputed,
             "open_disputes": self.open_disputes,
@@ -1166,6 +1272,7 @@ class RegistryService:
         admin_public_jwks: tuple[Mapping[str, object], ...] = (),
         dns_txt_resolver: Callable[[str], tuple[str, ...]] = resolve_dns_txt,
         hosted_account_verifier: HostedAccountVerifier | None = None,
+        oprf_server_secret: bytes | None = None,
     ) -> None:
         self.registry_url = normalize_registry_url(registry_url)
         self.store = store
@@ -1178,6 +1285,14 @@ class RegistryService:
         }
         self._dns_txt_resolver = dns_txt_resolver
         self._hosted_account_verifier = hosted_account_verifier
+        self._oprf_server_secret = (
+            oprf_server_secret
+            if oprf_server_secret is not None
+            else hashlib.sha256(
+                b"PACT development OPRF fallback v1\0"
+                + certificate_authority.intermediate_private_key_pem
+            ).digest()
+        )
 
     def issue_challenge(
         self,
@@ -1216,7 +1331,7 @@ class RegistryService:
         server_scalar = device_oprf_server_scalar(
             registry_url=self.registry_url,
             registry_root_fingerprint=self.certificate_authority.root_fingerprint,
-            server_secret=self.certificate_authority.intermediate_private_key_pem,
+            server_secret=self._oprf_server_secret,
         )
         return evaluate_device_oprf(
             blinded_point,
@@ -1581,7 +1696,7 @@ class RegistryService:
         self,
         claim: RegisteredClaim,
     ) -> bool:
-        """Return whether a claim opted into public spread reporting."""
+        """Check whether a claim opted into public spread reporting."""
 
         return (
             claim.signed_manifest.manifest.content_binding.public_nonce
@@ -1704,6 +1819,48 @@ class RegistryService:
             if claim.claimant_key_id == claimant_key_id
         )
 
+    def find_claim_matches(
+        self,
+        signed_manifest: SignedManifest,
+        *,
+        limit: int = 10,
+    ) -> tuple[ClaimFingerprintMatch, ...]:
+        """Find existing claims with exact or similar public fingerprints."""
+
+        if limit < 1:
+            return ()
+        manifest = signed_manifest.manifest
+        if manifest.registry_url != self.registry_url:
+            raise RegistryError("manifest belongs to a different registry")
+        if not manifest.fingerprints:
+            return ()
+        matches: list[ClaimFingerprintMatch] = []
+        for claim in self._load_claims().values():
+            claim_manifest = claim.signed_manifest.manifest
+            if claim_manifest.claim_id == manifest.claim_id:
+                continue
+            fingerprint_matches = compare_content_fingerprints(
+                claim_manifest.fingerprints,
+                manifest.fingerprints,
+            )
+            if not fingerprint_matches:
+                continue
+            score = max(item.score for item in fingerprint_matches)
+            matches.append(
+                ClaimFingerprintMatch(
+                    claim=claim,
+                    score=round(score, 4),
+                    fingerprint_matches=tuple(
+                        item.to_dict() for item in fingerprint_matches[:5]
+                    ),
+                )
+            )
+        matches.sort(
+            key=lambda item: (item.score, item.claim.registered_at),
+            reverse=True,
+        )
+        return tuple(matches[:limit])
+
     def find_claim_by_watermark_locator(
         self,
         locator: TrustMarkLocator,
@@ -1764,6 +1921,39 @@ class RegistryService:
 
         return tuple(disputes)
 
+    def dispute_reporter_credibility(self, key_id: str) -> dict[str, object]:
+        disputes = [
+            dispute
+            for dispute in self._load_disputes().values()
+            if dispute.opened_by_key_id == key_id
+        ]
+        return {
+            "reporter_key_id": key_id,
+            "submitted_dispute_count": len(disputes),
+            "open_dispute_count": sum(
+                dispute.status is DisputeStatus.OPEN for dispute in disputes
+            ),
+            "upheld_dispute_count": sum(
+                dispute.status is DisputeStatus.UPHELD for dispute in disputes
+            ),
+            "rejected_dispute_count": sum(
+                dispute.status is DisputeStatus.REJECTED
+                for dispute in disputes
+            ),
+        }
+
+    def public_dispute_dict(self, dispute: DisputeRecord) -> dict[str, object]:
+        claim_count = sum(
+            item.claim_id == dispute.claim_id
+            for item in self._load_disputes().values()
+        )
+        return dispute.to_public_dict(
+            claim_dispute_count=claim_count,
+            reporter_credibility=self.dispute_reporter_credibility(
+                dispute.opened_by_key_id
+            ),
+        )
+
     def get_avoidance_report(self, report_id: UUID) -> AvoidanceReport:
         """Return one possible provenance avoidance report."""
 
@@ -1773,11 +1963,22 @@ class RegistryService:
         except KeyError as error:
             raise RegistryError("avoidance report does not exist") from error
 
+    def public_avoidance_report_dict(
+        self,
+        report: AvoidanceReport,
+    ) -> dict[str, object]:
+        credibility: dict[str, object] = {}
+        if report.reporter_key_id is not None:
+            credibility = self.dispute_reporter_credibility(
+                report.reporter_key_id
+            )
+        return report.to_public_dict(reporter_credibility=credibility)
+
     def list_avoidance_reports(
         self,
         *,
         claim_id: UUID | None = None,
-        public_only: bool = False,
+        public_only: bool = True,
     ) -> tuple[AvoidanceReport, ...]:
         """Return avoidance reports, optionally filtered by claim."""
 
@@ -2194,6 +2395,8 @@ class RegistryService:
     def complete_hosted_account_login(
         self,
         request: MutationRequest,
+        *,
+        verified_hosted_account: Mapping[str, object] | None = None,
     ) -> ClaimantProfile:
         """Record hosted-account evidence from a registry-host login flow."""
 
@@ -2202,30 +2405,47 @@ class RegistryService:
             ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION,
         )
         self.get_profile(request.claimant_key_id)
-        if self._hosted_account_verifier is None:
-            raise RegistryError(
-                "hosted account login verification is not configured"
-            )
-        if not self._hosted_account_verifier(
-            request.claimant_key_id,
-            request.payload,
-        ):
-            raise RegistryError("hosted account login verification failed")
-        provider = request.payload.get("provider")
+        if verified_hosted_account is None:
+            hosted_account_verifier = self._hosted_account_verifier
+            if hosted_account_verifier is None:
+                raise RegistryError(
+                    "hosted account login verification is not configured"
+                )
+            if not hosted_account_verifier(
+                request.claimant_key_id,
+                request.payload,
+            ):
+                raise RegistryError("hosted account login verification failed")
+            hosted_evidence: Mapping[str, object] = {}
+        else:
+            hosted_evidence = verified_hosted_account
+        provider = hosted_evidence.get(
+            "provider", request.payload.get("provider")
+        )
         if provider is not None and not isinstance(provider, str):
             raise RegistryError("provider must be a string")
+        event_payload: dict[str, object] = {
+            "key_id": request.claimant_key_id,
+            "authorized_by_key_id": request.claimant_key_id,
+            "hosted_account": True,
+            "third_party_attested": False,
+            "documented_rights": False,
+            "provider": provider or self.registry_url,
+            "method": "hosted_login",
+        }
+        for field_name in (
+            "issuer",
+            "subject_hash",
+            "client_id",
+            "email_verified",
+        ):
+            value = hosted_evidence.get(field_name)
+            if value is not None:
+                event_payload[field_name] = value
         self._append_event(
             RegistryEventType.ACCOUNT_AUTHORIZED,
             request.claimant_key_id,
-            {
-                "key_id": request.claimant_key_id,
-                "authorized_by_key_id": request.claimant_key_id,
-                "hosted_account": True,
-                "third_party_attested": False,
-                "documented_rights": False,
-                "provider": provider or self.registry_url,
-                "method": "hosted_login",
-            },
+            event_payload,
         )
         return self.get_profile(request.claimant_key_id)
 

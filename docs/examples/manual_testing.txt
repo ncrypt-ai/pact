@@ -1,0 +1,507 @@
+Manual Testing Checklist
+=================================================
+
+Run project checks before packaging.
+
+   uv sync --locked --all-groups
+   uv run ruff format --check src tests
+   uv run ruff check src tests
+   uv run ty check
+   uv run python -m pytest tests -q
+
+General setup
+-------------
+
+1. Start from a clean development registry.
+
+   export PACT_REGISTRY_URL=http://127.0.0.1:8000
+   export PACT_DATA_DIR=/tmp/pact-manual-registry
+   export PACT_DATABASE=/tmp/pact-manual-registry.sqlite
+
+   uv run pact registry teardown \
+     --registry "$PACT_REGISTRY_URL" \
+     --data-dir "$PACT_DATA_DIR" \
+     --database "$PACT_DATABASE" \
+     --confirm-registry "$PACT_REGISTRY_URL" \
+     --confirm-delete "delete registry $PACT_REGISTRY_URL"
+
+   Open the browser_cleanup_url printed by teardown in every browser profile
+   used for testing.
+
+2. Initialize local registry state.
+
+   uv run pact registry init \
+     --registry "$PACT_REGISTRY_URL" \
+     --data-dir "$PACT_DATA_DIR" \
+     --root-key-password "offline-secret"
+
+3. Create an admin identity and public JWK.
+
+   uv run pact identity init \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret"
+
+   uv run pact identity public-jwk \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --out ./manual-admin.public.jwk.json
+
+4. Start the monolith with workspace enabled.
+
+   uv run pact registry serve \
+     --registry "$PACT_REGISTRY_URL" \
+     --data-dir "$PACT_DATA_DIR" \
+     --database "$PACT_DATABASE" \
+     --public-base-url "$PACT_REGISTRY_URL" \
+     --admin-jwk-file ./manual-admin.public.jwk.json \
+     --enable-workspace
+
+5. In another terminal, confirm health routes.
+
+   curl "$PACT_REGISTRY_URL/pact/api/v1/server/info"
+   curl "$PACT_REGISTRY_URL/pact/api/v1/registry"
+   curl "$PACT_REGISTRY_URL/pact/docs"
+
+CLI identity tests
+------------------
+
+1. Show the identity.
+
+   uv run pact identity show \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret"
+
+   Pass: JSON is pretty printed and includes public_jwk.
+
+2. Export and import PKCS#8 identity.
+
+   uv run pact identity export \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --export-password "admin-secret" \
+     --out ./admin-user-export.pem
+
+   uv run pact identity import \
+     --registry "$PACT_REGISTRY_URL" \
+     --source ./admin-user-export.pem \
+     --import-password "admin-secret" \
+     --identity-file ./admin-user-imported.identity.pem \
+     --identity-password "admin-secret"
+
+   Pass: imported key_id matches the original identity.
+
+3. Export and import browser-compatible recovery JSON.
+
+   uv run pact identity export \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --export-password "admin-secret" \
+     --recovery-json \
+     --out ./admin-user-recovery.json
+
+   uv run pact identity import \
+     --source ./admin-user-recovery.json \
+     --import-password "admin-secret" \
+     --identity-file ./admin-user-recovery-import.identity.pem \
+     --identity-password "admin-secret"
+
+   Pass: imported identity keeps the same key_id and can be used in the web UI
+   as the same profile after importing the JSON recovery file.
+
+4. Rotate the imported identity copy.
+
+   uv run pact identity rotate \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./admin-user-imported.identity.pem \
+     --identity-password "admin-secret"
+
+   uv run pact identity public-jwk \
+       --registry "$PACT_REGISTRY_URL" \
+       --identity-file ./admin-user-imported.identity.pem \
+       --identity-password "admin-secret" \
+       --out ./admin-user-imported.public.jwk.json
+
+   Pass: JSON includes previous_key_id and replacement_key_id. The live admin
+   identity and ./manual-admin.public.jwk.json are intentionally left unchanged
+   because the running registry reads admin keys only at startup.
+
+CLI signing, verification, and carriers
+---------------------------------------
+
+1. Create sample files.
+
+   printf "hello from pact\n" > ./manual-work.txt
+   printf '{"title":"PACT","body":"json sample"}\n' > ./manual-work.json
+
+2. Sign visible text content.
+
+   uv run pact sign ./manual-work.txt \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --output ./manual-work.manifest.json
+
+   Pass: JSON includes manifest path, carrier path, claim_id, nonce_disclosure,
+   and public_content_verifiable. Confirm ./manual-work.pact.txt exists and
+   contains the visible carrier. If a registry is already running, the command
+   may also print an advisory prior-match warning to stderr.
+
+3. Verify locally with content.
+
+   uv run pact verify ./manual-work.manifest.json \
+     --public-jwk ./manual-admin.public.jwk.json \
+     --content ./manual-work.txt
+
+   Pass: signature_valid and content_binding_valid are true.
+
+4. Verify signature-only without content.
+
+   uv run pact verify ./manual-work.manifest.json \
+     --public-jwk ./manual-admin.public.jwk.json
+
+   Pass: output clearly separates signature validity from unchecked content
+   binding.
+
+5. Inspect the manifest and carrier.
+
+   uv run pact inspect ./manual-work.manifest.json
+   uv run pact inspect ./manual-work.pact.txt
+
+   Pass: JSON is pretty printed. Carrier inspection is recognized and shows
+   locator/manifest details.
+
+6. Sign with a private nonce.
+
+   uv run pact sign ./manual-work.txt \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --private-nonce \
+     --nonce-out ./manual-work.nonce \
+     --output ./manual-work.private.manifest.json
+
+   Pass: nonce file exists and registry/public verification does not claim
+   content binding unless the nonce/content is supplied.
+
+7. Run privacy audit.
+
+   uv run pact privacy audit ./manual-work.manifest.json --content ./manual-work.txt
+
+   Pass: output says passed and does not expose private plaintext or private
+   nonce material.
+
+CLI registry tests
+------------------
+
+1. Register the claimant profile.
+
+   uv run pact registry register-profile \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --display-name "Admin User"
+
+   Pass: profile is created and duplicate registration is rejected cleanly.
+
+2. Register the claim.
+
+   uv run pact registry register-claim ./manual-work.manifest.json \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret"
+
+   Pass: claim is registered and public claim/profile URLs load.
+
+3. Verify domain flow.
+
+   uv run pact registry verify-domain example.com \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --show-record-only
+
+   Pass: command prints DNS TXT name/value. Do not perform live verification
+   unless you control the domain.
+
+4. Hosted account/admin authorization flow.
+
+   Use CLAIMANT_KEY_ID from a target profile that was registered by another
+   device, browser profile, or tester. Do not create a second CLI identity on
+   this device to simulate the target user.
+
+   uv run pact registry authorize-hosted-account CLAIMANT_KEY_ID \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --provider manual \
+     --note "Manual admin approval"
+
+   Pass: authorize-hosted-account is rejected for non-admin identities and
+   accepted for the configured admin identity. complete-hosted-login should be
+   tested from the target user's own device or browser profile, and succeeds
+   only when the registry has a hosted-account verifier configured for the
+   supplied provider and token.
+
+5. Third-party attestation.
+
+   Use CLAIMANT_KEY_ID from an existing target profile registered by another
+   device, browser profile, or tester.
+
+   uv run pact registry attest-third-party CLAIMANT_KEY_ID \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --documented-rights \
+     --note "Manual review"
+
+   Pass: target profile evidence changes and public profile shows the updated
+   trust label.
+
+CLI inspect, recover, reports, watermarks, and probes
+-----------------------------------------------------
+
+1. Inspect public content and recover claim references.
+
+   uv run pact inspect ./manual-work.pact.txt
+   uv run pact recover ./manual-work.pact.txt
+
+   Pass: inspect recognizes the carrier; recover returns matching claim data
+   where public verification is available.
+
+2. Submit an avoidance/reporting claim.
+
+   uv run pact report ./manual-work.pact.txt \
+     --claim-id CLAIM_ID \
+     --registry "$PACT_REGISTRY_URL" \
+     --identity-file ./manual-admin.identity.pem \
+     --identity-password "admin-secret" \
+     --where https://example.test/repost \
+     --description "Manual report test"
+
+   Pass: report submission is signed, accepted for a registered profile, and
+   rejected without identity credentials.
+
+3. Test image watermarking if optional dependencies are installed.
+
+   uv run pact watermark image ./sample.png \
+     --claim-id CLAIM_ID \
+     --registry "$PACT_REGISTRY_URL" \
+     --output ./sample.pact.png
+
+   Pass: output image exists and inspect/recover behavior is documented even
+   when watermark recovery is inconclusive.
+
+4. Test text watermarking/probes.
+
+   uv run pact watermark text ./manual-work.txt \
+     --methods invisible \
+     --secret manual-secret \
+     --output ./manual-watermarked.txt \
+     --confirm
+
+   printf "control text that is not protected\n" > ./manual-control.txt
+
+   uv run pact probe create \
+     --protected ./manual-work.txt \
+     --control ./manual-control.txt \
+     --target-model manual-model \
+     --output ./manual-probes.json
+
+   uv run pact probe analyze ./manual-probes.json \
+     --responses ./manual-responses.jsonl \
+     --output ./manual-probe-evidence.json
+
+   uv run pact probe export ./manual-probe-evidence.json \
+     --output ./manual-probes.exported.json
+
+   Pass: watermark and probe-create commands produce valid JSON artifacts.
+   probe analyze requires JSONL model responses matching the probe IDs.
+   probe export expects the evidence package produced by probe analyze, not the
+   original probe set.
+
+Web UI profile and auth tests
+-----------------------------
+
+1. Open the workspace.
+
+   http://127.0.0.1:8000/pact/web
+
+   Pass: initial state says to create or unlock a profile. No profile private
+   details are shown before password unlock.
+
+2. Create a browser profile.
+
+   - Enter display name and passcode.
+   - Continue to signing.
+
+   Pass: profile is saved, registered, and private profile actions require the
+   passcode after logout/reload.
+
+3. Multiple identity flow.
+
+   - Create or import a second profile.
+   - Switch between saved profiles.
+   - Log out and unlock each one.
+
+   Pass: selected profile is clear, passcode requirement is clear, and actions
+   cannot silently run against the wrong profile.
+
+4. Import/export recovery.
+
+   - Download recovery JSON from the browser.
+   - Import the same JSON into another browser profile or the CLI.
+   - Import CLI recovery JSON into the browser.
+
+   Pass: imported profile has the same profile ID and behaves as the same
+   registry user. Fresh profile creation remains separate.
+
+5. Browser teardown cleanup.
+
+   - Run uv run pact registry teardown.
+   - Open the printed browser_cleanup_url.
+
+   Pass: saved browser profiles tied to that registry are removed without
+   deleting profiles for other registry URLs.
+
+Web UI signing and claim tests
+------------------------------
+
+1. Sign a text file.
+
+   - Choose a text file.
+   - Sign.
+
+   Pass: browser downloads proof JSON and, when text protection is enabled, a
+   protected text copy. Manifest includes policy, claimed actions, source URL
+   if supplied, and public fingerprints where available.
+
+2. Publish after signing.
+
+   - Enable publish/register claim.
+   - Sign and publish.
+
+   Pass: public claim URL and profile URL load. Claim page shows a collapsible,
+   pretty-printed signed manifest.
+
+3. Private nonce signing.
+
+   - Sign with private nonce behavior if exposed by the UI.
+
+   Pass: UI clearly explains when content verification requires the nonce and
+   does not overstate verification.
+
+4. Verify content.
+
+   - Load manifest and matching content.
+   - Load manifest without content.
+   - Load manifest with altered content.
+
+   Pass: UI separates signature_valid, content_binding_checked,
+   content_binding_valid, registry_claim_valid, policy_valid, and the overall
+   verdict.
+
+5. Inspect and recover.
+
+   - Upload manifest, visible carrier, and altered file.
+   - Use recover routes where available.
+
+   Pass: public inspect/recover endpoints are reachable and do not require a
+   profile. Results are clear about what was found versus proven.
+
+Web UI trust, disputes, reports, and admin tests
+-----------------------------------------------
+
+1. Profile lookup.
+
+   - Search for the profile ID.
+
+   Pass: public profile shows display name, trust tier, trust labels, claims,
+   and dispute credibility without exposing device_fingerprint or private data.
+
+2. Claim lookup.
+
+   - Search for the claim ID.
+
+   Pass: claim page shows status, revocation state, disputes, spread/report
+   summary, and collapsible pretty manifest.
+
+3. Open a dispute.
+
+   - Use a registered browser profile.
+   - Submit a dispute with reason and optional misuse URL.
+
+   Pass: dispute is public, visible on the claim/profile, and reporter
+   credibility is included.
+
+4. Resolve a dispute as admin.
+
+   - Try with a normal profile from another device/browser session if
+     available.
+   - Try with the configured admin identity.
+
+   Pass: normal user is rejected; admin can resolve; public state updates.
+
+5. Submit avoidance/report.
+
+   - Submit as registered profile.
+   - Try without a profile or with locked profile.
+
+   Pass: signed profile is required; public/private metadata is not leaked;
+   public report visibility matches current product rules.
+
+6. Domain, hosted account, and third-party trust flows.
+
+   - Generate domain TXT record.
+   - Exercise hosted authorization against a target profile from another
+     device/browser session.
+   - Submit third-party attestation for that target profile.
+
+   Pass: trust tier/labels update only after successful signed/admin actions.
+
+Security and abuse manual checks
+--------------------------------
+
+1. Upload limits.
+
+   - Try a file just under the configured limit.
+   - Try a file over the configured limit.
+   - Try a compressed/ZIP-like file that expands too far.
+
+   Pass: oversized or decompression-bomb inputs are rejected without crashing
+   the server.
+
+2. Rate limiting.
+
+   - Repeatedly hit challenges, profile registration, report submission, and
+   inspect endpoints.
+
+   Pass: local limiter responds in development; AWS WAF handles production.
+
+3. Header spoofing.
+
+   - Send X-Forwarded-For, Forwarded, CF-Connecting-IP, True-Client-IP, and
+     long X-Request-ID headers directly to the app.
+
+   Pass: untrusted forwarding headers do not bypass limits; request IDs are
+   bounded and sanitized.
+
+4. CSP and browser isolation.
+
+   - Open /pact, /pact/web, and /pact/docs.
+   - Confirm production CSP does not allow localhost connect-src unless running
+     in local mode.
+   - Confirm Pyodide loads with integrity checking.
+
+5. Privacy.
+
+   - Search API responses, pages, and logs for private key material, passcodes,
+     plaintext content, private nonces, raw browser fingerprint values, and raw
+     hardware/device material.
+
+   Pass: none are exposed to the registry, public pages, API responses, or
+   logs.

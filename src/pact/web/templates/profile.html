@@ -9,9 +9,9 @@
     <p><strong>Profile ID:</strong> {{ profile.key_id }}</p>
     <p><strong>Display name:</strong> {{ profile.display_name or "—" }}</p>
     <p><strong>Created:</strong> {{ profile.created_at }}</p>
-    <p><strong>Auth level:</strong> {{ evidence.trust_tier }}</p>
+    <p><strong>Trust tier:</strong> {{ evidence.trust_tier }}</p>
     <p><strong>Verified domains:</strong> {{ evidence.verified_domains|join(", ") or "none" }}</p>
-    <p><strong>Trust labels:</strong> {{ evidence.trust_labels|join(", ") }}</p>
+    <p><strong>Trust labels:</strong> {{ evidence.trust_labels|join(", ") or "none" }}</p>
     <p><strong>Active claims:</strong> {{ evidence.active_claim_count }}</p>
     <p><strong>Revoked claims:</strong> {{ evidence.revoked_claim_count }}</p>
     <p><strong>Open disputes:</strong> {{ evidence.open_disputes }}</p>

@@ -1,7 +1,12 @@
 """FastAPI application for the registry API and proof pages."""
 
+import asyncio
+import hashlib
+import io
+import ipaddress
 import json
 import time
+import zipfile
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -21,7 +26,12 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -29,8 +39,10 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from pact.crypto import jwk_thumbprint
+from pact.canonical import JsonValue, canonical_json
+from pact.crypto import jwk_thumbprint, public_key_from_jwk, verify_es256
 from pact.inspection import inspect_content
+from pact.manifest import SignedManifest
 from pact.media import DEFAULT_BINARY_MIME_TYPE, infer_mime_type
 from pact.metadata import PACKAGE_VERSION, server_metadata
 from pact.oprf import OprfError
@@ -42,7 +54,7 @@ from pact.registry.app import (
     RegistryError,
     RegistryService,
 )
-from pact.server.config import default_routes
+from pact.server.config import CognitoAuthorizerConfig, default_routes
 from pact.server.logging import (
     LoggingConfig,
     configure_logging,
@@ -62,7 +74,40 @@ class RateLimitConfig:
     window_seconds: int = 60
     ip_limit: int = 300
     identity_limit: int = 60
+    anonymous_upload_limit: int = 20
     enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class UploadLimitConfig:
+    max_request_body_bytes: int = 25 * 1024 * 1024
+    max_upload_bytes: int = 20 * 1024 * 1024
+    media_parse_timeout_seconds: float = 10.0
+    max_zip_entries: int = 100
+    max_zip_uncompressed_bytes: int = 50 * 1024 * 1024
+    max_zip_compression_ratio: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedProxyConfig:
+    trusted_proxy_cidrs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeDifficultyConfig:
+    default_minimum: int = 4
+    profile_registration: int = 4
+    account_authorization: int = 8
+    claim_registration: int = 4
+
+    def minimum_for(self, purpose: ChallengePurpose) -> int:
+        if purpose is ChallengePurpose.PROFILE_REGISTRATION:
+            return self.profile_registration
+        if purpose is ChallengePurpose.ACCOUNT_AUTHORIZATION:
+            return self.account_authorization
+        if purpose is ChallengePurpose.CLAIM_REGISTRATION:
+            return self.claim_registration
+        return self.default_minimum
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +184,27 @@ def _rate_limit_response(decision: RateLimitDecision) -> JSONResponse:
     )
 
 
-def _client_ip(request: Request) -> str:
+def _request_id(value: str | None) -> str:
+    if value is None:
+        return uuid4().hex
+    normalized = "".join(
+        character
+        for character in value.strip()
+        if character.isascii() and (character.isalnum() or character in "-_.")
+    )
+    if not normalized:
+        return uuid4().hex
+    return normalized[:64]
+
+
+def _client_ip(
+    request: Request,
+    trusted_proxy_config: TrustedProxyConfig | None = None,
+) -> str:
+    direct_ip = request.client.host if request.client is not None else None
+    if not _trusted_proxy_peer(direct_ip, trusted_proxy_config):
+        return direct_ip or "unknown"
+
     forwarded = request.headers.get("forwarded")
     if forwarded:
         for field in forwarded.split(";"):
@@ -159,6 +224,27 @@ def _client_ip(request: Request) -> str:
     if request.client is not None:
         return request.client.host
     return "unknown"
+
+
+def _trusted_proxy_peer(
+    direct_ip: str | None,
+    config: TrustedProxyConfig | None,
+) -> bool:
+    if direct_ip is None or config is None or not config.trusted_proxy_cidrs:
+        return False
+    if direct_ip in config.trusted_proxy_cidrs:
+        return True
+    try:
+        address = ipaddress.ip_address(direct_ip)
+    except ValueError:
+        return False
+    for cidr in config.trusted_proxy_cidrs:
+        try:
+            if address in ipaddress.ip_network(cidr, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _rate_limit_key_part(value: object) -> str | None:
@@ -216,6 +302,182 @@ def _request_identity_keys(
         f"{request.url.path}:{key}"
         for key in _request_identity_key_values(body=body, extra=extra)
     )
+
+
+def _profile_auth_signed_bytes(
+    *,
+    challenge: object,
+    key_id: str,
+    method: str,
+    path: str,
+    body: object,
+) -> bytes:
+    if isinstance(body, BaseModel):
+        body = body.model_dump(
+            mode="json",
+            exclude_none=True,
+            exclude_unset=True,
+        )
+    challenge_dict = (
+        cast(Any, challenge).to_dict()
+        if hasattr(challenge, "to_dict")
+        else challenge
+    )
+    body_bytes = canonical_json(cast(JsonValue, body))
+    return canonical_json(
+        cast(
+            JsonValue,
+            {
+                "challenge": challenge_dict,
+                "profile_key_id": key_id,
+                "method": method.upper(),
+                "path": path,
+                "body_sha256": hashlib.sha256(body_bytes).hexdigest(),
+            },
+        )
+    )
+
+
+def _require_profile_request_auth(
+    request: Request,
+    service: RegistryService,
+    body: object,
+) -> str:
+    key_id = request.headers.get("x-pact-profile-key-id", "").strip()
+    challenge_id_text = request.headers.get("x-pact-challenge-id", "").strip()
+    solution_text = request.headers.get(
+        "x-pact-proof-of-work-solution", ""
+    ).strip()
+    signature = request.headers.get("x-pact-signature", "").strip()
+    if (
+        not key_id
+        or not challenge_id_text
+        or not solution_text
+        or not signature
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="signed registered profile proof is required",
+        )
+    try:
+        challenge_id = UUID(challenge_id_text)
+        solution = int(solution_text)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=401,
+            detail="profile proof headers are invalid",
+        ) from error
+    try:
+        profile = service.get_profile(key_id)
+        challenge = service._consume_challenge(  # noqa: SLF001
+            challenge_id,
+            ChallengePurpose.ACCOUNT_AUTHORIZATION,
+        )
+        if (
+            challenge.bound_key_id is not None
+            and challenge.bound_key_id != key_id
+        ):
+            raise RegistryError("challenge is bound to a different profile")
+        if not challenge.verify_solution(solution):
+            raise RegistryError("proof-of-work solution is invalid")
+        public_key = public_key_from_jwk(profile.public_jwk)
+        signed_bytes = _profile_auth_signed_bytes(
+            challenge=challenge,
+            key_id=key_id,
+            method=request.method,
+            path=request.url.path,
+            body=body,
+        )
+        if not verify_es256(public_key, signed_bytes, signature):
+            raise RegistryError("profile proof signature is invalid")
+    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    return key_id
+
+
+def _api_gateway_jwt_claims(request: Request) -> dict[str, object] | None:
+    event = request.scope.get("aws.event")
+    if not isinstance(event, dict):
+        return None
+    request_context = event.get("requestContext")
+    if not isinstance(request_context, dict):
+        return None
+    authorizer = request_context.get("authorizer")
+    if not isinstance(authorizer, dict):
+        return None
+    jwt = authorizer.get("jwt")
+    if not isinstance(jwt, dict):
+        return None
+    claims = jwt.get("claims")
+    if not isinstance(claims, dict):
+        return None
+    return claims
+
+
+def _verified_cognito_hosted_account(
+    request: Request,
+    config: CognitoAuthorizerConfig | None,
+) -> dict[str, object] | None:
+    if config is None:
+        return None
+    claims = _api_gateway_jwt_claims(request)
+    if claims is None:
+        raise HTTPException(
+            status_code=401,
+            detail="cognito login is required",
+        )
+    expected_issuer = config.issuer or (
+        f"https://cognito-idp.{config.region}.amazonaws.com/"
+        f"{config.user_pool_id}"
+    )
+    issuer = claims.get("iss")
+    if issuer != expected_issuer:
+        raise HTTPException(status_code=401, detail="cognito issuer mismatch")
+    audience = claims.get("aud")
+    client_id = claims.get("client_id")
+    if audience != config.app_client_id and client_id != config.app_client_id:
+        raise HTTPException(
+            status_code=401, detail="cognito audience mismatch"
+        )
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise HTTPException(
+            status_code=401, detail="cognito subject is missing"
+        )
+    subject_hash = hashlib.sha256(
+        f"{expected_issuer}\0{subject}".encode()
+    ).hexdigest()
+    email_verified_value = claims.get("email_verified")
+    email_verified = (
+        email_verified_value
+        if isinstance(email_verified_value, bool)
+        else str(email_verified_value).lower() == "true"
+    )
+    return {
+        "provider": "cognito",
+        "issuer": expected_issuer,
+        "subject_hash": subject_hash,
+        "client_id": config.app_client_id,
+        "email_verified": email_verified,
+    }
+
+
+def _cognito_hosted_ui_origin(
+    config: CognitoAuthorizerConfig | None,
+) -> str | None:
+    if config is None or not config.hosted_ui_domain:
+        return None
+    domain = config.hosted_ui_domain.strip().rstrip("/")
+    if not domain:
+        return None
+    if not domain.startswith(("https://", "http://")):
+        domain = f"https://{domain}"
+    parsed = urlsplit(domain)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _templates() -> Jinja2Templates:
@@ -512,7 +774,103 @@ def _infer_upload_mime_type(file: UploadFile, mime_type: str | None) -> str:
     return DEFAULT_BINARY_MIME_TYPE
 
 
+async def _read_upload_limited(
+    file: UploadFile,
+    limits: UploadLimitConfig,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limits.max_upload_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail="uploaded file is too large",
+            )
+        chunks.append(chunk)
+    payload = b"".join(chunks)
+    _check_zip_limits(payload, limits)
+    return payload
+
+
+def _check_zip_limits(payload: bytes, limits: UploadLimitConfig) -> None:
+    if not zipfile.is_zipfile(io.BytesIO(payload)):
+        return
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as error:
+        raise HTTPException(
+            status_code=400, detail="invalid ZIP file"
+        ) from error
+    with archive:
+        entries = archive.infolist()
+        if len(entries) > limits.max_zip_entries:
+            raise HTTPException(
+                status_code=413,
+                detail="ZIP file contains too many entries",
+            )
+        uncompressed_total = 0
+        for entry in entries:
+            if entry.flag_bits & 0x1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="encrypted ZIP entries are not supported",
+                )
+            if (
+                entry.filename.startswith("/")
+                or ".." in Path(entry.filename).parts
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="unsafe ZIP entry path",
+                )
+            uncompressed_total += entry.file_size
+            if uncompressed_total > limits.max_zip_uncompressed_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="ZIP file expands beyond the configured limit",
+                )
+            if (
+                entry.compress_size
+                and entry.file_size / entry.compress_size
+                > limits.max_zip_compression_ratio
+            ):
+                raise HTTPException(
+                    status_code=413,
+                    detail="ZIP compression ratio is too high",
+                )
+
+
+async def _inspect_content_limited(
+    payload: bytes,
+    *,
+    mime_type: str,
+    registry_service: RegistryService,
+    limits: UploadLimitConfig,
+) -> dict[str, object]:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                inspect_content,
+                payload,
+                mime_type=mime_type,
+                registry_service=registry_service,
+            ),
+            timeout=limits.media_parse_timeout_seconds,
+        )
+    except TimeoutError as error:
+        raise HTTPException(
+            status_code=504,
+            detail="media parsing timed out",
+        ) from error
+
+
 def _raise_http_error(error: Exception) -> None:
+    if isinstance(error, HTTPException):
+        raise error
     if isinstance(error, RegistryError):
         LOGGER.warning("registry request rejected: %s", error)
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -522,24 +880,52 @@ def _raise_http_error(error: Exception) -> None:
     ) from error
 
 
-def _content_security_policy(path: str) -> str:
-    docs_paths = ("/api/docs", "/api/redoc", "/docs", "/redoc")
+def _content_security_policy(
+    path: str,
+    *,
+    local_mode: bool = False,
+    connect_src: tuple[str, ...] = (),
+) -> str:
+    workspace_connect = (
+        "connect-src 'self' blob: https://cdn.jsdelivr.net "
+        "https://files.pythonhosted.org"
+    )
+    if connect_src:
+        workspace_connect = f"{workspace_connect} {' '.join(connect_src)}"
+    if local_mode:
+        workspace_connect = (
+            f"{workspace_connect} http://localhost:* http://127.0.0.1:*"
+        )
+    if (
+        path == "/pact/web"
+        or path.startswith("/pact/web/")
+        or path.startswith("/pact/static/")
+    ):
+        return (
+            "default-src 'self'; base-uri 'self'; form-action 'self'; "
+            "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
+            f"https://cdn.jsdelivr.net blob:; worker-src 'self'; "
+            f"{workspace_connect}"
+        )
+    docs_paths = (
+        "/pact/api/docs",
+        "/pact/api/redoc",
+        "/pact/docs",
+        "/pact/redoc",
+    )
     if path.rstrip("/") in docs_paths:
         return (
             "default-src 'self'; base-uri 'self'; form-action 'self'; "
             "frame-ancestors 'none'; img-src 'self' data: "
             "https://fastapi.tiangolo.com; style-src 'self' 'unsafe-inline' "
             "https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' "
-            "'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
-            "worker-src 'self'; connect-src 'self' https: http://localhost:* "
-            "http://127.0.0.1:*"
+            "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self'"
         )
     return (
         "default-src 'self'; base-uri 'self'; form-action 'self'; "
         "frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' "
-        "https://cdn.jsdelivr.net; worker-src 'self'; connect-src 'self' "
-        "https: http://localhost:* http://127.0.0.1:*"
+        "script-src 'self'; worker-src 'self'; connect-src 'self'"
     )
 
 
@@ -569,13 +955,9 @@ class ChallengeRequestModel(BaseModel):
 
 
 class DeviceBindingOprfRequestModel(BaseModel):
-    x: str = Field(
-        description="Base64url P-256 x coordinate of the blinded point.",
-        examples=["base64url-coordinate"],
-    )
-    y: str = Field(
-        description="Base64url P-256 y coordinate of the blinded point.",
-        examples=["base64url-coordinate"],
+    blinded: str = Field(
+        description="Base64url Ristretto255 blinded OPRF group element.",
+        examples=["base64url-blinded-oprf-element"],
     )
 
 
@@ -587,7 +969,7 @@ class MutationRequestModel(BaseModel):
     }
 
     challenge_id: UUID = Field(
-        description="Challenge ID returned by /api/v1/challenges.",
+        description="Challenge ID returned by /pact/api/v1/challenges.",
         examples=[EXAMPLE_CHALLENGE_ID],
     )
     claimant_public_jwk: dict[str, str] = Field(
@@ -647,7 +1029,7 @@ class RotationRequestModel(BaseModel):
     }
 
     challenge_id: UUID = Field(
-        description="Key-rotation challenge ID returned by /api/v1/challenges.",
+        description="Key-rotation challenge ID returned by /pact/api/v1/challenges.",
         examples=[EXAMPLE_CHALLENGE_ID],
     )
     current_public_jwk: dict[str, str] = Field(
@@ -718,6 +1100,13 @@ class AvoidanceReportRequestModel(BaseModel):
     reporter_type: str = Field(default="anonymous")
 
 
+class ClaimMatchRequestModel(BaseModel):
+    signed_manifest_json: str = Field(
+        description="Signed manifest JSON to compare against registered claims."
+    )
+    limit: int = Field(default=10, ge=1, le=25)
+
+
 def create_app(
     service: RegistryService | None = None,
     *,
@@ -729,7 +1118,11 @@ def create_app(
     cors_allowed_origins: tuple[str, ...] = (),
     docs_directory: str | Path | None = None,
     rate_limit_config: RateLimitConfig | None = None,
+    upload_limit_config: UploadLimitConfig | None = None,
+    trusted_proxy_config: TrustedProxyConfig | None = None,
+    challenge_difficulty_config: ChallengeDifficultyConfig | None = None,
     logging_config: LoggingConfig | None = None,
+    cognito_authorizer_config: CognitoAuthorizerConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
@@ -737,12 +1130,20 @@ def create_app(
     configure_logging(selected_logging)
     templates = _templates()
     rate_limit = rate_limit_config or RateLimitConfig()
+    upload_limits = upload_limit_config or UploadLimitConfig()
+    trusted_proxies = trusted_proxy_config or TrustedProxyConfig()
+    challenge_difficulty = (
+        challenge_difficulty_config or ChallengeDifficultyConfig()
+    )
     parsed_public_url = urlsplit(public_base_url)
     normalized_registry_url = (
         service.registry_url if service is not None else registry_url
     )
     if normalized_registry_url is None:
         raise ValueError("registry_url is required when service is omitted")
+    cognito_hosted_ui_origin = _cognito_hosted_ui_origin(
+        cognito_authorizer_config
+    )
     trusted_hosts = list(allowed_hosts) or [
         parsed_public_url.hostname or "localhost"
     ]
@@ -752,9 +1153,9 @@ def create_app(
         title="PACT Registry",
         version=PACKAGE_VERSION,
         summary="Registry API and proof pages for PACT",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/pact/api/docs",
+        redoc_url="/pact/api/redoc",
+        openapi_url="/pact/api/openapi.json",
         openapi_tags=OPENAPI_TAGS,
         middleware=[
             Middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts),
@@ -767,7 +1168,11 @@ def create_app(
     app.state.enable_workspace = enable_workspace
     app.state.rate_limiter = SlidingWindowRateLimiter(rate_limit)
     app.state.rate_limit_config = rate_limit
+    app.state.upload_limit_config = upload_limits
+    app.state.trusted_proxy_config = trusted_proxies
+    app.state.challenge_difficulty_config = challenge_difficulty
     app.state.logging_config = selected_logging
+    app.state.cognito_authorizer_config = cognito_authorizer_config
     LOGGER.info(
         "created web application",
         extra={
@@ -786,13 +1191,13 @@ def create_app(
         )
     if enable_workspace:
         app.mount(
-            "/static",
+            "/pact/static",
             StaticFiles(directory=str(_static_directory())),
             name="static",
         )
     if mounted_docs_directory is not None:
         app.mount(
-            "/docs",
+            "/pact/docs",
             StaticFiles(directory=str(mounted_docs_directory), html=True),
             name="docs",
         )
@@ -823,9 +1228,12 @@ def create_app(
                     },
                 )
 
+    def client_ip(request: Request) -> str:
+        return _client_ip(request, trusted_proxies)
+
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid4().hex
+        request_id = _request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         started_ms = monotonic_ms()
         status_code = 500
@@ -843,7 +1251,7 @@ def create_app(
                     path=request.url.path,
                     status_code=status_code,
                     duration_ms=duration_ms,
-                    client_ip=_client_ip(request),
+                    client_ip=client_ip(request),
                 ),
             )
             raise
@@ -859,21 +1267,45 @@ def create_app(
                         path=request.url.path,
                         status_code=status_code,
                         duration_ms=duration_ms,
-                        client_ip=_client_ip(request),
+                        client_ip=client_ip(request),
                     ),
                 )
+
+    @app.middleware("http")
+    async def enforce_request_size(request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                request_size = int(content_length)
+            except ValueError:
+                return JSONResponse(
+                    {"detail": "content-length is invalid"},
+                    status_code=400,
+                )
+            if request_size > upload_limits.max_request_body_bytes:
+                return JSONResponse(
+                    {"detail": "request body is too large"},
+                    status_code=413,
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def rate_limit_requests(request: Request, call_next):
         if (
             rate_limit.enabled
-            and request.url.path.startswith("/api/")
+            and request.url.path.startswith("/pact/api/")
             and request.method != "OPTIONS"
         ):
             limiter = cast(SlidingWindowRateLimiter, app.state.rate_limiter)
+            limit = rate_limit.ip_limit
+            if request.url.path in {
+                "/pact/api/v1/inspect",
+                "/pact/api/v1/recover",
+            }:
+                limit = rate_limit.anonymous_upload_limit
             decision = limiter.check(
-                f"ip:{_client_ip(request)}",
-                limit=rate_limit.ip_limit,
+                f"ip:{client_ip(request)}",
+                limit=limit,
             )
             if not decision.allowed:
                 return _rate_limit_response(decision)
@@ -903,7 +1335,15 @@ def create_app(
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Content-Security-Policy",
-            _content_security_policy(request.url.path),
+            _content_security_policy(
+                request.url.path,
+                local_mode=local_mode,
+                connect_src=(
+                    (cognito_hosted_ui_origin,)
+                    if cognito_hosted_ui_origin is not None
+                    else ()
+                ),
+            ),
         )
         if local_mode:
             response.headers.setdefault("Cache-Control", "no-store")
@@ -914,7 +1354,11 @@ def create_app(
             )
         return response
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=RedirectResponse)
+    async def root() -> RedirectResponse:
+        return RedirectResponse("/pact", status_code=308)
+
+    @app.get("/pact", response_class=HTMLResponse)
     async def home(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
@@ -928,8 +1372,7 @@ def create_app(
             },
         )
 
-    @app.get("/pact", response_class=HTMLResponse)
-    async def workspace(request: Request) -> HTMLResponse:
+    def workspace_response(request: Request) -> HTMLResponse:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
         return templates.TemplateResponse(
@@ -939,10 +1382,23 @@ def create_app(
                 "registry_url": app.state.registry_url,
                 "public_base_url": app.state.public_base_url,
                 "standalone": service is None,
+                "cognito_config": (
+                    None
+                    if cognito_authorizer_config is None
+                    else cognito_authorizer_config.to_dict()
+                ),
             },
         )
 
-    @app.get("/pact/pact-browser-{feature}.pyz")
+    @app.get("/pact/web", response_class=HTMLResponse)
+    async def workspace(request: Request) -> HTMLResponse:
+        return workspace_response(request)
+
+    @app.get("/pact/auth/callback", response_class=HTMLResponse)
+    async def cognito_auth_callback(request: Request) -> HTMLResponse:
+        return workspace_response(request)
+
+    @app.get("/pact/web/pact-browser-{feature}.pyz")
     async def browser_python_feature(feature: str) -> Response:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
@@ -956,9 +1412,10 @@ def create_app(
 
     if service is None:
         return app
+    registry_service = service
 
     @app.get(
-        "/api/v1/registry",
+        "/pact/api/v1/registry",
         tags=["Discovery"],
         summary="Registry metadata",
         description="Return registry certificates, root fingerprint, package version, and deployment metadata.",
@@ -967,7 +1424,7 @@ def create_app(
         return PrettyJSONResponse(_registry_info(service))
 
     @app.get(
-        "/api/v1/server/routes",
+        "/pact/api/v1/server/routes",
         tags=["Discovery"],
         summary="Route map",
         description="List public, claimant-signed, and administrator routes exposed by this deployment.",
@@ -979,7 +1436,7 @@ def create_app(
                 {
                     "name": "documentation",
                     "method": "GET",
-                    "path": "/docs/",
+                    "path": "/pact/docs/",
                     "auth": "public",
                     "lambda_name": None,
                     "permission": None,
@@ -988,7 +1445,7 @@ def create_app(
         return PrettyJSONResponse({"routes": routes})
 
     @app.get(
-        "/api/v1/server/info",
+        "/pact/api/v1/server/info",
         tags=["Discovery"],
         summary="Server information",
         description="Return public base URL, optional documentation URL, package version, and deployed commit hash.",
@@ -998,7 +1455,7 @@ def create_app(
             {
                 "registry_url": app.state.registry_url,
                 "public_base_url": app.state.public_base_url,
-                "documentation_url": f"{app.state.public_base_url}/docs/"
+                "documentation_url": f"{app.state.public_base_url}/pact/docs/"
                 if app.state.docs_enabled
                 else None,
                 "server": server_metadata(),
@@ -1006,7 +1463,7 @@ def create_app(
         )
 
     @app.post(
-        "/api/v1/inspect",
+        "/pact/api/v1/inspect",
         tags=["Inspection"],
         summary="Inspect a manifest or raw carrier file",
         description=(
@@ -1025,19 +1482,20 @@ def create_app(
             description="Optional MIME type override for carrier parsing.",
         ),
     ) -> dict[str, object]:
-        payload = await file.read()
         try:
-            return inspect_content(
+            payload = await _read_upload_limited(file, upload_limits)
+            return await _inspect_content_limited(
                 payload,
                 mime_type=_infer_upload_mime_type(file, mime_type),
                 registry_service=service,
+                limits=upload_limits,
             )
         except Exception as error:
             _raise_http_error(error)
             raise AssertionError("unreachable")
 
     @app.post(
-        "/api/v1/challenges",
+        "/pact/api/v1/challenges",
         tags=["Challenges"],
         summary="Issue a replay and proof-of-work challenge",
         description=(
@@ -1053,19 +1511,23 @@ def create_app(
         ],
     ) -> dict[str, object]:
         enforce_identity_rate(request, body, extra=(body.purpose.value,))
+        difficulty = max(
+            body.difficulty,
+            challenge_difficulty.minimum_for(body.purpose),
+        )
         challenge = service.issue_challenge(
             body.purpose,
             bound_key_id=body.bound_key_id,
-            difficulty=body.difficulty,
+            difficulty=difficulty,
         )
         return _json_dict(challenge.to_dict())
 
     @app.post(
-        "/api/v1/device-bindings/oprf",
+        "/pact/api/v1/device-bindings/oprf",
         tags=["Profiles"],
         summary="Evaluate a blinded device-binding OPRF point",
         description=(
-            "Evaluate a client-blinded point used to derive a private, "
+            "Evaluate a client-blinded OPRF element used to derive a private, "
             "registry-scoped device binding token."
         ),
     )
@@ -1080,7 +1542,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.post(
-        "/api/v1/profiles",
+        "/pact/api/v1/profiles",
         tags=["Profiles"],
         summary="Register a claimant profile",
         description=(
@@ -1111,7 +1573,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.get(
-        "/api/v1/profiles/{key_id}",
+        "/pact/api/v1/profiles/{key_id}",
         tags=["Profiles"],
         summary="Get claimant profile",
     )
@@ -1123,7 +1585,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/update",
+        "/pact/api/v1/profiles/{key_id}/update",
         tags=["Profiles"],
         summary="Update claimant profile",
     )
@@ -1159,7 +1621,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.get(
-        "/api/v1/profiles/{key_id}/evidence",
+        "/pact/api/v1/profiles/{key_id}/evidence",
         tags=["Profiles"],
         summary="Get claimant evidence summary",
     )
@@ -1168,10 +1630,10 @@ def create_app(
             evidence = service.evidence_profile(key_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(evidence)
+        return evidence.to_dict()
 
     @app.get(
-        "/api/v1/profiles/{key_id}/claims",
+        "/pact/api/v1/profiles/{key_id}/claims",
         tags=["Claims"],
         summary="List claims by claimant profile",
     )
@@ -1183,7 +1645,7 @@ def create_app(
         return {"claims": jsonable_encoder(claims)}
 
     @app.get(
-        "/api/v1/profiles/{key_id}/disputes",
+        "/pact/api/v1/profiles/{key_id}/disputes",
         tags=["Disputes"],
         summary="List disputes attached to a claimant profile",
     )
@@ -1192,10 +1654,15 @@ def create_app(
             disputes = service.list_disputes(claimant_key_id=key_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"disputes": jsonable_encoder(disputes)}
+        return {
+            "disputes": [
+                registry_service.public_dispute_dict(dispute)
+                for dispute in disputes
+            ]
+        }
 
     @app.post(
-        "/api/v1/certificates",
+        "/pact/api/v1/certificates",
         tags=["Certificates"],
         summary="Issue claimant certificate",
         description="Issue a short-lived claimant certificate after key-possession proof.",
@@ -1221,7 +1688,7 @@ def create_app(
         }
 
     @app.post(
-        "/api/v1/claims",
+        "/pact/api/v1/claims",
         tags=["Claims"],
         summary="Register signed claim",
         description="Publish a signed manifest as a registry claim.",
@@ -1248,8 +1715,31 @@ def create_app(
             _raise_http_error(error)
         return _json_dict(claim)
 
+    @app.post(
+        "/pact/api/v1/claims/matches",
+        tags=["Claims"],
+        summary="Find prior claims with matching public fingerprints",
+        description="Return advisory exact or perceptual matches for an unpublished signed manifest.",
+    )
+    async def find_claim_matches(
+        request: Request,
+        body: ClaimMatchRequestModel,
+    ) -> dict[str, object]:
+        del request
+        try:
+            signed_manifest = SignedManifest.from_json(
+                body.signed_manifest_json.encode("utf-8")
+            )
+            matches = service.find_claim_matches(
+                signed_manifest,
+                limit=body.limit,
+            )
+        except Exception as error:
+            _raise_http_error(error)
+        return {"matches": [match.to_dict() for match in matches]}
+
     @app.get(
-        "/api/v1/claims/{claim_id}",
+        "/pact/api/v1/claims/{claim_id}",
         tags=["Claims"],
         summary="Get registered claim",
     )
@@ -1261,7 +1751,7 @@ def create_app(
         return _json_dict(claim)
 
     @app.get(
-        "/api/v1/claims/{claim_id}/disputes",
+        "/pact/api/v1/claims/{claim_id}/disputes",
         tags=["Disputes"],
         summary="List disputes attached to a claim",
     )
@@ -1270,10 +1760,15 @@ def create_app(
             disputes = service.list_disputes(claim_id=claim_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"disputes": jsonable_encoder(disputes)}
+        return {
+            "disputes": [
+                registry_service.public_dispute_dict(dispute)
+                for dispute in disputes
+            ]
+        }
 
     @app.get(
-        "/api/v1/claims/{claim_id}/reports",
+        "/pact/api/v1/claims/{claim_id}/reports",
         tags=["Reports"],
         summary="List possible provenance avoidance reports for a claim",
     )
@@ -1282,10 +1777,15 @@ def create_app(
             reports = service.list_avoidance_reports(claim_id=claim_id)
         except Exception as error:
             _raise_http_error(error)
-        return {"reports": jsonable_encoder(reports)}
+        return {
+            "reports": [
+                registry_service.public_avoidance_report_dict(report)
+                for report in reports
+            ]
+        }
 
     @app.get(
-        "/api/v1/claims/{claim_id}/spread",
+        "/pact/api/v1/claims/{claim_id}/spread",
         tags=["Reports"],
         summary="Get public spread summary for a claim",
     )
@@ -1297,7 +1797,7 @@ def create_app(
         return spread.to_dict()
 
     @app.post(
-        "/api/v1/claims/{claim_id}/revoke",
+        "/pact/api/v1/claims/{claim_id}/revoke",
         tags=["Claims"],
         summary="Revoke registered claim",
         description="Revoke an existing claim. The claim ID is supplied in the path and added to the signed mutation payload by the server.",
@@ -1329,7 +1829,7 @@ def create_app(
         return _json_dict(claim)
 
     @app.post(
-        "/api/v1/recover",
+        "/pact/api/v1/recover",
         tags=["Reports"],
         summary="Recover possible source claim candidates",
     )
@@ -1341,11 +1841,12 @@ def create_app(
         ] = None,
     ) -> dict[str, object]:
         try:
-            content = await file.read()
-            inspected = inspect_content(
+            content = await _read_upload_limited(file, upload_limits)
+            inspected = await _inspect_content_limited(
                 content,
                 mime_type=_infer_upload_mime_type(file, mime_type),
                 registry_service=service,
+                limits=upload_limits,
             )
             claim = inspected.get("registry_claim")
             matches: list[dict[str, object]] = []
@@ -1369,7 +1870,7 @@ def create_app(
                         "reporting_enabled": reporting_enabled,
                         "report_url": None
                         if not reporting_enabled
-                        else f"/claims/{claim_id}/report",
+                        else f"/pact/claims/{claim_id}/report",
                         "reporting_disabled_reason": None
                         if reporting_enabled
                         else "private_nonce_claim",
@@ -1387,7 +1888,7 @@ def create_app(
             raise AssertionError("unreachable")
 
     @app.post(
-        "/api/v1/reports/avoidance",
+        "/pact/api/v1/reports/avoidance",
         tags=["Reports"],
         summary="Submit possible provenance avoidance report",
     )
@@ -1395,10 +1896,15 @@ def create_app(
         request: Request,
         body: AvoidanceReportRequestModel,
     ) -> dict[str, object]:
+        reporter_key_id = _require_profile_request_auth(
+            request,
+            service,
+            body,
+        )
         enforce_identity_rate(
             request,
             body,
-            extra=(str(body.claim_id), body.reporter_key_id),
+            extra=(str(body.claim_id), reporter_key_id),
         )
         try:
             report = service.submit_avoidance_report(
@@ -1406,8 +1912,8 @@ def create_app(
                 evidence_type=body.evidence.kind,
                 evidence_digest=body.evidence.digest,
                 report_label=body.reason,
-                reporter_key_id=body.reporter_key_id,
-                reporter_type=body.reporter_type,
+                reporter_key_id=reporter_key_id,
+                reporter_type="registered_profile",
                 observed_url=body.observed_url,
                 observed_at=body.observed_at,
                 reverse_lookup_score=body.reverse_lookup_score,
@@ -1417,13 +1923,13 @@ def create_app(
         except Exception as error:
             _raise_http_error(error)
         return {
-            **_json_dict(report),
-            "public_visibility": "pending_triage",
+            **service.public_avoidance_report_dict(report),
+            "public_visibility": "claimant_visible",
             "owner_notified": True,
         }
 
     @app.get(
-        "/api/v1/reports/{report_id}",
+        "/pact/api/v1/reports/{report_id}",
         tags=["Reports"],
         summary="Get possible provenance avoidance report",
     )
@@ -1432,10 +1938,12 @@ def create_app(
             report = service.get_avoidance_report(report_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(report)
+        if not report.public_visible:
+            raise HTTPException(status_code=404, detail="report not found")
+        return service.public_avoidance_report_dict(report)
 
     @app.post(
-        "/api/v1/rotations",
+        "/pact/api/v1/rotations",
         tags=["Profiles"],
         summary="Rotate claimant key",
         description="Rotate a claimant key using signatures from both the current and replacement keys.",
@@ -1455,7 +1963,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/domains/verify",
+        "/pact/api/v1/domains/verify",
         tags=["Profiles"],
         summary="Verify claimant domain",
     )
@@ -1485,7 +1993,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/hosted-authorize",
+        "/pact/api/v1/profiles/{key_id}/hosted-authorize",
         tags=["Profiles"],
         summary="Authorize hosted-account trust",
         description=(
@@ -1524,7 +2032,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/me/hosted-login",
+        "/pact/api/v1/profiles/me/hosted-login",
         tags=["Profiles"],
         summary="Complete hosted-account login",
     )
@@ -1534,13 +2042,19 @@ def create_app(
     ) -> dict[str, object]:
         enforce_identity_rate(request, body)
         try:
-            profile = service.complete_hosted_account_login(body.to_domain())
+            profile = service.complete_hosted_account_login(
+                body.to_domain(),
+                verified_hosted_account=_verified_cognito_hosted_account(
+                    request,
+                    cognito_authorizer_config,
+                ),
+            )
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/profiles/{key_id}/third-party-attest",
+        "/pact/api/v1/profiles/{key_id}/third-party-attest",
         tags=["Profiles"],
         summary="Record third-party account attestation",
     )
@@ -1575,7 +2089,7 @@ def create_app(
         return _json_dict(profile)
 
     @app.post(
-        "/api/v1/disputes",
+        "/pact/api/v1/disputes",
         tags=["Disputes"],
         summary="Open claim dispute",
     )
@@ -1595,10 +2109,10 @@ def create_app(
             dispute = service.open_dispute(body.to_domain())
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
     @app.get(
-        "/api/v1/disputes/{dispute_id}",
+        "/pact/api/v1/disputes/{dispute_id}",
         tags=["Disputes"],
         summary="Get dispute record",
     )
@@ -1607,10 +2121,10 @@ def create_app(
             dispute = service.get_dispute(dispute_id)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
     @app.post(
-        "/api/v1/disputes/{dispute_id}/resolve",
+        "/pact/api/v1/disputes/{dispute_id}/resolve",
         tags=["Disputes"],
         summary="Resolve claim dispute",
         description="Administrative endpoint for resolving an open dispute.",
@@ -1642,9 +2156,13 @@ def create_app(
             dispute = service.resolve_dispute(request_model)
         except Exception as error:
             _raise_http_error(error)
-        return _json_dict(dispute)
+        return service.public_dispute_dict(dispute)
 
-    @app.get("/profiles/{key_id}", response_class=HTMLResponse)
+    @app.get("/profiles/{key_id}", response_class=RedirectResponse)
+    async def legacy_public_profile(key_id: str) -> RedirectResponse:
+        return RedirectResponse(f"/pact/profiles/{key_id}", status_code=308)
+
+    @app.get("/pact/profiles/{key_id}", response_class=HTMLResponse)
     async def public_profile(request: Request, key_id: str) -> HTMLResponse:
         try:
             profile = service.get_profile(key_id)
@@ -1656,12 +2174,16 @@ def create_app(
             "profile.html",
             {
                 "profile": _public_jsonable(profile),
-                "evidence": jsonable_encoder(evidence),
+                "evidence": evidence.to_dict(),
                 "public_base_url": app.state.public_base_url,
             },
         )
 
-    @app.get("/claims/{claim_id}", response_class=HTMLResponse)
+    @app.get("/claims/{claim_id}", response_class=RedirectResponse)
+    async def legacy_public_claim(claim_id: UUID) -> RedirectResponse:
+        return RedirectResponse(f"/pact/claims/{claim_id}", status_code=308)
+
+    @app.get("/pact/claims/{claim_id}", response_class=HTMLResponse)
     async def public_claim(request: Request, claim_id: UUID) -> HTMLResponse:
         try:
             claim = service.get_claim(claim_id)
@@ -1680,7 +2202,16 @@ def create_app(
             },
         )
 
-    @app.get("/verify/claim/{claim_id}", response_class=HTMLResponse)
+    @app.get("/verify/claim/{claim_id}", response_class=RedirectResponse)
+    async def legacy_verify_claim_page(
+        claim_id: UUID,
+    ) -> RedirectResponse:
+        return RedirectResponse(
+            f"/pact/verify/claim/{claim_id}",
+            status_code=308,
+        )
+
+    @app.get("/pact/verify/claim/{claim_id}", response_class=HTMLResponse)
     async def verify_claim_page(
         request: Request,
         claim_id: UUID,

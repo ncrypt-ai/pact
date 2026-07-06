@@ -23,7 +23,7 @@ class ProbeEvidenceSignature:
     algorithm: str = "ES256"
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible signature."""
+        """Serialize the evidence signature."""
 
         return {
             "algorithm": self.algorithm,
@@ -33,7 +33,7 @@ class ProbeEvidenceSignature:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProbeEvidenceSignature:
-        """Parse an evidence signature."""
+        """Read an evidence signature from exported data."""
 
         signature = cls(
             key_id=_required_string(value, "key_id"),
@@ -68,7 +68,7 @@ class ProbeEvidencePackage:
         signer: ClaimantIdentity | None = None,
         exported_at: datetime | None = None,
     ) -> ProbeEvidencePackage:
-        """Create and optionally sign a local evidence package."""
+        """Assemble an exportable evidence package."""
 
         timestamp = (exported_at or datetime.now(UTC)).replace(microsecond=0)
         unsigned = cls(
@@ -112,7 +112,7 @@ class ProbeEvidencePackage:
         )
 
     def body(self) -> dict[str, object]:
-        """Return the package body covered by digest and signature."""
+        """Data covered by the package digest and optional signature."""
 
         return {
             "probe_set": self.probe_set.to_dict(),
@@ -122,17 +122,17 @@ class ProbeEvidencePackage:
         }
 
     def canonical_body(self) -> bytes:
-        """Return canonical package body bytes."""
+        """Canonical bytes for digesting and signing."""
 
         return canonical_json(self.body())
 
     def compute_digest(self) -> str:
-        """Return the SHA-256 digest of the package body."""
+        """Base64url SHA-256 digest of the canonical package body."""
 
         return base64url_encode(hashlib.sha256(self.canonical_body()).digest())
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible evidence package."""
+        """Serialize the evidence package for export."""
 
         result = self.body()
         result["package_digest"] = self.package_digest
@@ -142,7 +142,7 @@ class ProbeEvidencePackage:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProbeEvidencePackage:
-        """Parse an evidence package and verify its digest."""
+        """Load an exported package and verify its digest."""
 
         probe_set_value = value.get("probe_set")
         responses_value = value.get("responses")

@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -69,6 +71,39 @@ def test_supported_c2pa_type_lists_are_nonempty() -> None:
     assert c2pa_supported_builder_mime_types()
     assert "image/png" in c2pa_supported_embedded_image_mime_types()
     assert "application/pdf" in c2pa_supported_embedded_document_mime_types()
+
+
+def test_c2pa_module_imports_without_optional_sdk() -> None:
+    script = """
+import importlib.abc
+import sys
+
+
+class BlockC2pa(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "c2pa" or fullname.startswith("c2pa."):
+            raise ImportError("blocked c2pa for regression test")
+        return None
+
+
+sys.meta_path.insert(0, BlockC2pa())
+import pact.carriers.c2pa as c2pa_carrier
+
+assert "image/png" in c2pa_carrier.c2pa_supported_reader_mime_types()
+try:
+    c2pa_carrier._c2pa_sdk()
+except c2pa_carrier.C2paError:
+    pass
+else:
+    raise AssertionError("blocked c2pa import should raise C2paError")
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_manifest_definition_includes_pact_metadata() -> None:

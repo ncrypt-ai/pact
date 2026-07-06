@@ -30,7 +30,7 @@ class ConfidenceInterval:
     confidence_level: float = 0.95
 
     def to_dict(self) -> dict[str, float]:
-        """Return a JSON-compatible interval."""
+        """Serialize the interval bounds."""
 
         return {
             "lower": self.lower,
@@ -40,7 +40,7 @@ class ConfidenceInterval:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ConfidenceInterval:
-        """Parse a confidence interval."""
+        """Load interval bounds from exported data."""
 
         return cls(
             lower=_required_float(value, "lower"),
@@ -58,7 +58,7 @@ class HypothesisTest:
     adjusted_p_value: float | None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible hypothesis test."""
+        """Serialize the hypothesis-test result."""
 
         return {
             "name": self.name,
@@ -68,7 +68,7 @@ class HypothesisTest:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> HypothesisTest:
-        """Parse a hypothesis test."""
+        """Load a hypothesis-test result."""
 
         return cls(
             name=_required_string(value, "name"),
@@ -89,7 +89,7 @@ class ProbeMeasurement:
     exact_match: bool
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible measurement."""
+        """Serialize one scored response."""
 
         return {
             "probe_id": self.probe_id,
@@ -125,7 +125,7 @@ class ProbeAnalysisReport:
     false_positive_threshold: float = 0.05
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible analysis report."""
+        """Serialize the aggregate probe analysis."""
 
         return {
             "treatment_count": self.treatment_count,
@@ -152,7 +152,7 @@ class ProbeAnalysisReport:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProbeAnalysisReport:
-        """Parse an analysis report from JSON-compatible data."""
+        """Load aggregate probe analysis from exported data."""
 
         measurements_value = value.get("measurements")
         hypothesis_tests_value = value.get("hypothesis_tests")
