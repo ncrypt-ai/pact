@@ -20,7 +20,7 @@ class PermissionValue(StrEnum):
 
     @property
     def cawg_value(self) -> str:
-        """Return the spelling required by the CAWG assertion."""
+        """CAWG wire spelling for this permission value."""
 
         if self is PermissionValue.NOT_ALLOWED:
             return "notAllowed"
@@ -35,6 +35,7 @@ class Permission(StrEnum):
     GENERATIVE_TRAINING = "cawg.ai_generative_training"
     NON_GENERATIVE_TRAINING = "cawg.ai_training"
     COMMERCIAL_TRAINING = "pact.commercial_training"
+    NO_COMMERCIAL_TRAINING = "pact.no_commercial_training"
     NONCOMMERCIAL_TRAINING = "pact.noncommercial_training"
     FINE_TUNING = "pact.fine_tuning"
     EMBEDDING = "pact.embedding"
@@ -71,7 +72,7 @@ class PolicyEntry:
             _validate_url(self.licensing_url)
 
     def to_dict(self) -> dict[str, str]:
-        """Return this entry in CAWG-compatible wire form."""
+        """Serialize one CAWG-compatible permission entry."""
 
         result = {"use": self.value.cawg_value}
         if self.explanation is not None:
@@ -86,7 +87,7 @@ class PolicyEntry:
         permission: Permission,
         value: Mapping[str, object],
     ) -> "PolicyEntry":
-        """Parse an entry from its wire representation."""
+        """Load one permission entry from manifest data."""
 
         unexpected = set(value) - {"use", "constraint_info", "licensing_url"}
         if unexpected:
@@ -126,7 +127,7 @@ class Policy:
             raise PolicyError("a policy cannot repeat a permission")
 
     def to_dict(self) -> dict[str, dict[str, str]]:
-        """Return a CAWG training-mining entries map."""
+        """Serialize the CAWG training-mining entries map."""
 
         return {
             entry.permission.value: entry.to_dict() for entry in self.entries
@@ -134,7 +135,7 @@ class Policy:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "Policy":
-        """Parse and validate a CAWG training-mining entries map."""
+        """Load and validate manifest policy entries."""
 
         entries: list[PolicyEntry] = []
         for raw_permission, raw_entry in value.items():

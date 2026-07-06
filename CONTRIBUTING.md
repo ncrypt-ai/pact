@@ -35,21 +35,21 @@ uv build
 
 ## LLM assistance policy
 
-LLM assistance is allowed. The contributor is still responsible for the work.
+LLM assistance is allowed. The contributor is still responsible for the design,
+code, tests, and claims made in the pull request.
 
 Do:
 
 - review every generated line before committing it
 - run the relevant tests and include what passed
 - verify security-sensitive claims against the code
-- simplify or remove generated text that sounds more confident than the
-  implementation
+- simplify or remove text that sounds more confident than the implementation
 
 Do not submit:
 
-- code authored exclusively by an LLM with no meaningful human review
-- untested generated code
-- generated legal, security, or cryptography claims that were not checked
+- code submitted without meaningful human review
+- untested generated code or generated tests that were not run
+- legal, security, or cryptography claims that were not checked against the code
 - bulk rewrites that obscure the actual behavior change
 - fabricated citations, benchmarks, compatibility statements, or test results
 

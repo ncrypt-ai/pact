@@ -6,7 +6,7 @@
   </head>
   <body>
     <h1>Claim {{ claim.claim_id }}</h1>
-    <p><strong>Profile ID:</strong> <a href="/profiles/{{ profile.key_id }}">{{ profile.key_id }}</a></p>
+    <p><strong>Profile ID:</strong> <a href="/pact/profiles/{{ profile.key_id }}">{{ profile.key_id }}</a></p>
     <p><strong>Registered:</strong> {{ claim.registered_at }}</p>
     <p><strong>Status:</strong> {{ "revoked" if claim.revoked_at else "current" }}</p>
     {% if claim.revoked_at %}
@@ -26,7 +26,9 @@
     {% else %}
     <p>No public spread reports have been received for this claim.</p>
     {% endif %}
-    <h2>Manifest</h2>
-    <pre>{{ claim.signed_manifest }}</pre>
+    <details>
+      <summary>Signed manifest</summary>
+      <pre>{{ claim.signed_manifest | tojson(indent=2) }}</pre>
+    </details>
   </body>
 </html>

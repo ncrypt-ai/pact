@@ -1,5 +1,11 @@
-# Task Tracking
-todo.txt
+# Build and runtime files
+.aws-sam/
+*.pem
+*.jwk.json
+*.nonce
+*.pact
+*.proof.json
+oprf_server_secret
 
 # Logs
 *.log

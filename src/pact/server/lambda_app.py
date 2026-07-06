@@ -27,6 +27,10 @@ def _handler():
     mangum_module = cast(Any, mangum)
     config = RuntimeConfig.from_env()
     configure_logging(config.logging)
+    if config.oprf_server_secret is None:
+        raise RuntimeError(
+            "PACT_OPRF_SERVER_SECRET is required for AWS Lambda deployments"
+        )
     LOGGER.info(
         "initializing lambda registry app",
         extra={
@@ -49,16 +53,24 @@ def _handler():
                 "PACT_INTERMEDIATE_PRIVATE_KEY_PEM"
             ),
         ),
+        oprf_server_secret=config.oprf_server_secret.encode("utf-8"),
+        admin_public_jwks=config.admin_public_jwks,
     )
     app = create_app(
         service,
         public_base_url=config.public_base_url,
         local_mode=False,
+        enable_workspace=_bool_env("PACT_ENABLE_WORKSPACE"),
         allowed_hosts=config.security.allowed_hosts,
         cors_allowed_origins=config.security.cors_origins,
+        docs_directory=os.getenv("PACT_DOCS_DIRECTORY"),
         logging_config=config.logging,
+        cognito_authorizer_config=config.security.cognito,
     )
-    return mangum_module.Mangum(app)
+    return mangum_module.Mangum(
+        app,
+        api_gateway_base_path=os.getenv("PACT_API_GATEWAY_BASE_PATH", "/"),
+    )
 
 
 def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:
@@ -70,3 +82,7 @@ def lambda_handler(event: dict[str, Any], context: object) -> dict[str, Any]:
 def _pem_env(name: str) -> bytes:
     value = os.environ[name]
     return value.replace("\\n", "\n").encode("utf-8")
+
+
+def _bool_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}

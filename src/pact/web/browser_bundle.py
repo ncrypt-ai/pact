@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import zipfile
 from pathlib import Path
@@ -12,11 +13,9 @@ CORE_MODULES = (
     "crypto.py",
     "identity.py",
     "manifest.py",
+    "oprf.py",
     "policy.py",
     "privacy.py",
-    "registry/__init__.py",
-    "registry/app.py",
-    "registry/store.py",
     "carriers/__init__.py",
     "carriers/text.py",
     "carriers/structured.py",
@@ -47,6 +46,20 @@ FEATURE_MODULES = {
     "documents": DOCUMENT_MODULES,
     "image-watermarks": IMAGE_MODULES,
 }
+VENDOR_PACKAGES = ("bn254",)
+
+
+def _package_directory(name: str) -> Path:
+    spec = importlib.util.find_spec(name)
+    if spec is None or not spec.submodule_search_locations:
+        raise RuntimeError(f"browser vendor package is unavailable: {name}")
+    return Path(next(iter(spec.submodule_search_locations)))
+
+
+def _write_vendor_package(package: zipfile.ZipFile, name: str) -> None:
+    source_directory = _package_directory(name)
+    for path in sorted(source_directory.rglob("*.py")):
+        package.write(path, f"{name}/{path.relative_to(source_directory)}")
 
 
 def browser_python_archive(feature: str) -> bytes:
@@ -64,4 +77,6 @@ def browser_python_archive(feature: str) -> bytes:
         )
         for module in sorted(set(modules)):
             package.write(source_directory / module, f"pact/{module}")
+        for vendor_package in VENDOR_PACKAGES:
+            _write_vendor_package(package, vendor_package)
     return archive.getvalue()

@@ -51,12 +51,12 @@ class ImageSoftBindingVerification:
 
     @property
     def registry_match(self) -> bool:
-        """Whether the decoded locator resolved to one registry claim."""
+        """True when the decoded locator resolved to a registry claim."""
 
         return self.claim is not None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible verification summary."""
+        """Summarize registry resolution for the decoded watermark."""
 
         return {
             "detected": self.detected,
@@ -93,7 +93,7 @@ class ImagePerceptualHash:
             ) from error
 
     def distance(self, other: ImagePerceptualHash) -> int:
-        """Return the Hamming distance to another compatible hash."""
+        """Hamming distance to another compatible hash."""
 
         if self.algorithm != other.algorithm:
             raise WatermarkError("perceptual hash algorithms must match")
@@ -102,7 +102,7 @@ class ImagePerceptualHash:
         return (left ^ right).bit_count()
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible hash record."""
+        """Serialize the perceptual hash."""
 
         return {
             "algorithm": self.algorithm,
@@ -112,7 +112,7 @@ class ImagePerceptualHash:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ImagePerceptualHash:
-        """Parse a JSON-compatible hash record."""
+        """Load one perceptual hash record."""
 
         algorithm = value.get("algorithm")
         transform = value.get("transform")
@@ -141,7 +141,7 @@ class ImagePerceptualFingerprint:
     fingerprint_id: str = PERCEPTUAL_IMAGE_WATERMARK_ID
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible fingerprint."""
+        """Serialize the perceptual fingerprint."""
 
         return {
             "fingerprint_id": self.fingerprint_id,
@@ -156,7 +156,7 @@ class ImagePerceptualFingerprint:
         cls,
         value: dict[str, object],
     ) -> ImagePerceptualFingerprint:
-        """Parse a JSON-compatible fingerprint."""
+        """Load a perceptual fingerprint."""
 
         fingerprint_id = value.get("fingerprint_id")
         mime_type = value.get("mime_type")
@@ -205,7 +205,7 @@ class ImagePerceptualMatch:
     threshold: int
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible match report."""
+        """Serialize the image similarity report."""
 
         return {
             "matched": self.matched,
@@ -227,13 +227,13 @@ def _require_supported_image_mime_type(mime_type: str) -> str:
 
 
 def trustmark_supported_image_mime_types() -> tuple[str, ...]:
-    """Return image MIME types supported by the TrustMark wrapper."""
+    """Image MIME types supported by the TrustMark wrapper."""
 
     return SUPPORTED_IMAGE_WATERMARK_MIME_TYPES
 
 
 def perceptual_image_watermark_id() -> str:
-    """Return the manifest watermark identifier for perceptual fingerprints."""
+    """Manifest watermark identifier for perceptual fingerprints."""
 
     return PERCEPTUAL_IMAGE_WATERMARK_ID
 
@@ -636,6 +636,6 @@ def verify_image_soft_binding(
 
 
 def watermark_id_for_image_soft_binding() -> str:
-    """Return the manifest watermark identifier for TrustMark soft bindings."""
+    """Manifest watermark identifier for TrustMark soft bindings."""
 
     return TRUSTMARK_WATERMARK_ID

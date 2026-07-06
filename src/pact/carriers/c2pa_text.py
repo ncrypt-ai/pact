@@ -57,7 +57,7 @@ class C2paTextAsset:
     exclusion_length: int | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible summary."""
+        """Summarize the embedded text container."""
 
         return {
             "method": self.method.value,
@@ -83,7 +83,7 @@ class C2paTextExtractionResult:
     reference: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible summary."""
+        """Summarize extracted C2PA text data."""
 
         return {
             "method": self.method.value,
@@ -106,7 +106,7 @@ class C2paTextValidationResult:
     manifest_store_bytes: bytes | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible summary."""
+        """Summarize C2PA text validation."""
 
         return {
             "valid": self.valid,
@@ -128,7 +128,7 @@ class C2paTextReadResult:
     manifest_read: C2paReadResult | None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible summary."""
+        """Summarize extraction, validation, and manifest readout."""
 
         return {
             "extraction": self.extraction.to_dict(),
@@ -273,13 +273,13 @@ def _validate_html_document(text: str) -> C2paTextValidationResult:
 
 
 def c2pa_text_recommended_method(mime_type: str) -> Method | None:
-    """Return the reference implementation's advisory method choice."""
+    """Reference implementation's advisory method choice."""
 
     return recommended_method(mime_type)
 
 
 def c2pa_text_comment_syntax(mime_type: str) -> tuple[str, str] | None:
-    """Return the structured-text host comment delimiters for one MIME type."""
+    """Structured-text host comment delimiters for one MIME type."""
 
     return comment_syntax(mime_type)
 

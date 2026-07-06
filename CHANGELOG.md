@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Version numbers mean:
+
+- Major versions change when public formats, verification semantics, registry
+  APIs, or storage behavior may require deliberate migration.
+- Minor versions add supported features or public capabilities without requiring
+  existing users to change working integrations.
+- Patch versions fix bugs, tighten wording, or improve internal behavior
+  without changing the intended public contract.
+
+Before `1.0.0`, the project is still pre-alpha. Breaking changes should still
+be called out clearly, but the manifest format and registry API are not yet
+stable.
+
 ## [Unreleased]
 
 ### Added

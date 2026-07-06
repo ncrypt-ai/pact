@@ -25,12 +25,17 @@ def test_policy_round_trip_uses_cawg_wire_values() -> None:
                 "Contact the claimant for a license.",
                 "https://example.com/license",
             ),
+            PolicyEntry(
+                Permission.NO_COMMERCIAL_TRAINING,
+                PermissionValue.NOT_ALLOWED,
+            ),
         )
     )
 
     wire_value = policy.to_dict()
 
     assert wire_value["cawg.ai_generative_training"] == {"use": "notAllowed"}
+    assert wire_value["pact.no_commercial_training"] == {"use": "notAllowed"}
     assert Policy.from_dict(wire_value) == policy
 
 

@@ -40,7 +40,7 @@ class InspectionSource:
         )
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible source summary."""
+        """Serialize source metadata without content bytes."""
 
         return asdict(self)
 
@@ -57,7 +57,7 @@ class ExtractedReference:
     details: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible reference summary."""
+        """Serialize the recovered manifest or claim reference."""
 
         return {
             "carrier": self.carrier,
@@ -287,8 +287,15 @@ def _try_embedded_c2pa_sidecar(
     except Exception as error:
         _record_error(errors, "embedded_c2pa_sidecar", error)
         return None
+    try:
+        signed = SignedManifest.from_json(sidecar)
+    except Exception as error:
+        _record_error(errors, carrier, error)
+        signed = None
     return ExtractedReference(
         carrier=carrier,
+        signed_manifest=signed,
+        claim_id=None if signed is None else signed.manifest.claim_id,
         details={
             "manifest_store_size_bytes": len(sidecar),
             "manifest_store_sha256": base64url_encode(
@@ -383,7 +390,7 @@ def _manifest_verification(
         content=content,
         nonce=nonce,
     )
-    return {**asdict(report), "valid": report.valid}
+    return report.to_dict()
 
 
 def _nonce_for_reference(reference: ExtractedReference) -> bytes | None:

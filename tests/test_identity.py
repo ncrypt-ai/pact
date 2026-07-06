@@ -37,6 +37,11 @@ class MemoryKeyring:
             raise self.error
         self.values[(service, username)] = password
 
+    def delete_password(self, service: str, username: str) -> None:
+        if self.error is not None:
+            raise self.error
+        del self.values[(service, username)]
+
 
 def _base64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
@@ -190,6 +195,10 @@ def test_keyring_store_round_trip_and_missing_identity() -> None:
     store.save(identity)
 
     assert store.load("https://registry.example").key_id == identity.key_id
+    assert store.delete("https://registry.example")
+    assert not store.delete("https://registry.example")
+    with pytest.raises(IdentityNotFoundError):
+        store.load(identity.registry_url)
 
 
 def test_keyring_store_wraps_backend_errors() -> None:

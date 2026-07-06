@@ -35,7 +35,7 @@ class PrivacyFinding:
     message: str
 
     def to_dict(self) -> dict[str, str]:
-        """Return a JSON-compatible finding."""
+        """Serialize this finding for reports and API responses."""
 
         return {
             "severity": self.severity.value,
@@ -61,7 +61,7 @@ class PrivacyAuditReport:
         )
 
     def require_passed(self) -> None:
-        """Raise when the payload contains private material."""
+        """Fail fast if private material crossed the publication boundary."""
 
         if self.passed:
             return
@@ -73,7 +73,7 @@ class PrivacyAuditReport:
         raise PrivacyAuditError("; ".join(errors))
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible report."""
+        """Serialize the audit result."""
 
         return {
             "passed": self.passed,

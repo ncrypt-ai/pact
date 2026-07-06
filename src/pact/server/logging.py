@@ -78,7 +78,7 @@ class LoggingConfig:
         return level
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible logging configuration."""
+        """Serialize logging settings for diagnostics."""
 
         return {
             "level": self.normalized_level(),

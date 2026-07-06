@@ -37,7 +37,7 @@ class Probe:
     claim_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible probe."""
+        """Serialize the prompt and withheld continuation."""
 
         result: dict[str, object] = {
             "probe_id": self.probe_id,
@@ -52,7 +52,7 @@ class Probe:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> Probe:
-        """Parse a probe from JSON-compatible data."""
+        """Load one probe from exported data."""
 
         return cls(
             probe_id=_required_string(value, "probe_id"),
@@ -78,7 +78,7 @@ class ProbeResponse:
     observed_at: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible response."""
+        """Serialize a collected model response."""
 
         result: dict[str, object] = {
             "probe_id": self.probe_id,
@@ -94,7 +94,7 @@ class ProbeResponse:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProbeResponse:
-        """Parse a provider response from JSON-compatible data."""
+        """Load a provider response from exported data."""
 
         return cls(
             probe_id=_required_string(value, "probe_id"),
@@ -116,7 +116,7 @@ class ProbeSet:
     analysis_plan: str = "pact.local-probe-analysis.v1"
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-compatible probe set."""
+        """Serialize the committed probe plan."""
 
         return {
             "target_model": self.target_model,
@@ -128,7 +128,7 @@ class ProbeSet:
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> ProbeSet:
-        """Parse a probe set and verify its commitment."""
+        """Load a probe plan and verify its commitment."""
 
         probes_value = value.get("probes")
         if not isinstance(probes_value, list):
@@ -149,7 +149,7 @@ class ProbeSet:
         return result
 
     def commitment_payload(self) -> dict[str, object]:
-        """Return the exact payload committed before response collection."""
+        """The payload committed before response collection."""
 
         return {
             "target_model": self.target_model,
@@ -159,7 +159,7 @@ class ProbeSet:
         }
 
     def compute_commitment(self) -> str:
-        """Return the SHA-256 commitment for this probe plan."""
+        """Base64url SHA-256 commitment for this probe plan."""
 
         digest = hashlib.sha256(
             canonical_json(self.commitment_payload())

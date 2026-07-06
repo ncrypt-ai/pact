@@ -43,6 +43,14 @@ class ClaimMeaning(StrEnum):
     SUSPECTED_TRAINING_USE = "suspected_training_use"
 
 
+class VerificationVerdict(StrEnum):
+    CONTENT_VERIFIED = "content_verified"
+    SIGNATURE_ONLY = "signature_only"
+    PRIVATE_CONTENT_UNCHECKED = "private_content_unchecked"
+    CONTENT_MISMATCH = "content_mismatch"
+    SIGNATURE_INVALID = "signature_invalid"
+
+
 def _validate_digest(value: object, label: str) -> str:
     if not isinstance(value, str):
         raise ManifestError(f"{label} must be a string")
@@ -277,6 +285,97 @@ def _ingredient_list(value: object) -> tuple[C2PAIngredient, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class ContentFingerprint:
+    """A public exact or perceptual fingerprint carried by the manifest."""
+
+    fingerprint_id: str
+    algorithm: str
+    value: str
+    media_type: str | None = None
+    details: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.fingerprint_id, str)
+            or not self.fingerprint_id.strip()
+        ):
+            raise ManifestError("fingerprint_id must be a nonempty string")
+        if not isinstance(self.algorithm, str) or not self.algorithm.strip():
+            raise ManifestError("fingerprint algorithm must be nonempty")
+        if not isinstance(self.value, str) or not self.value.strip():
+            raise ManifestError("fingerprint value must be nonempty")
+        if self.media_type is not None:
+            _optional_string(self.media_type, "fingerprint media_type")
+        if self.details is not None:
+            if not isinstance(self.details, Mapping):
+                raise ManifestError("fingerprint details must be an object")
+            try:
+                canonical_json(cast(JsonValue, dict(self.details)))
+            except Exception as error:
+                raise ManifestError(
+                    "fingerprint details must be JSON-serializable"
+                ) from error
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the fingerprint wire representation."""
+
+        result: dict[str, object] = {
+            "fingerprint_id": self.fingerprint_id,
+            "algorithm": self.algorithm,
+            "value": self.value,
+        }
+        if self.media_type is not None:
+            result["media_type"] = self.media_type
+        if self.details is not None:
+            result["details"] = dict(self.details)
+        return result
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> Self:
+        """Parse one content fingerprint from manifest JSON."""
+
+        _reject_unknown_fields(
+            value,
+            {
+                "fingerprint_id",
+                "algorithm",
+                "value",
+                "media_type",
+                "details",
+            },
+            "fingerprint",
+        )
+        media_type = value.get("media_type")
+        details = value.get("details")
+        if media_type is not None and not isinstance(media_type, str):
+            raise ManifestError("fingerprint media_type must be a string")
+        if details is not None and not isinstance(details, Mapping):
+            raise ManifestError("fingerprint details must be an object")
+        return cls(
+            fingerprint_id=_required_string(value, "fingerprint_id"),
+            algorithm=_required_string(value, "algorithm"),
+            value=_required_string(value, "value"),
+            media_type=media_type,
+            details=None
+            if details is None
+            else cast(Mapping[str, object], details),
+        )
+
+
+def _fingerprint_list(value: object) -> tuple[ContentFingerprint, ...]:
+    if not isinstance(value, list):
+        raise ManifestError("fingerprints must be an array")
+    fingerprints = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ManifestError("fingerprints must contain objects")
+        fingerprints.append(
+            ContentFingerprint.from_dict(cast(Mapping[str, object], item))
+        )
+    return tuple(fingerprints)
+
+
+@dataclass(frozen=True, slots=True)
 class ContentBinding:
     """A nonce-bound commitment to canonical content."""
 
@@ -391,6 +490,7 @@ class Manifest:
     watermarks: tuple[str, ...] = ()
     actions: tuple[C2PAAction, ...] = ()
     ingredients: tuple[C2PAIngredient, ...] = ()
+    fingerprints: tuple[ContentFingerprint, ...] = ()
     source_url: str | None = None
     licensing_url: str | None = None
     version: str = "1"
@@ -456,6 +556,18 @@ class Manifest:
                 for item in self.ingredients
             ),
         )
+        object.__setattr__(
+            self,
+            "fingerprints",
+            tuple(
+                item
+                if isinstance(item, ContentFingerprint)
+                else ContentFingerprint.from_dict(
+                    cast(Mapping[str, object], item)
+                )
+                for item in self.fingerprints
+            ),
+        )
         if self.source_url is not None:
             _validate_url(self.source_url, "source_url")
         if self.licensing_url is not None:
@@ -479,6 +591,7 @@ class Manifest:
         watermarks: tuple[str, ...] = (),
         actions: tuple[C2PAAction, ...] = (),
         ingredients: tuple[C2PAIngredient, ...] = (),
+        fingerprints: tuple[ContentFingerprint, ...] = (),
         source_url: str | None = None,
         licensing_url: str | None = None,
         claim_id: UUID | None = None,
@@ -506,6 +619,7 @@ class Manifest:
             watermarks=watermarks,
             actions=actions,
             ingredients=ingredients,
+            fingerprints=fingerprints,
             source_url=source_url,
             licensing_url=licensing_url,
         )
@@ -534,6 +648,10 @@ class Manifest:
                 "ingredients": [item.to_dict() for item in self.ingredients]
             },
         }
+        if self.fingerprints:
+            result["fingerprints"] = [
+                item.to_dict() for item in self.fingerprints
+            ]
         if self.source_url is not None:
             result["source_url"] = self.source_url
         if self.licensing_url is not None:
@@ -567,6 +685,7 @@ class Manifest:
                     "watermarks",
                     "actions",
                     "ingredients",
+                    "fingerprints",
                     "source_url",
                     "licensing_url",
                 },
@@ -602,6 +721,7 @@ class Manifest:
                 "ingredients",
                 {"ingredients": []},
             )
+            fingerprints_value = value.get("fingerprints", [])
             if source_url is not None and not isinstance(source_url, str):
                 raise ManifestError("source_url must be a string")
             if licensing_url is not None and not isinstance(
@@ -627,6 +747,7 @@ class Manifest:
                 watermarks=_string_list(value["watermarks"], "watermarks"),
                 actions=_action_list(actions_value),
                 ingredients=_ingredient_list(ingredients_value),
+                fingerprints=_fingerprint_list(fingerprints_value),
                 source_url=source_url,
                 licensing_url=licensing_url,
             )
@@ -787,6 +908,22 @@ class VerificationReport:
     errors: tuple[str, ...]
 
     @property
+    def policy_valid(self) -> bool:
+        return not self.errors
+
+    @property
+    def overall_verdict(self) -> VerificationVerdict:
+        if not self.signature_valid or not self.key_id_valid:
+            return VerificationVerdict.SIGNATURE_INVALID
+        if self.content_binding_valid is True:
+            return VerificationVerdict.CONTENT_VERIFIED
+        if self.content_binding_valid is False:
+            return VerificationVerdict.CONTENT_MISMATCH
+        if not self.public_nonce_available:
+            return VerificationVerdict.PRIVATE_CONTENT_UNCHECKED
+        return VerificationVerdict.SIGNATURE_ONLY
+
+    @property
     def valid(self) -> bool:
         """Whether every check requested by the caller succeeded."""
 
@@ -805,11 +942,22 @@ class VerificationReport:
 
     @property
     def content_claim_valid(self) -> bool:
-        """Whether the signed claim is valid and bound to supplied content."""
-
         return (
             self.claim_signature_valid and self.content_binding_valid is True
         )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "signature_valid": self.signature_valid,
+            "key_id_valid": self.key_id_valid,
+            "content_binding_valid": self.content_binding_valid,
+            "content_binding_checked": self.content_binding_checked,
+            "public_nonce_available": self.public_nonce_available,
+            "policy_valid": self.policy_valid,
+            "overall_verdict": self.overall_verdict.value,
+            "valid": self.valid,
+            "errors": list(self.errors),
+        }
 
 
 def verify_manifest(

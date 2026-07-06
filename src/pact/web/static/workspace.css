@@ -143,10 +143,6 @@ button[disabled] {
   border-color: #c00;
 }
 
-.session-status {
-  font-weight: 600;
-}
-
 .small {
   color: #555;
   font-size: 0.92rem;

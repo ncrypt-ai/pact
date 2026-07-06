@@ -5,11 +5,11 @@ import hashlib
 import json
 import os
 from dataclasses import asdict
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from pact.canonical import CanonicalizationProfile, JsonValue, canonical_json
-from pact.crypto import sign_es256
+from pact.crypto import base64url_encode, sign_es256
 from pact.detection.evidence import ProbeEvidencePackage
 from pact.detection.probes import (
     ProbeSet,
@@ -17,6 +17,7 @@ from pact.detection.probes import (
     responses_from_jsonl,
 )
 from pact.detection.statistics import analyze_probe_responses
+from pact.fingerprints import create_content_fingerprints
 from pact.identity import ClaimantIdentity
 from pact.manifest import (
     C2PAAction,
@@ -26,8 +27,15 @@ from pact.manifest import (
     sign_manifest,
     verify_manifest,
 )
+from pact.oprf import DEVICE_BINDING_TOKEN_PREFIX, format_device_binding_token
 from pact.policy import Permission, PermissionValue, Policy, PolicyEntry
 from pact.privacy import audit_signed_manifest_publication
+
+
+def _browser_ristretto() -> Any:
+    from oblivious.ristretto import python
+
+    return python
 
 
 def _b64(value: bytes) -> str:
@@ -36,6 +44,16 @@ def _b64(value: bytes) -> str:
 
 def _unb64(value: str) -> bytes:
     return base64.b64decode(value.encode("ascii"), validate=True)
+
+
+def _optional_unb64(value: object) -> bytes | None:
+    if value is None or type(value).__name__ in {"JsNull", "JsUndefined"}:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("optional base64 value must be a string or null")
+    if value == "":
+        return None
+    return _unb64(value)
 
 
 def _json(value: object) -> str:
@@ -57,6 +75,10 @@ def _policy_from_json(value: str | None, fallback: str) -> Policy:
         (
             PolicyEntry(
                 Permission.GENERATIVE_TRAINING,
+                permission_value,
+            ),
+            PolicyEntry(
+                Permission.NO_COMMERCIAL_TRAINING,
                 permission_value,
             ),
         )
@@ -85,6 +107,7 @@ def create_identity(registry_url: str, password: str) -> str:
             "key_id": identity.key_id,
             "public_jwk": identity.public_jwk,
             "encrypted_pkcs8_b64": _b64(identity.export_pkcs8(password)),
+            "continuity_secret": base64url_encode(os.urandom(32)),
         }
     )
 
@@ -213,6 +236,41 @@ def create_mutation_request(
     )
 
 
+def create_device_binding_oprf_request(local_input_b64: str) -> str:
+    """Create a blinded browser device-binding request."""
+
+    ristretto = _browser_ristretto()
+    local_input = _unb64(local_input_b64)
+    blind = ristretto.scalar()
+    blinded = blind * ristretto.point.hash(local_input)
+    return _json(
+        {
+            "blind_b64": _b64(bytes(blind)),
+            "blinded": base64.urlsafe_b64encode(bytes(blinded))
+            .rstrip(b"=")
+            .decode("ascii"),
+        }
+    )
+
+
+def finalize_device_binding_oprf_token(
+    blind_b64: str,
+    evaluated_b64url: str,
+) -> str:
+    """Finish the browser OPRF token from the registry response."""
+
+    ristretto = _browser_ristretto()
+    blind = ristretto.scalar(_unb64(blind_b64))
+    padded = evaluated_b64url + "=" * (-len(evaluated_b64url) % 4)
+    evaluated = ristretto.point(
+        base64.urlsafe_b64decode(padded.encode("ascii"))
+    )
+    token = format_device_binding_token(bytes((~blind) * evaluated))
+    if not token.startswith(DEVICE_BINDING_TOKEN_PREFIX):
+        raise ValueError("device binding token formatting failed")
+    return token
+
+
 def create_rotation_request(
     registry_url: str,
     current_encrypted_pkcs8_b64: str,
@@ -281,12 +339,13 @@ def sign_content(
     identity = _identity(registry_url, encrypted_pkcs8_b64, password)
     content = _unb64(content_b64)
     nonce = os.urandom(32)
+    canonicalization_profile = CanonicalizationProfile(canonicalization)
     manifest = Manifest.create(
         identity=identity,
         registry_root_fingerprint=registry_root_fingerprint,
         content=content,
         mime_type=mime_type,
-        canonicalization=CanonicalizationProfile(canonicalization),
+        canonicalization=canonicalization_profile,
         policy=_policy_from_json(policy_json, policy),
         carriers=(carrier,),
         actions=tuple(
@@ -296,6 +355,11 @@ def sign_content(
         ingredients=tuple(
             C2PAIngredient.from_dict(cast(dict[str, object], item))
             for item in json.loads(ingredients_json)
+        ),
+        fingerprints=create_content_fingerprints(
+            content,
+            mime_type,
+            canonicalization_profile,
         ),
         source_url=source_url or None,
         nonce=nonce,
@@ -316,31 +380,31 @@ def sign_content(
 def verify_manifest_json(
     signed_manifest_json: str,
     public_jwk_json: str,
-    content_b64: str | None = None,
-    nonce_b64: str | None = None,
+    content_b64: object = None,
+    nonce_b64: object = None,
 ) -> str:
     """Verify a signed manifest and optional content binding."""
 
     report = verify_manifest(
         SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
         cast(dict[str, object], json.loads(public_jwk_json)),
-        content=None if content_b64 is None else _unb64(content_b64),
-        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+        content=_optional_unb64(content_b64),
+        nonce=_optional_unb64(nonce_b64),
     )
     return _json(asdict(report))
 
 
 def privacy_audit(
     signed_manifest_json: str,
-    content_b64: str | None = None,
-    nonce_b64: str | None = None,
+    content_b64: object = None,
+    nonce_b64: object = None,
 ) -> str:
     """Audit a signed manifest before it is registered publicly."""
 
     report = audit_signed_manifest_publication(
         SignedManifest.from_json(signed_manifest_json.encode("utf-8")),
-        content=None if content_b64 is None else _unb64(content_b64),
-        nonce=None if nonce_b64 is None else _unb64(nonce_b64),
+        content=_optional_unb64(content_b64),
+        nonce=_optional_unb64(nonce_b64),
     )
     return _json(report.to_dict())
 
@@ -451,7 +515,7 @@ def embed_signed_manifest_carrier(
     asset_b64: str,
     mime_type: str,
     signed_manifest_json: str,
-    nonce_b64: str | None = None,
+    nonce_b64: object = None,
 ) -> str:
     """Embed a PACT signed manifest in a browser-provided asset."""
 
@@ -464,11 +528,9 @@ def embed_signed_manifest_carrier(
 
     asset = _unb64(asset_b64)
     signed = SignedManifest.from_json(signed_manifest_json.encode("utf-8"))
-    nonce = (
-        _unb64(nonce_b64)
-        if nonce_b64 is not None
-        else signed.manifest.content_binding.public_nonce_bytes()
-    )
+    nonce = _optional_unb64(nonce_b64)
+    if nonce is None:
+        nonce = signed.manifest.content_binding.public_nonce_bytes()
     if mime_type in {"text/html", "application/xhtml+xml"}:
         embedded = embed_html_carrier(
             asset,
