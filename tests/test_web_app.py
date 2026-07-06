@@ -828,6 +828,7 @@ def test_workspace_renders_cognito_login_config_and_callback(
     workspace = client.get("/pact/web")
     callback = client.get("/pact/auth/callback")
     csp = workspace.headers["Content-Security-Policy"]
+    callback_csp = callback.headers["Content-Security-Policy"]
 
     assert workspace.status_code == 200
     assert callback.status_code == 200
@@ -838,6 +839,8 @@ def test_workspace_renders_cognito_login_config_and_callback(
     )
     assert 'id="start-cognito-login"' in workspace.text
     assert "https://example.auth.us-east-2.amazoncognito.com" in csp
+    assert "https://example.auth.us-east-2.amazoncognito.com" in callback_csp
+    assert "'unsafe-eval'" in callback_csp
 
 
 def test_request_id_header_is_bounded_and_sanitized(tmp_path: Path) -> None:
@@ -1158,6 +1161,10 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert "Recovery and account options" in workspace.text
     assert "Log out" in workspace.text
     assert "Trust upgrades" in workspace.text
+    assert "Admin approve hosted account" not in workspace.text
+    assert "Third-party attestation" not in workspace.text
+    assert 'id="authorize-hosted-account"' not in workspace.text
+    assert 'id="attest-third-party"' not in workspace.text
     assert workspace.text.index(
         "Recovery and account options"
     ) < workspace.text.index("Trust upgrades")

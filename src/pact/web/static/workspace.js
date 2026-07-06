@@ -1306,6 +1306,7 @@ async function domainVerificationRecord(domainValue) {
   return {
     domain,
     txt_name: `_pact-challenge.${domain}`,
+    txt_host: "_pact-challenge",
     txt_value: `pact-domain-verification=${base64Url(new Uint8Array(digest))}`
   };
 }
@@ -1949,10 +1950,11 @@ document.querySelector("#show-domain-record").onclick = () =>
       document.querySelector("#verify-domain-name").value
     );
     renderObject("#domain-verification-result", "DNS TXT record", [
-      ["Name", record.txt_name],
+      ["Full name", record.txt_name],
+      ["Host/name in the domain zone", record.txt_host],
       ["Type", "TXT"],
       ["Value", record.txt_value],
-      ["Next step", "Create this record in public DNS, then press Verify DNS record."]
+      ["Next step", "Create this exact public TXT record, wait for DNS propagation, then press Verify DNS record."]
     ]);
     message("DNS TXT record ready.");
   });
@@ -2017,69 +2019,6 @@ document.querySelector("#complete-hosted-login").onclick = () =>
     renderProfile("#hosted-account-result", profile, evidence);
     await loadOwnProfile();
     message("Hosted account login submitted.");
-  });
-
-document.querySelector("#authorize-hosted-account").onclick = () =>
-  run(async () => {
-    requireIdentity();
-    const keyId =
-      document.querySelector("#authorize-hosted-key-id").value.trim() ||
-      requireIdentity().key_id;
-    const payload = {
-      target_key_id: keyId,
-      ...(document.querySelector("#authorize-hosted-provider").value.trim()
-        ? { provider: document.querySelector("#authorize-hosted-provider").value.trim() }
-        : {}),
-      ...(document.querySelector("#authorize-hosted-note").value.trim()
-        ? { note: document.querySelector("#authorize-hosted-note").value.trim() }
-        : {})
-    };
-    const request = await signedMutation(
-      "account_authorization",
-      payload,
-      requireIdentity().key_id
-    );
-    const profile = await registryJson(`/pact/api/v1/profiles/${keyId}/hosted-authorize`, {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    const evidence = await registryJson(`/pact/api/v1/profiles/${profile.key_id}/evidence`);
-    renderProfile("#hosted-account-result", profile, evidence);
-    if (profile.key_id === requireIdentity().key_id) {
-      await loadOwnProfile();
-    }
-    message("Hosted account approved.");
-  });
-
-document.querySelector("#attest-third-party").onclick = () =>
-  run(async () => {
-    requireIdentity();
-    const keyId = document.querySelector("#third-party-key-id").value.trim();
-    if (!keyId) {
-      throw new Error("Enter the profile ID to attest.");
-    }
-    const payload = {
-      target_key_id: keyId,
-      documented_rights: document.querySelector("#third-party-documented-rights").checked,
-      ...(document.querySelector("#third-party-provider").value.trim()
-        ? { provider: document.querySelector("#third-party-provider").value.trim() }
-        : {}),
-      ...(document.querySelector("#third-party-note").value.trim()
-        ? { note: document.querySelector("#third-party-note").value.trim() }
-        : {})
-    };
-    const request = await signedMutation(
-      "third_party_attestation",
-      payload,
-      requireIdentity().key_id
-    );
-    const profile = await registryJson(`/pact/api/v1/profiles/${keyId}/third-party-attest`, {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-    const evidence = await registryJson(`/pact/api/v1/profiles/${profile.key_id}/evidence`);
-    renderProfile("#third-party-result", profile, evidence);
-    message("Third-party attestation submitted.");
   });
 
 document.querySelector("#export-identity").onclick = () =>

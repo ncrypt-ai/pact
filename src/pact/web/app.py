@@ -898,6 +898,7 @@ def _content_security_policy(
         )
     if (
         path == "/pact/web"
+        or path == "/pact/auth/callback"
         or path.startswith("/pact/web/")
         or path.startswith("/pact/static/")
     ):
