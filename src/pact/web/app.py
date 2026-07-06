@@ -54,7 +54,7 @@ from pact.registry.app import (
     RegistryError,
     RegistryService,
 )
-from pact.server.config import default_routes
+from pact.server.config import CognitoAuthorizerConfig, default_routes
 from pact.server.logging import (
     LoggingConfig,
     configure_logging,
@@ -395,6 +395,89 @@ def _require_profile_request_auth(
             raise
         raise HTTPException(status_code=401, detail=str(error)) from error
     return key_id
+
+
+def _api_gateway_jwt_claims(request: Request) -> dict[str, object] | None:
+    event = request.scope.get("aws.event")
+    if not isinstance(event, dict):
+        return None
+    request_context = event.get("requestContext")
+    if not isinstance(request_context, dict):
+        return None
+    authorizer = request_context.get("authorizer")
+    if not isinstance(authorizer, dict):
+        return None
+    jwt = authorizer.get("jwt")
+    if not isinstance(jwt, dict):
+        return None
+    claims = jwt.get("claims")
+    if not isinstance(claims, dict):
+        return None
+    return claims
+
+
+def _verified_cognito_hosted_account(
+    request: Request,
+    config: CognitoAuthorizerConfig | None,
+) -> dict[str, object] | None:
+    if config is None:
+        return None
+    claims = _api_gateway_jwt_claims(request)
+    if claims is None:
+        raise HTTPException(
+            status_code=401,
+            detail="cognito login is required",
+        )
+    expected_issuer = config.issuer or (
+        f"https://cognito-idp.{config.region}.amazonaws.com/"
+        f"{config.user_pool_id}"
+    )
+    issuer = claims.get("iss")
+    if issuer != expected_issuer:
+        raise HTTPException(status_code=401, detail="cognito issuer mismatch")
+    audience = claims.get("aud")
+    client_id = claims.get("client_id")
+    if audience != config.app_client_id and client_id != config.app_client_id:
+        raise HTTPException(
+            status_code=401, detail="cognito audience mismatch"
+        )
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise HTTPException(
+            status_code=401, detail="cognito subject is missing"
+        )
+    subject_hash = hashlib.sha256(
+        f"{expected_issuer}\0{subject}".encode()
+    ).hexdigest()
+    email_verified_value = claims.get("email_verified")
+    email_verified = (
+        email_verified_value
+        if isinstance(email_verified_value, bool)
+        else str(email_verified_value).lower() == "true"
+    )
+    return {
+        "provider": "cognito",
+        "issuer": expected_issuer,
+        "subject_hash": subject_hash,
+        "client_id": config.app_client_id,
+        "email_verified": email_verified,
+    }
+
+
+def _cognito_hosted_ui_origin(
+    config: CognitoAuthorizerConfig | None,
+) -> str | None:
+    if config is None or not config.hosted_ui_domain:
+        return None
+    domain = config.hosted_ui_domain.strip().rstrip("/")
+    if not domain:
+        return None
+    if not domain.startswith(("https://", "http://")):
+        domain = f"https://{domain}"
+    parsed = urlsplit(domain)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _templates() -> Jinja2Templates:
@@ -797,11 +880,18 @@ def _raise_http_error(error: Exception) -> None:
     ) from error
 
 
-def _content_security_policy(path: str, *, local_mode: bool = False) -> str:
+def _content_security_policy(
+    path: str,
+    *,
+    local_mode: bool = False,
+    connect_src: tuple[str, ...] = (),
+) -> str:
     workspace_connect = (
         "connect-src 'self' blob: https://cdn.jsdelivr.net "
         "https://files.pythonhosted.org"
     )
+    if connect_src:
+        workspace_connect = f"{workspace_connect} {' '.join(connect_src)}"
     if local_mode:
         workspace_connect = (
             f"{workspace_connect} http://localhost:* http://127.0.0.1:*"
@@ -1032,6 +1122,7 @@ def create_app(
     trusted_proxy_config: TrustedProxyConfig | None = None,
     challenge_difficulty_config: ChallengeDifficultyConfig | None = None,
     logging_config: LoggingConfig | None = None,
+    cognito_authorizer_config: CognitoAuthorizerConfig | None = None,
 ) -> FastAPI:
     """Build the registry API and proof-page application."""
 
@@ -1050,6 +1141,9 @@ def create_app(
     )
     if normalized_registry_url is None:
         raise ValueError("registry_url is required when service is omitted")
+    cognito_hosted_ui_origin = _cognito_hosted_ui_origin(
+        cognito_authorizer_config
+    )
     trusted_hosts = list(allowed_hosts) or [
         parsed_public_url.hostname or "localhost"
     ]
@@ -1078,6 +1172,7 @@ def create_app(
     app.state.trusted_proxy_config = trusted_proxies
     app.state.challenge_difficulty_config = challenge_difficulty
     app.state.logging_config = selected_logging
+    app.state.cognito_authorizer_config = cognito_authorizer_config
     LOGGER.info(
         "created web application",
         extra={
@@ -1240,7 +1335,15 @@ def create_app(
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Content-Security-Policy",
-            _content_security_policy(request.url.path, local_mode=local_mode),
+            _content_security_policy(
+                request.url.path,
+                local_mode=local_mode,
+                connect_src=(
+                    (cognito_hosted_ui_origin,)
+                    if cognito_hosted_ui_origin is not None
+                    else ()
+                ),
+            ),
         )
         if local_mode:
             response.headers.setdefault("Cache-Control", "no-store")
@@ -1269,8 +1372,7 @@ def create_app(
             },
         )
 
-    @app.get("/pact/web", response_class=HTMLResponse)
-    async def workspace(request: Request) -> HTMLResponse:
+    def workspace_response(request: Request) -> HTMLResponse:
         if not enable_workspace:
             raise HTTPException(status_code=404, detail="workspace disabled")
         return templates.TemplateResponse(
@@ -1280,8 +1382,21 @@ def create_app(
                 "registry_url": app.state.registry_url,
                 "public_base_url": app.state.public_base_url,
                 "standalone": service is None,
+                "cognito_config": (
+                    None
+                    if cognito_authorizer_config is None
+                    else cognito_authorizer_config.to_dict()
+                ),
             },
         )
+
+    @app.get("/pact/web", response_class=HTMLResponse)
+    async def workspace(request: Request) -> HTMLResponse:
+        return workspace_response(request)
+
+    @app.get("/pact/auth/callback", response_class=HTMLResponse)
+    async def cognito_auth_callback(request: Request) -> HTMLResponse:
+        return workspace_response(request)
 
     @app.get("/pact/web/pact-browser-{feature}.pyz")
     async def browser_python_feature(feature: str) -> Response:
@@ -1927,7 +2042,13 @@ def create_app(
     ) -> dict[str, object]:
         enforce_identity_rate(request, body)
         try:
-            profile = service.complete_hosted_account_login(body.to_domain())
+            profile = service.complete_hosted_account_login(
+                body.to_domain(),
+                verified_hosted_account=_verified_cognito_hosted_account(
+                    request,
+                    cognito_authorizer_config,
+                ),
+            )
         except Exception as error:
             _raise_http_error(error)
         return _json_dict(profile)

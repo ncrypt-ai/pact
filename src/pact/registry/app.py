@@ -2395,6 +2395,8 @@ class RegistryService:
     def complete_hosted_account_login(
         self,
         request: MutationRequest,
+        *,
+        verified_hosted_account: Mapping[str, object] | None = None,
     ) -> ClaimantProfile:
         """Record hosted-account evidence from a registry-host login flow."""
 
@@ -2403,30 +2405,47 @@ class RegistryService:
             ChallengePurpose.HOSTED_ACCOUNT_AUTHORIZATION,
         )
         self.get_profile(request.claimant_key_id)
-        if self._hosted_account_verifier is None:
-            raise RegistryError(
-                "hosted account login verification is not configured"
-            )
-        if not self._hosted_account_verifier(
-            request.claimant_key_id,
-            request.payload,
-        ):
-            raise RegistryError("hosted account login verification failed")
-        provider = request.payload.get("provider")
+        if verified_hosted_account is None:
+            hosted_account_verifier = self._hosted_account_verifier
+            if hosted_account_verifier is None:
+                raise RegistryError(
+                    "hosted account login verification is not configured"
+                )
+            if not hosted_account_verifier(
+                request.claimant_key_id,
+                request.payload,
+            ):
+                raise RegistryError("hosted account login verification failed")
+            hosted_evidence: Mapping[str, object] = {}
+        else:
+            hosted_evidence = verified_hosted_account
+        provider = hosted_evidence.get(
+            "provider", request.payload.get("provider")
+        )
         if provider is not None and not isinstance(provider, str):
             raise RegistryError("provider must be a string")
+        event_payload: dict[str, object] = {
+            "key_id": request.claimant_key_id,
+            "authorized_by_key_id": request.claimant_key_id,
+            "hosted_account": True,
+            "third_party_attested": False,
+            "documented_rights": False,
+            "provider": provider or self.registry_url,
+            "method": "hosted_login",
+        }
+        for field_name in (
+            "issuer",
+            "subject_hash",
+            "client_id",
+            "email_verified",
+        ):
+            value = hosted_evidence.get(field_name)
+            if value is not None:
+                event_payload[field_name] = value
         self._append_event(
             RegistryEventType.ACCOUNT_AUTHORIZED,
             request.claimant_key_id,
-            {
-                "key_id": request.claimant_key_id,
-                "authorized_by_key_id": request.claimant_key_id,
-                "hosted_account": True,
-                "third_party_attested": False,
-                "documented_rights": False,
-                "provider": provider or self.registry_url,
-                "method": "hosted_login",
-            },
+            event_payload,
         )
         return self.get_profile(request.claimant_key_id)
 

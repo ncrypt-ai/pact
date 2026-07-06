@@ -1859,11 +1859,12 @@ def _cmd_web(args: argparse.Namespace) -> int:
     port = args.port
     remote_registry = cast(str | None, args.remote_registry)
     if remote_registry:
+        normalized_remote_registry = normalize_registry_url(remote_registry)
         return _serve_workspace_only(
-            registry_url=normalize_registry_url(remote_registry),
+            registry_url=normalized_remote_registry,
             host="127.0.0.1",
             port=port,
-            public_base_url=f"http://127.0.0.1:{port}",
+            public_base_url=normalized_remote_registry,
             logging_config=_logging_config_from_args(args),
         )
     registry_url = _resolve_registry_url(args)

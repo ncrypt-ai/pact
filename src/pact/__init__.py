@@ -160,7 +160,6 @@ if TYPE_CHECKING:
     )
     from pact.server import (
         AuthProvider,
-        AwsLambdaRoute,
         CognitoAuthorizerConfig,
         DeploymentMode,
         RouteAuth,
@@ -168,7 +167,6 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SecurityProfile,
         StoreBackend,
-        aws_lambda_routes,
         create_registry_store,
         default_routes,
     )
@@ -342,7 +340,6 @@ _EXPORTS = {
     "domain_verification_txt_value": "pact.registry",
     "merkle_root": "pact.registry",
     "AuthProvider": "pact.server",
-    "AwsLambdaRoute": "pact.server",
     "CognitoAuthorizerConfig": "pact.server",
     "DeploymentMode": "pact.server",
     "RouteAuth": "pact.server",
@@ -350,7 +347,6 @@ _EXPORTS = {
     "RuntimeConfig": "pact.server",
     "SecurityProfile": "pact.server",
     "StoreBackend": "pact.server",
-    "aws_lambda_routes": "pact.server",
     "create_registry_store": "pact.server",
     "default_routes": "pact.server",
     "PERCEPTUAL_IMAGE_WATERMARK_ID": "pact.watermarks",

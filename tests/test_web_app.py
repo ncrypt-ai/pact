@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from pact import (
     CanonicalizationProfile,
     ChallengePurpose,
     ClaimantIdentity,
+    CognitoAuthorizerConfig,
     FileRegistryStore,
     Manifest,
     MutationRequest,
@@ -21,7 +23,9 @@ from pact import (
     Policy,
     PolicyEntry,
     RegistryCertificateAuthority,
+    RegistryEventType,
     RegistryService,
+    TrustTier,
     embed_text_carrier,
     sign_manifest,
 )
@@ -38,6 +42,17 @@ from pact.web import (
     UploadLimitConfig,
     create_app,
 )
+
+
+class AwsEventMiddleware:
+    def __init__(self, app: Any, event: dict[str, object]) -> None:
+        self.app = app
+        self.event = event
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            scope["aws.event"] = self.event
+        await self.app(scope, receive, send)
 
 
 def device_binding_token(identity: ClaimantIdentity) -> str:
@@ -181,6 +196,67 @@ def register_profile(client: TestClient, identity: ClaimantIdentity) -> None:
             "signature": request.signature,
         },
     ).raise_for_status()
+
+
+def hosted_login_body(
+    client: TestClient,
+    identity: ClaimantIdentity,
+) -> dict[str, object]:
+    challenge_response = client.post(
+        "/pact/api/v1/challenges",
+        json={
+            "purpose": "hosted_account_authorization",
+            "difficulty": 4,
+            "bound_key_id": identity.key_id,
+        },
+    )
+    challenge = challenge_response.json()
+    challenge_object = MutationChallenge(
+        registry_url=challenge["registry_url"],
+        challenge_id=UUID(challenge["challenge_id"]),
+        purpose=ChallengePurpose(challenge["purpose"]),
+        issued_at=datetime.fromisoformat(challenge["issued_at"]),
+        expires_at=datetime.fromisoformat(challenge["expires_at"]),
+        challenge_nonce=challenge["challenge_nonce"],
+        difficulty=challenge["difficulty"],
+        bound_key_id=challenge.get("bound_key_id"),
+    )
+    request = MutationRequest.create(
+        identity,
+        challenge_object,
+        payload={},
+        proof_of_work_solution=solve_pow(challenge_object),
+    )
+    return {
+        "challenge_id": str(request.challenge_id),
+        "claimant_public_jwk": request.claimant_public_jwk,
+        "proof_of_work_solution": request.proof_of_work_solution,
+        "payload": request.payload,
+        "signature": request.signature,
+    }
+
+
+def api_gateway_jwt_event(
+    *,
+    issuer: str = "https://cognito-idp.us-east-2.amazonaws.com/pool-1",
+    client_id: str = "client-1",
+    subject: str = "subject-1",
+    email_verified: str = "true",
+) -> dict[str, object]:
+    return {
+        "requestContext": {
+            "authorizer": {
+                "jwt": {
+                    "claims": {
+                        "iss": issuer,
+                        "client_id": client_id,
+                        "sub": subject,
+                        "email_verified": email_verified,
+                    }
+                }
+            }
+        }
+    }
 
 
 def profile_auth_headers(
@@ -463,7 +539,10 @@ def test_web_app_serves_registry_profile_claim_and_verify_pages(
     profile_page = client.get(f"/pact/profiles/{identity.key_id}")
     assert identity.key_id in profile_page.text
     assert "device_fingerprint" not in profile_page.text
-    assert "<strong>Trust tier:</strong> unauthenticated_device" in profile_page.text
+    assert (
+        "<strong>Trust tier:</strong> unauthenticated_device"
+        in profile_page.text
+    )
     assert "<strong>Auth level:</strong>" not in profile_page.text
     assert (
         client.get(
@@ -658,6 +737,48 @@ def test_workspace_csp_allows_localhost_only_in_local_mode(
     assert "http://127.0.0.1:*" in local_csp
 
 
+def test_workspace_renders_cognito_login_config_and_callback(
+    tmp_path: Path,
+) -> None:
+    registry_url = "https://registry.example"
+    authority = RegistryCertificateAuthority.initialize(registry_url)
+    service = RegistryService(
+        registry_url,
+        store=FileRegistryStore(tmp_path / "store"),
+        certificate_authority=authority,
+    )
+    app = create_app(
+        service,
+        public_base_url="https://registry.example",
+        enable_workspace=True,
+        allowed_hosts=("testserver",),
+        cognito_authorizer_config=CognitoAuthorizerConfig(
+            user_pool_id="pool-1",
+            app_client_id="client-1",
+            region="us-east-2",
+            hosted_ui_domain=(
+                "https://example.auth.us-east-2.amazoncognito.com"
+            ),
+            callback_url="https://registry.example/pact/auth/callback",
+        ),
+    )
+    client = TestClient(app)
+
+    workspace = client.get("/pact/web")
+    callback = client.get("/pact/auth/callback")
+    csp = workspace.headers["Content-Security-Policy"]
+
+    assert workspace.status_code == 200
+    assert callback.status_code == 200
+    assert 'data-cognito-app-client-id="client-1"' in workspace.text
+    assert (
+        'data-cognito-hosted-ui-domain="https://example.auth.us-east-2.amazoncognito.com"'
+        in workspace.text
+    )
+    assert 'id="start-cognito-login"' in workspace.text
+    assert "https://example.auth.us-east-2.amazoncognito.com" in csp
+
+
 def test_request_id_header_is_bounded_and_sanitized(tmp_path: Path) -> None:
     client, _identity = make_client(tmp_path)
 
@@ -786,9 +907,10 @@ def test_web_inspect_resolves_embedded_pdf_manifest_sidecar(
     assert inspected["reference"]["carrier"] == "pdf_c2pa_sidecar"
     assert inspected["reference"]["claim_id"] == claim["claim_id"]
     assert inspected["registry_claim"]["claim_id"] == claim["claim_id"]
-    assert inspected["signed_manifest"]["manifest"]["claim_id"] == claim[
-        "claim_id"
-    ]
+    assert (
+        inspected["signed_manifest"]["manifest"]["claim_id"]
+        == claim["claim_id"]
+    )
 
 
 def test_web_inspect_rejects_oversized_upload(tmp_path: Path) -> None:
@@ -997,7 +1119,9 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert "Generative AI training" in workspace_js
     assert "Search indexing" in workspace_js
     assert "Redistribution" in workspace_js
-    assert '["Display name", current.display_name || "Anonymous"]' in workspace_js
+    assert (
+        '["Display name", current.display_name || "Anonymous"]' in workspace_js
+    )
     assert "pact-signed" not in workspace_js
     assert "optional-protection-fieldset" in workspace_js
     assert "textAvailable" in workspace_js
@@ -1005,7 +1129,10 @@ def test_web_workspace_is_optional_and_serves_pyodide_assets(
     assert "embeddedAvailable" in workspace_js
     assert '["Auth level"' not in workspace_js
     assert '["Trust tier", trustTier]' in workspace_js
-    assert "create_device_binding_oprf_request\", [\n      base64(localInput)" in workspace_js
+    assert (
+        'create_device_binding_oprf_request", [\n      base64(localInput)'
+        in workspace_js
+    )
     assert "Where did you see the misuse?" in workspace.text
     assert "Invisible marks" in workspace.text
     assert "protected text copy" in workspace.text
@@ -1174,3 +1301,109 @@ def test_api_rate_limit_uses_claimant_identity_across_ips(
 
     assert first.status_code == 400
     assert second.status_code == 429
+
+
+def test_hosted_login_uses_api_gateway_cognito_claims(
+    tmp_path: Path,
+) -> None:
+    registry_url = "https://registry.example"
+    authority = RegistryCertificateAuthority.initialize(registry_url)
+    service = RegistryService(
+        registry_url,
+        store=FileRegistryStore(tmp_path / "store"),
+        certificate_authority=authority,
+    )
+    app = create_app(
+        service,
+        public_base_url="http://testserver",
+        cognito_authorizer_config=CognitoAuthorizerConfig(
+            user_pool_id="pool-1",
+            app_client_id="client-1",
+            region="us-east-2",
+        ),
+    )
+    client = TestClient(AwsEventMiddleware(app, api_gateway_jwt_event()))
+    identity = ClaimantIdentity.generate(registry_url)
+    register_profile(client, identity)
+
+    response = client.post(
+        "/pact/api/v1/profiles/me/hosted-login",
+        json=hosted_login_body(client, identity),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["hosted_account"] is True
+    evidence = service.evidence_profile(identity.key_id)
+    assert evidence.trust_tier is TrustTier.HOSTED_ACCOUNT
+    event = [
+        item
+        for item in service.store.list_events()
+        if item.event_type is RegistryEventType.ACCOUNT_AUTHORIZED
+    ][-1]
+    assert event.data["provider"] == "cognito"
+    assert event.data["client_id"] == "client-1"
+    assert event.data["email_verified"] is True
+    assert event.data["subject_hash"] != "subject-1"
+    assert "subject-1" not in json.dumps(event.data)
+
+
+def test_hosted_login_requires_api_gateway_cognito_claims(
+    tmp_path: Path,
+) -> None:
+    client, identity = make_client(tmp_path)
+    app = create_app(
+        cast(RegistryService, client.app.state.registry_service),
+        public_base_url="http://testserver",
+        cognito_authorizer_config=CognitoAuthorizerConfig(
+            user_pool_id="pool-1",
+            app_client_id="client-1",
+            region="us-east-2",
+        ),
+    )
+    cognito_client = TestClient(app)
+    register_profile(cognito_client, identity)
+
+    response = cognito_client.post(
+        "/pact/api/v1/profiles/me/hosted-login",
+        json=hosted_login_body(cognito_client, identity),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "cognito login is required"
+
+
+def test_hosted_login_rejects_wrong_cognito_audience(
+    tmp_path: Path,
+) -> None:
+    registry_url = "https://registry.example"
+    authority = RegistryCertificateAuthority.initialize(registry_url)
+    service = RegistryService(
+        registry_url,
+        store=FileRegistryStore(tmp_path / "store"),
+        certificate_authority=authority,
+    )
+    app = create_app(
+        service,
+        public_base_url="http://testserver",
+        cognito_authorizer_config=CognitoAuthorizerConfig(
+            user_pool_id="pool-1",
+            app_client_id="client-1",
+            region="us-east-2",
+        ),
+    )
+    client = TestClient(
+        AwsEventMiddleware(
+            app,
+            api_gateway_jwt_event(client_id="different-client"),
+        )
+    )
+    identity = ClaimantIdentity.generate(registry_url)
+    register_profile(client, identity)
+
+    response = client.post(
+        "/pact/api/v1/profiles/me/hosted-login",
+        json=hosted_login_body(client, identity),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "cognito audience mismatch"

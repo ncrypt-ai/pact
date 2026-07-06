@@ -539,6 +539,37 @@ def test_cli_web_command_bootstraps_local_app(
     ).exists()
 
 
+def test_cli_web_remote_registry_uses_remote_public_base(
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    def fake_serve_workspace_only(**kwargs) -> int:
+        calls.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(
+        cli, "_serve_workspace_only", fake_serve_workspace_only
+    )
+
+    assert (
+        main(
+            [
+                "web",
+                "--remote-registry",
+                "https://registry.example/",
+                "--port",
+                "8999",
+            ]
+        )
+        == 0
+    )
+
+    assert calls["registry_url"] == "https://registry.example"
+    assert calls["public_base_url"] == "https://registry.example"
+    assert calls["host"] == "127.0.0.1"
+
+
 def test_cli_registry_init_writes_online_and_offline_ca_material(
     tmp_path: Path,
     capsys,

@@ -8,6 +8,7 @@ const passcodeStorageKey = "pact.passcode";
 const deviceBindingSecretPrefix = "pact.deviceBindingSecret.";
 const webAuthnDeviceCredentialPrefix = "pact.webAuthnDeviceCredential.";
 const webAuthnDeviceCredentialRegistryPrefix = "pact.webAuthnDeviceCredentialRegistry.";
+const cognitoOAuthPrefix = "pact.cognitoOAuth.";
 
 function normalizeRegistryUrl(value) {
   return String(value || "").trim().replace(/\/+$/g, "");
@@ -142,7 +143,8 @@ function syncIdentityProfile(profile) {
   }
   identity = {
     ...identity,
-    display_name: profileDisplayName(profile, identity.display_name)
+    display_name: profileDisplayName(profile, identity.display_name),
+    hosted_account: Boolean(profile.hosted_account)
   };
   document.querySelector("#identity-display-name").value =
     identity.display_name || "";
@@ -160,6 +162,81 @@ let identityPassword = null;
 let creatingIdentity = !identity;
 let signedManifest = null;
 let nonceBase64 = null;
+
+function cognitoConfig() {
+  const dataset = document.body.dataset;
+  const hostedUiDomain = normalizeCognitoDomain(dataset.cognitoHostedUiDomain);
+  const appClientId = String(dataset.cognitoAppClientId || "").trim();
+  const callbackUrl = String(dataset.cognitoCallbackUrl || "").trim()
+    || `${window.location.origin}/pact/auth/callback`;
+  return {
+    userPoolId: String(dataset.cognitoUserPoolId || "").trim(),
+    appClientId,
+    hostedUiDomain,
+    callbackUrl
+  };
+}
+
+function cognitoConfigured() {
+  const config = cognitoConfig();
+  return Boolean(config.appClientId && config.hostedUiDomain);
+}
+
+function normalizeCognitoDomain(value) {
+  const trimmed = String(value || "").trim().replace(/\/+$/g, "");
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("https://") || trimmed.startsWith("http://")
+    ? trimmed
+    : `https://${trimmed}`;
+}
+
+function cognitoOAuthKey(name) {
+  const config = cognitoConfig();
+  return `${cognitoOAuthPrefix}${registryUrl()}.${config.appClientId}.${name}`;
+}
+
+function cognitoToken() {
+  let stored = null;
+  try {
+    stored = JSON.parse(sessionStorage.getItem(cognitoOAuthKey("token")) || "null");
+  } catch {
+    stored = null;
+  }
+  if (!stored || !stored.access_token) {
+    return null;
+  }
+  if (stored.expires_at && Date.now() > stored.expires_at - 30000) {
+    sessionStorage.removeItem(cognitoOAuthKey("token"));
+    return null;
+  }
+  return stored;
+}
+
+function updateCognitoLoginStatus() {
+  const status = document.querySelector("#cognito-login-status");
+  if (!status) {
+    return;
+  }
+  const configured = cognitoConfigured();
+  setVisible("#cognito-login-panel", configured);
+  setVisible("#manual-hosted-login-panel", !configured);
+  if (!configured) {
+    status.textContent = "";
+    return;
+  }
+  const token = cognitoToken();
+  if (identity && identity.hosted_account) {
+    status.textContent = "Hosted account trust is already recorded for this profile.";
+    document.querySelector("#start-cognito-login").disabled = true;
+    return;
+  }
+  document.querySelector("#start-cognito-login").disabled = false;
+  status.textContent = token
+    ? "Hosted account login is active for this browser session."
+    : "Log in before completing hosted account trust.";
+}
 
 const policyPermissions = [
   ["cawg.data_mining", "Data mining"],
@@ -283,6 +360,7 @@ function updateSession() {
   }
 
   updateIdentityControls();
+  updateCognitoLoginStatus();
 }
 
 function updateIdentityControls() {
@@ -1108,6 +1186,95 @@ async function sha256Bytes(value) {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 }
 
+function randomBase64Url(byteLength = 32) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  return base64Url(bytes);
+}
+
+async function startCognitoLogin() {
+  requireIdentity();
+  const config = cognitoConfig();
+  if (!cognitoConfigured()) {
+    throw new Error("Hosted account login is not configured for this registry.");
+  }
+  const state = randomBase64Url();
+  const verifier = randomBase64Url(64);
+  const challenge = base64Url(await sha256Bytes(verifier));
+  sessionStorage.setItem(cognitoOAuthKey("state"), state);
+  sessionStorage.setItem(cognitoOAuthKey("verifier"), verifier);
+
+  const url = new URL(`${config.hostedUiDomain}/oauth2/authorize`);
+  url.searchParams.set("client_id", config.appClientId);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("redirect_uri", config.callbackUrl);
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  window.location.assign(url.toString());
+}
+
+async function handleCognitoCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const error = params.get("error");
+  if (error) {
+    const description = params.get("error_description") || error;
+    window.history.replaceState({}, "", "/pact/web");
+    throw new Error(description);
+  }
+  const code = params.get("code");
+  const state = params.get("state");
+  if (!code) {
+    updateCognitoLoginStatus();
+    return;
+  }
+  const expectedState = sessionStorage.getItem(cognitoOAuthKey("state"));
+  const verifier = sessionStorage.getItem(cognitoOAuthKey("verifier"));
+  sessionStorage.removeItem(cognitoOAuthKey("state"));
+  sessionStorage.removeItem(cognitoOAuthKey("verifier"));
+  if (!expectedState || !verifier || state !== expectedState) {
+    window.history.replaceState({}, "", "/pact/web");
+    throw new Error("Hosted account login state did not match.");
+  }
+  const config = cognitoConfig();
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: config.appClientId,
+    code,
+    redirect_uri: config.callbackUrl,
+    code_verifier: verifier
+  });
+  const response = await fetch(`${config.hostedUiDomain}/oauth2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString()
+  });
+  const token = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    window.history.replaceState({}, "", "/pact/web");
+    throw new Error(token.error_description || token.error || "Hosted account login failed.");
+  }
+  sessionStorage.setItem(
+    cognitoOAuthKey("token"),
+    JSON.stringify({
+      ...token,
+      expires_at: Date.now() + Number(token.expires_in || 3600) * 1000
+    })
+  );
+  window.history.replaceState({}, "", "/pact/web");
+  updateCognitoLoginStatus();
+  setPage("identity");
+  message("Hosted account login complete. Unlock your PACT profile, then press Complete hosted login.");
+}
+
+function forgetCognitoLogin() {
+  sessionStorage.removeItem(cognitoOAuthKey("token"));
+  sessionStorage.removeItem(cognitoOAuthKey("state"));
+  sessionStorage.removeItem(cognitoOAuthKey("verifier"));
+  updateCognitoLoginStatus();
+  message("Hosted account login forgotten.");
+}
+
 async function hmacSha256Bytes(keyBytes, messageBytes) {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -1814,14 +1981,28 @@ document.querySelector("#verify-domain").onclick = () =>
     message("Domain verified and trust profile updated.");
   });
 
+document.querySelector("#start-cognito-login").onclick = () =>
+  run(async () => {
+    await startCognitoLogin();
+  });
+
+document.querySelector("#forget-cognito-login").onclick = () =>
+  run(async () => {
+    forgetCognitoLogin();
+  });
+
 document.querySelector("#complete-hosted-login").onclick = () =>
   run(async () => {
     requireIdentity();
+    const token = cognitoToken();
     const payload = {
-      ...(document.querySelector("#hosted-login-token").value.trim()
+      ...(!cognitoConfigured() && document.querySelector("#hosted-login-token").value.trim()
         ? { login_token: document.querySelector("#hosted-login-token").value.trim() }
         : {})
     };
+    if (cognitoConfigured() && !token) {
+      throw new Error("Log in with your hosted account first.");
+    }
     const request = await signedMutation(
       "hosted_account_authorization",
       payload,
@@ -1829,6 +2010,7 @@ document.querySelector("#complete-hosted-login").onclick = () =>
     );
     const profile = await registryJson("/pact/api/v1/profiles/me/hosted-login", {
       method: "POST",
+      headers: token ? { authorization: `Bearer ${token.id_token || token.access_token}` } : {},
       body: JSON.stringify(request)
     });
     const evidence = await registryJson(`/pact/api/v1/profiles/${profile.key_id}/evidence`);
@@ -2439,3 +2621,14 @@ message(
     ? "Saved profile found. Enter its passcode to continue."
     : "Create or unlock a profile to begin."
 );
+
+if (
+  new URLSearchParams(window.location.search).has("code") ||
+  new URLSearchParams(window.location.search).has("error")
+) {
+  run(async () => {
+    await handleCognitoCallback();
+  });
+} else {
+  updateCognitoLoginStatus();
+}

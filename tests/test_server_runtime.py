@@ -3,14 +3,11 @@ from typing import cast
 
 from pact import (
     AuthProvider,
-    RouteAuth,
     RuntimeConfig,
     SecurityProfile,
     SqliteRegistryStore,
     StoreBackend,
-    aws_lambda_routes,
     create_registry_store,
-    default_routes,
 )
 from pact.registry import RegistryEventType
 
@@ -71,18 +68,6 @@ def test_runtime_config_loads_admin_public_jwks(monkeypatch) -> None:
 
     assert config.admin_public_jwks == (admin_jwk,)
     assert config.to_dict()["admin_public_jwk_count"] == 1
-
-
-def test_aws_lambda_route_metadata_maps_auth_and_scopes() -> None:
-    routes = aws_lambda_routes(default_routes())
-    route_by_name = {route.name: route for route in routes}
-
-    assert route_by_name["registry_info"].auth is RouteAuth.PUBLIC
-    assert route_by_name["registry_info"].cognito_scope is None
-    assert route_by_name["server_routes"].path == "/pact/api/v1/server/routes"
-    assert route_by_name["register_claim"].lambda_name == "pact-register-claim"
-    assert route_by_name["register_claim"].cognito_scope == "pact/claims:write"
-    assert route_by_name["resolve_dispute"].auth is RouteAuth.ADMIN
 
 
 def test_security_profile_exports_cognito_shape() -> None:

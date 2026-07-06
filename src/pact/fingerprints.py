@@ -135,7 +135,10 @@ def _extract_text(
     mime_type: str,
     canonicalization: CanonicalizationProfile,
 ) -> str | None:
-    if mime_type.startswith("text/") or canonicalization is CanonicalizationProfile.TEXT_V1:
+    if (
+        mime_type.startswith("text/")
+        or canonicalization is CanonicalizationProfile.TEXT_V1
+    ):
         try:
             return canonicalize_content(
                 content,

@@ -5,7 +5,14 @@
     <title>PACT Workspace</title>
     <link rel="stylesheet" href="/pact/static/workspace.css">
   </head>
-  <body data-registry-url="{{ registry_url }}" data-public-base-url="{{ public_base_url }}">
+  <body
+    data-registry-url="{{ registry_url }}"
+    data-public-base-url="{{ public_base_url }}"
+    data-cognito-user-pool-id="{{ cognito_config.user_pool_id if cognito_config else '' }}"
+    data-cognito-app-client-id="{{ cognito_config.app_client_id if cognito_config else '' }}"
+    data-cognito-hosted-ui-domain="{{ cognito_config.hosted_ui_domain if cognito_config and cognito_config.hosted_ui_domain else '' }}"
+    data-cognito-callback-url="{{ cognito_config.callback_url if cognito_config and cognito_config.callback_url else '' }}"
+  >
     <header>
       <p><a href="/">PACT Registry</a></p>
       <h1>PACT</h1>
@@ -101,10 +108,19 @@
           </details>
           <details>
             <summary>Hosted account</summary>
-            <label>
-              Hosted login token
-              <input id="hosted-login-token" placeholder="Token from registry host login">
-            </label>
+            <div id="cognito-login-panel">
+              <div class="actions">
+                <button type="button" id="start-cognito-login">Log in with hosted account</button>
+                <button type="button" id="forget-cognito-login">Forget hosted login</button>
+              </div>
+              <p id="cognito-login-status" class="small"></p>
+            </div>
+            <div id="manual-hosted-login-panel">
+              <label>
+                Hosted login token
+                <input id="hosted-login-token" placeholder="Token from registry host login">
+              </label>
+            </div>
             <div class="actions">
               <button type="button" id="complete-hosted-login">Complete hosted login</button>
             </div>
