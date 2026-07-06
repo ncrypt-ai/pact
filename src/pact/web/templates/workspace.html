@@ -166,50 +166,57 @@
         <fieldset id="optional-protection-fieldset">
           <legend>Optional protection</legend>
           <p class="small">
-            Text protection changes the text before signing. Image protection
-            adds a claim locator after the proof is published.
+            Optional protections are separate from the proof JSON. Text
+            watermarking creates a changed text copy first and signs that copy.
+            Embedded proof keeps the signed proof inside the download so it can
+            be inspected without a separate proof file.
           </p>
           <div id="text-protection-options">
             <label class="inline-choice">
               <input id="protect-text-before-signing" type="checkbox">
               <span>
-                Add text watermark before signing. Use this when you are
-                publishing text and want later copies to carry hidden or
-                visible evidence that points back to your proof. PACT changes
-                the text first, downloads a protected text copy, and signs that
-                protected copy so the watermark is covered by the proof.
+                Create a watermarked text copy before signing. PACT applies the
+                selected text changes, downloads the protected text copy, then
+                signs that changed copy so the watermark is covered by the
+                proof.
               </span>
             </label>
-            <div class="option-grid">
-              <label class="inline-choice">
-                <input name="text-watermark-method" type="checkbox" value="invisible" checked>
-                <span>Invisible marks: hard-to-see Unicode changes.</span>
+            <div id="text-watermark-settings" hidden>
+              <p class="small">
+                Choose at least one watermark method. These methods change the
+                text before signing; they are not extra proof files.
+              </p>
+              <div class="option-grid">
+                <label class="inline-choice">
+                  <input name="text-watermark-method" type="checkbox" value="invisible" checked>
+                  <span>Invisible marks: hard-to-see Unicode changes.</span>
+                </label>
+                <label class="inline-choice">
+                  <input name="text-watermark-method" type="checkbox" value="canary">
+                  <span>Canary phrase: inserts your approved phrase.</span>
+                </label>
+                <label class="inline-choice">
+                  <input name="text-watermark-method" type="checkbox" value="lexical">
+                  <span>Lexical changes: swaps eligible words.</span>
+                </label>
+                <label class="inline-choice">
+                  <input name="text-watermark-method" type="checkbox" value="syntactic">
+                  <span>Syntactic changes: light sentence-structure variation.</span>
+                </label>
+                <label class="inline-choice">
+                  <input name="text-watermark-method" type="checkbox" value="statistical">
+                  <span>Statistical pattern: keyed sentence selection marks.</span>
+                </label>
+              </div>
+              <label id="watermark-secret-field" hidden>
+                Watermark secret
+                <input id="watermark-secret" placeholder="Used to place and later detect the text watermark">
               </label>
-              <label class="inline-choice">
-                <input name="text-watermark-method" type="checkbox" value="canary">
-                <span>Canary phrase: inserts your approved phrase.</span>
-              </label>
-              <label class="inline-choice">
-                <input name="text-watermark-method" type="checkbox" value="lexical">
-                <span>Lexical changes: swaps eligible words.</span>
-              </label>
-              <label class="inline-choice">
-                <input name="text-watermark-method" type="checkbox" value="syntactic">
-                <span>Syntactic changes: light sentence-structure variation.</span>
-              </label>
-              <label class="inline-choice">
-                <input name="text-watermark-method" type="checkbox" value="statistical">
-                <span>Statistical pattern: keyed sentence selection marks.</span>
+              <label id="canary-phrase-field" hidden>
+                Canary phrase
+                <input id="canary-phrase" placeholder="Phrase to insert into the protected text copy">
               </label>
             </div>
-            <label>
-              Watermark secret
-              <input id="watermark-secret" placeholder="Required when text watermarking is on">
-            </label>
-            <label>
-              Canary phrase
-              <input id="canary-phrase" placeholder="Required only when canary phrase is selected">
-            </label>
           </div>
           <div id="image-protection-options">
             <label class="inline-choice">
@@ -227,11 +234,10 @@
             <label class="inline-choice">
               <input id="download-embedded-proof" type="checkbox" checked>
               <span>
-                Download a copy with the proof embedded. Use this when you want
-                the file itself to carry the proof, so someone can inspect the
-                file without separately receiving the proof JSON. This is
-                available only for supported file types such as text, HTML, XML,
-                PDF, and ZIP-based Office documents.
+                Download a copy with the proof embedded. This does not change
+                the signed content for watermarking; it places the proof inside
+                the file or container so someone can inspect it without
+                separately receiving the proof JSON.
               </span>
             </label>
           </div>

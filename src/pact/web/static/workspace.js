@@ -40,6 +40,11 @@ function clearBrowserProfilesForRegistry(registry) {
   }
   localStorage.removeItem(passcodeStorageKey);
   localStorage.removeItem(`${deviceBindingSecretPrefix}${normalized}`);
+  for (const key of Object.keys(sessionStorage)) {
+    if (key.startsWith(`${passcodeStorageKey}.${normalized}.`)) {
+      sessionStorage.removeItem(key);
+    }
+  }
 
   for (const key of Object.keys(localStorage)) {
     if (!key.startsWith(webAuthnDeviceCredentialRegistryPrefix)) {
@@ -152,13 +157,36 @@ function syncIdentityProfile(profile) {
   updateSession();
 }
 
-function forgetSavedPasscode() {
+function savedPasscodeKey(record = identity) {
+  if (!record || !record.key_id) {
+    return null;
+  }
+  return `${passcodeStorageKey}.${profileRegistryUrl(record) || registryUrl()}.${record.key_id}`;
+}
+
+function savedSessionPasscode(record = identity) {
+  const key = savedPasscodeKey(record);
+  return key ? sessionStorage.getItem(key) || null : null;
+}
+
+function storeSessionPasscode(record, value) {
+  const key = savedPasscodeKey(record);
+  if (key && value) {
+    sessionStorage.setItem(key, value);
+  }
+}
+
+function forgetSavedPasscode(record = identity) {
   localStorage.removeItem(passcodeStorageKey);
+  const key = savedPasscodeKey(record);
+  if (key) {
+    sessionStorage.removeItem(key);
+  }
 }
 
 const browserTeardownResult = applyTeardownFromUrl();
 let identity = savedIdentity();
-let identityPassword = null;
+let identityPassword = savedSessionPasscode(identity);
 let creatingIdentity = !identity;
 let signedManifest = null;
 let nonceBase64 = null;
@@ -187,9 +215,14 @@ function normalizeCognitoDomain(value) {
   if (!trimmed) {
     return "";
   }
-  return trimmed.startsWith("https://") || trimmed.startsWith("http://")
+  const withScheme = trimmed.startsWith("https://") || trimmed.startsWith("http://")
     ? trimmed
     : `https://${trimmed}`;
+  try {
+    return new URL(withScheme).origin;
+  } catch {
+    return "";
+  }
 }
 
 function cognitoOAuthKey(name) {
@@ -324,6 +357,7 @@ function updateSigningOptions() {
   if (file && !embeddedAvailable) {
     document.querySelector("#download-embedded-proof").checked = false;
   }
+  updateTextWatermarkSettings();
 }
 
 function updateMutationOptions() {
@@ -543,7 +577,7 @@ function password() {
 
 function rememberPassword() {
   identityPassword = password();
-  forgetSavedPasscode();
+  storeSessionPasscode(identity, identityPassword);
   updateSession();
 }
 
@@ -588,7 +622,7 @@ function selectIdentity(keyId) {
     return;
   }
   identity = selected;
-  identityPassword = null;
+  identityPassword = savedSessionPasscode(selected);
   creatingIdentity = false;
   localStorage.setItem(selectedIdentityStorageKey, selected.key_id);
   localStorage.setItem(identityStorageKey, JSON.stringify(selected));
@@ -599,7 +633,9 @@ function selectIdentity(keyId) {
   refreshOwnProfile();
   setPage("identity");
   message(
-    `Selected ${identityLabel(selected)}. Enter its passcode to continue.`
+    identityPassword
+      ? `Selected ${identityLabel(selected)}. Profile is already unlocked for this session.`
+      : `Selected ${identityLabel(selected)}. Enter its passcode to continue.`
   );
 }
 
@@ -1352,6 +1388,14 @@ function selectedWatermarkMethods() {
   ].map((input) => input.value);
 }
 
+function updateTextWatermarkSettings() {
+  const enabled = document.querySelector("#protect-text-before-signing").checked;
+  const canaryEnabled = selectedWatermarkMethods().includes("canary");
+  setVisible("#text-watermark-settings", enabled);
+  setVisible("#watermark-secret-field", enabled);
+  setVisible("#canary-phrase-field", enabled && canaryEnabled);
+}
+
 function renderWatermarkPreview(result) {
   const element = resultElement("#watermark-preview");
   const heading = document.createElement("h3");
@@ -1774,6 +1818,9 @@ async function requireUnlockedIdentity() {
     throw new Error("No browser profile is stored.");
   }
   if (!identityPassword) {
+    identityPassword = savedSessionPasscode(identity);
+  }
+  if (!identityPassword) {
     const passcode = document.querySelector("#identity-passcode").value;
     if (!passcode) {
       setPage("identity");
@@ -1922,7 +1969,7 @@ async function continueIdentity() {
   identity = creatingIdentity ? null : identity || savedIdentity();
   const hadSavedProfile = Boolean(identity);
   if (hadSavedProfile) {
-    await unlockIdentity();
+    await requireUnlockedIdentity();
   } else {
     await createIdentity();
   }
@@ -1931,8 +1978,7 @@ async function continueIdentity() {
   syncIdentityProfile(profile);
   showSavedBrowserProfile();
   renderProfile("#public-profile-summary", profile, evidence);
-  setPage("sign");
-  message("Profile ready. Choose a file to sign.");
+  message("Profile ready. Use the Sign and publish tab when you want to sign a file.");
 }
 
 document.querySelector("#continue-identity").onclick = () =>
@@ -2060,8 +2106,7 @@ document.querySelector("#identity-import").onchange = (event) =>
     updateSession();
     showSavedBrowserProfile();
     await loadOwnProfile();
-    setPage("sign");
-    message("Profile ready. Choose a file to sign.");
+    message("Profile imported and ready. Use the Sign and publish tab when you want to sign a file.");
   });
 
 document.querySelector("#rotate-key").onclick = () =>
@@ -2541,6 +2586,11 @@ document.querySelector("#view-my-disputes").onclick = () =>
 
 document.querySelector("#content-file").onchange = updateSigningOptions;
 document.querySelector("#mime-type").oninput = updateSigningOptions;
+document.querySelector("#protect-text-before-signing").onchange =
+  updateTextWatermarkSettings;
+for (const method of document.querySelectorAll("input[name='text-watermark-method']")) {
+  method.onchange = updateTextWatermarkSettings;
+}
 document.querySelector("#mutation-edited-file").onchange = updateMutationOptions;
 document.querySelector("#mutation-mime-type").oninput = updateMutationOptions;
 
@@ -2550,7 +2600,6 @@ refreshOwnProfile();
 updateSigningOptions();
 updateMutationOptions();
 setPage("identity");
-forgetSavedPasscode();
 message(
   browserTeardownResult
     ? browserTeardownResult.removed

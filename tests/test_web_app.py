@@ -818,7 +818,8 @@ def test_workspace_renders_cognito_login_config_and_callback(
             app_client_id="client-1",
             region="us-east-2",
             hosted_ui_domain=(
-                "https://example.auth.us-east-2.amazoncognito.com"
+                "https://example.auth.us-east-2.amazoncognito.com/login"
+                "?client_id=old&redirect_uri=https%3A%2F%2Fbad.example"
             ),
             callback_url="https://registry.example/pact/auth/callback",
         ),

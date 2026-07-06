@@ -480,6 +480,18 @@ def _cognito_hosted_ui_origin(
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _workspace_cognito_config(
+    config: CognitoAuthorizerConfig | None,
+) -> dict[str, object] | None:
+    if config is None:
+        return None
+    result = config.to_dict()
+    hosted_ui_origin = _cognito_hosted_ui_origin(config)
+    if hosted_ui_origin is not None:
+        result["hosted_ui_domain"] = hosted_ui_origin
+    return result
+
+
 def _templates() -> Jinja2Templates:
     directory = Path(__file__).with_name("templates")
     return Jinja2Templates(directory=str(directory))
@@ -1383,10 +1395,8 @@ def create_app(
                 "registry_url": app.state.registry_url,
                 "public_base_url": app.state.public_base_url,
                 "standalone": service is None,
-                "cognito_config": (
-                    None
-                    if cognito_authorizer_config is None
-                    else cognito_authorizer_config.to_dict()
+                "cognito_config": _workspace_cognito_config(
+                    cognito_authorizer_config
                 ),
             },
         )
